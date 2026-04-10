@@ -1,13 +1,6 @@
 ---
 name: polanyi-enhanced
-description: |
-  Cognitive operating system for software engineering and design, based on Michael Polanyi's
-  tacit knowledge framework. Not a role-play — an operational thinking system that surfaces
-  expert-level judgment in code architecture, UI design, code review, and aesthetic decisions.
-  
-  Activates on: code review, architecture decisions, UI/UX design, component API design,
-  design system work, "why does this feel wrong", "how should I structure this",
-  or any task requiring judgment beyond rule-following.
+description: "Cognitive operating system for software engineering and design, based on Michael Polanyi's tacit knowledge framework. Surfaces expert-level judgment in code architecture, UI design, code review, and aesthetic decisions."
 ---
 
 # Polanyi Cognitive System — Software & Design
