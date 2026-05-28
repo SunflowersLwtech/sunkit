@@ -69,3 +69,21 @@ export GOOGLE_API_KEY="$GOOGLE_AGENT_PLATFORM_API"
 ```
 
 For images or screenshots, do not give Gemini a private browser URL and expect it to fetch it. Download or capture the image locally, then send bytes as base64 `inline_data`. Private GitHub repo contents require a GitHub token first; Gemini only receives the extracted text/image evidence.
+
+## Remotion Lambda
+
+Provisioned in AWS account `248108944666`, region `us-east-1`:
+
+- IAM policy: `remotion-lambda-policy`
+- IAM role: `remotion-lambda-role`
+- IAM user: `remotion-user`
+- Lambda function: `remotion-render-4-0-468-mem2048mb-disk2048mb-120sec`
+- Runtime: `nodejs24.x`
+- Memory: `2048MB`
+- Ephemeral disk: `2048MB`
+- Timeout: `120s`
+- CloudWatch log retention: `14 days`
+
+Local `.env` contains `REMOTION_AWS_ACCESS_KEY_ID`, `REMOTION_AWS_SECRET_ACCESS_KEY`, and `REMOTION_AWS_REGION`.
+
+The Remotion Lambda concurrency quota increase request is open for `5000` concurrent executions.
