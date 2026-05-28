@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.oss-radar/schemas/normalized_candidate.schema.json",
+  "title": "NormalizedCandidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "entity_type",
+    "entity_key",
+    "canonical_url",
+    "title",
+    "summary",
+    "published_at",
+    "collected_at",
+    "source_ids",
+    "evidence",
+    "metrics",
+    "signals",
+    "risk_flags"
+  ],
+  "properties": {
+    "candidate_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "repo",
+        "product",
+        "model",
+        "paper",
+        "discussion",
+        "article",
+        "unknown"
+      ]
+    },
+    "entity_key": {
+      "type": "string"
+    },
+    "canonical_url": {
+      "type": ["string", "null"],
+      "format": "uri"
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": ["string", "null"]
+    },
+    "published_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "url",
+          "reliability"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "reliability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "claim_role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "corroborating",
+              "discussion",
+              "marketing",
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "integer", "string", "null", "boolean"]
+      }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "integer", "string", "null", "boolean"]
+      },
+      "properties": {
+        "freshness_hours": {
+          "type": ["number", "null"]
+        },
+        "has_demo_keyword": {
+          "type": "boolean"
+        },
+        "has_code_signal": {
+          "type": "boolean"
+        },
+        "has_buyer_keyword": {
+          "type": "boolean"
+        },
+        "has_pain_keyword": {
+          "type": "boolean"
+        },
+        "ad_language_density": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "source_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metric_strength": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "source_unreachable",
+          "missing_url",
+          "old_item",
+          "generic_title",
+          "no_demo_signal",
+          "marketing_biased",
+          "funding_claim",
+          "metrics_unverified",
+          "community_only",
+          "login_required",
+          "possible_duplicate",
+          "manual_review_needed"
+        ]
+      }
+    }
+  }
+}
