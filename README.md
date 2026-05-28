@@ -49,16 +49,23 @@ jq empty phase1_data_prep/source_registry.json phase1_data_prep/schemas/*.json
 
 ## API Keys
 
-Current MVP sources can run without required API keys.
+Current MVP source fetching can run without required API keys. Use existing keys when present:
 
-Open first:
+- GitHub private/public repo access: `GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_PERSONAL_ACCESS_TOKEN`.
+- Gemini calls: use `GOOGLE_AGENT_PLATFORM_API` as the source value and export it as `GOOGLE_API_KEY` for Google AI Platform requests.
+- LLM scoring/review: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, or Gemini via `GOOGLE_AGENT_PLATFORM_API`.
 
-- `GITHUB_TOKEN`: recommended for GitHub Search API quota and repo expansion.
-
-Open later only when needed:
+Still optional / only needed later:
 
 - `PRODUCTHUNT_API_TOKEN`: Product Hunt GraphQL metrics beyond the public feed.
-- `HUGGINGFACE_TOKEN`: higher API quota or gated/private model access.
+- `HUGGINGFACE_TOKEN`: higher Hugging Face quota or gated/private model access.
 - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`: Reddit backlog source.
-- `X_BEARER_TOKEN`: X/Twitter backlog source.
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`: LLM scoring/review layer.
+- `X_BEARER_TOKEN`: X/Twitter backlog source if not using the existing Twitter API provider keys.
+
+For Gemini shell calls:
+
+```bash
+export GOOGLE_API_KEY="$GOOGLE_AGENT_PLATFORM_API"
+```
+
+For images or screenshots, do not give Gemini a private browser URL and expect it to fetch it. Download or capture the image locally, then send bytes as base64 `inline_data`. Private GitHub repo contents require a GitHub token first; Gemini only receives the extracted text/image evidence.
