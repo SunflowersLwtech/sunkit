@@ -1,24 +1,48 @@
 # searchpo
 
-OSS Radar research and Phase 1 data-prep workspace for an automated open-source and AI-tool search pipeline.
+## Search Sources
 
-## Contents
+| Priority | Source | What It Finds | Method | Endpoint |
+| --- | --- | --- | --- | --- |
+| P0 | GitHub Trending | fresh OSS repos and repo metrics | HTML + optional Search API fallback | `https://github.com/trending` |
+| P0 | Hacker News Algolia | developer discussion, objections, early adoption | JSON API | `https://hn.algolia.com/api/v1/search_by_date` |
+| P0 | Product Hunt | new AI/SaaS/tool launches | Atom feed | `https://www.producthunt.com/feed` |
+| P0 | Hugging Face | models, datasets, Spaces | JSON API | `https://huggingface.co/api/models` |
+| P0 | arXiv AI / ML / CL | fresh research papers | Atom API | `https://export.arxiv.org/api/query` |
+| P1 | V2EX | Chinese developer pain and reactions | JSON API | `https://www.v2ex.com/api/topics/hot.json` |
+| P1 | 36Kr | Chinese tech/business context | RSS feed | `https://36kr.com/feed` |
 
-- `oss_radar_eval.agent.final/`: evaluation report, runtime tech spec, and diagrams.
-- `phase1_data_prep/`: source registry, search methods, preprocessing contract, schemas, and endpoint probe script.
+Backlog sources: Juejin, Zhihu, Bilibili, Linux.do, WaytoAGI, Reddit, X/Twitter.
 
-## Phase 1 Focus
+## Purpose
 
-The first implementation boundary is the data layer:
+`searchpo` is the data-prep layer for an OSS / AI-tool radar. The first useful output is a daily shortlist of score-ready candidates, not a generic news digest.
 
-- stable source registration;
-- source-specific search methods;
-- raw item and normalized candidate schemas;
-- deterministic preprocessing and dedupe;
-- endpoint health checks before fetcher implementation.
+The target candidate has:
 
-Run the current source reachability probe:
+- a fresh signal;
+- a visible demo or code path;
+- a concrete workflow or buyer pain;
+- enough evidence for public claims;
+- low ad/spam risk.
+
+## Repository Shape
+
+- `phase1_data_prep/DATA_PREP.md`: compact source, search, and preprocessing plan.
+- `phase1_data_prep/source_registry.json`: machine-readable source registry.
+- `phase1_data_prep/schemas/`: raw item and normalized candidate contracts.
+- `phase1_data_prep/scripts/probe_sources.py`: endpoint reachability probe.
+
+## Commands
+
+Probe current source availability:
 
 ```bash
 ./phase1_data_prep/scripts/probe_sources.py
+```
+
+Validate JSON files:
+
+```bash
+jq empty phase1_data_prep/source_registry.json phase1_data_prep/schemas/*.json
 ```
