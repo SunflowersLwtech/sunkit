@@ -72,18 +72,19 @@ For images or screenshots, do not give Gemini a private browser URL and expect i
 
 ## Remotion Lambda
 
-Provisioned in AWS account `248108944666`, region `us-east-1`:
+Recommended production baseline:
 
-- IAM policy: `remotion-lambda-policy`
-- IAM role: `remotion-lambda-role`
-- IAM user: `remotion-user`
-- Lambda function: `remotion-render-4-0-468-mem2048mb-disk2048mb-120sec`
+- Region: `ap-southeast-1`
 - Runtime: `nodejs24.x`
 - Memory: `2048MB`
-- Ephemeral disk: `2048MB`
+- Ephemeral disk: `10240MB`
 - Timeout: `120s`
 - CloudWatch log retention: `14 days`
+- S3 bucket: one Remotion bucket in the same region
+- S3 lifecycle: folder expiry enabled
+- Render privacy: default to `private`
+- Render cleanup: default `deleteAfter=7-days`
 
-Local `.env` contains `REMOTION_AWS_ACCESS_KEY_ID`, `REMOTION_AWS_SECRET_ACCESS_KEY`, and `REMOTION_AWS_REGION`.
+Local `.env` contains the actual Remotion AWS access key, region, Lambda function name, bucket name, privacy, and cleanup defaults.
 
-The Remotion Lambda concurrency quota increase request is open for `5000` concurrent executions.
+The Remotion Lambda concurrency quota increase request should target `5000` concurrent executions in the active region.
