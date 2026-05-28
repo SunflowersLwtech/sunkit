@@ -1,4 +1,4 @@
-# Phase 1 Data Prep
+# Data Prep
 
 ## Search Sources
 
@@ -7,7 +7,7 @@
 | P0 | GitHub Trending | OSS project discovery | HTML + optional Search API fallback | optional token |
 | P0 | Hacker News Algolia | developer discussion and adoption signal | JSON API | none |
 | P0 | Product Hunt | product launch discovery | Atom feed | none for feed |
-| P0 | Hugging Face | model, dataset, and Space trends | JSON API | none for MVP |
+| P0 | Hugging Face | model, dataset, and Space trends | JSON API | none for current source set |
 | P0 | arXiv AI / ML / CL | paper-to-product signals | Atom API | none |
 | P1 | V2EX | Chinese developer pain and reactions | JSON API | none |
 | P1 | 36Kr | Chinese tech/business context | RSS feed | none |
@@ -44,7 +44,7 @@ Run expansion only if fewer than 30 normalized candidates survive Pass 1, or if 
 
 ### Source-Specific Expansion
 
-- GitHub: expand by topics `ai`, `agents`, `llm`, `mcp`, `rag`, plus phrase search for `browser agent`, `coding agent`, `workflow automation`; fetch README only for Stage 1 survivors.
+- GitHub: expand by topics `ai`, `agents`, `llm`, `mcp`, `rag`, plus phrase search for `browser agent`, `coding agent`, `workflow automation`; fetch README only for filtered candidates.
 - HN: prioritize `Show HN`, `Launch HN`, high-comment discussions, and links that point to GitHub/Product Hunt/Hugging Face.
 - Product Hunt: use the feed first; use `PRODUCTHUNT_API_TOKEN` later for GraphQL metrics and category detail.
 - Hugging Face: search `agent`, `voice`, `video`, `rag`, `code`, and prefer items with Spaces, examples, model cards, or recent activity.
@@ -54,7 +54,7 @@ Run expansion only if fewer than 30 normalized candidates survive Pass 1, or if 
 
 ### Pass 3: Cross-Source Validation
 
-For each Stage 1 survivor, create entity keys and search for corroboration:
+For each filtered candidate, create entity keys and search for corroboration:
 
 - repo: `owner/repo`, repo name, homepage domain;
 - product: product name, slug, domain;
@@ -69,7 +69,7 @@ Before a candidate can enter content scripting, require at least one of:
 - product launch plus public homepage/pricing/docs;
 - paper plus code/model/demo link.
 
-Do not use Reddit in Phase 1. It stays paused until approved API access exists.
+Do not use Reddit in the current source set. It stays paused until approved API access exists.
 
 ### Stop Rules
 
@@ -138,7 +138,7 @@ Use fuzzy merge only when titles are strongly similar:
 
 Do not merge items that only share generic terms such as `AI agent`, `LLM`, `RAG`, or `open source`.
 
-## Stage 1 Filter
+## Candidate Filter
 
 Compute cheap signals before LLM scoring:
 
@@ -168,11 +168,11 @@ Keep but flag when:
 
 ## Output
 
-Phase 1 should emit:
+Data prep should emit:
 
 - `normalized_candidates.jsonl`
 - `dedupe_clusters.json`
-- `stage1_filter_report.json`
+- `candidate_filter_report.json`
 - `candidate_shortlist.json`
 
 The shortlist should contain at most 20 items. Only those items enter five-dimensional scoring.
@@ -182,7 +182,7 @@ The shortlist should contain at most 20 items. Only those items enter five-dimen
 Run:
 
 ```bash
-./phase1_data_prep/scripts/probe_sources.py
+./data_prep/scripts/probe_sources.py
 ```
 
-Latest local check on 2026-05-28: all seven MVP sources returned `200`.
+Latest local check on 2026-05-28: all seven current sources returned `200`.

@@ -1,0 +1,36 @@
+{
+  "name": "searchpo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "bash scripts/run_e2e.sh",
+    "data": "python3 data_prep/scripts/run_pipeline.py",
+    "agent": "python3 agent_harness/run_agent_loop.py",
+    "prepare:remotion": "python3 render/prepare_remotion_input.py",
+    "dev": "remotion studio",
+    "render": "remotion render SearchpoRadar out/searchpo-radar.mp4 --codec=h264 --pixel-format=yuv420p",
+    "build": "remotion bundle src/index.ts",
+    "lambda:check": "bash scripts/lambda_render.sh check",
+    "lambda:site": "bash scripts/lambda_render.sh site",
+    "lambda:render": "bash scripts/lambda_render.sh render",
+    "douyin:check": "bash scripts/douyin_upload_check.sh",
+    "douyin:upload": "SEARCHPO_DOUYIN_LIVE=1 bash scripts/douyin_upload_check.sh",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.468",
+    "@remotion/lambda": "4.0.468",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.468"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "typescript": "5.9.3"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}

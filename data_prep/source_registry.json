@@ -1,5 +1,5 @@
 {
-  "version": "2026-05-28.phase1",
+  "version": "2026-05-28.data-prep",
   "timezone": "Asia/Kuala_Lumpur",
   "default_collection_window_hours": 48,
   "sources": [
@@ -45,7 +45,7 @@
       "preprocess": [
         "canonicalize_repo_url",
         "parse_owner_repo",
-        "fetch_readme_for_top_stage1_only",
+        "fetch_readme_for_top_candidates_only",
         "extract_demo_keywords_from_readme"
       ],
       "source_reliability": 0.85
@@ -107,7 +107,7 @@
       "probe_url": "https://www.producthunt.com/feed",
       "auth": "none_for_feed",
       "schedule": "daily",
-      "rate_policy": "Fetch feed once per run. Do not scrape dynamic pages in MVP.",
+      "rate_policy": "Fetch feed once per run. Do not scrape dynamic pages in the current source set.",
       "queries": [
         "AI",
         "developer tools",
@@ -282,7 +282,7 @@
       "probe_url": "https://36kr.com/feed",
       "auth": "none",
       "schedule": "daily",
-      "rate_policy": "Fetch feed once per run. Avoid HTML scraping in MVP.",
+      "rate_policy": "Fetch feed once per run. Avoid HTML scraping in the current source set.",
       "queries": [
         "AI",
         "大模型",
@@ -345,7 +345,7 @@
       },
       {
         "id": "cross_source_validation",
-        "goal": "Validate Stage 1 survivors before strong claims enter scripting.",
+        "goal": "Validate filtered candidates before strong claims enter scripting.",
         "minimum_evidence": "official source plus one independent discussion, demo/code artifact, public homepage/docs, or paper-code/model link"
       }
     ],
@@ -410,7 +410,7 @@
   "backlog_sources": [
     {
       "id": "juejin_hot",
-      "reason": "Chinese developer trends; useful after MVP if stable endpoint is selected."
+      "reason": "Chinese developer trends; useful after a stable endpoint is selected."
     },
     {
       "id": "zhihu_hot_ai",
@@ -430,7 +430,7 @@
     },
     {
       "id": "x_api",
-      "reason": "High-value social signal, but auth/cost makes it non-MVP."
+      "reason": "High-value social signal, but auth/cost keeps it out of the current source set."
     }
   ],
   "paused_sources": [
