@@ -316,6 +316,97 @@
       "source_reliability": 0.7
     }
   ],
+  "search_strategy": {
+    "passes": [
+      {
+        "id": "native_pull",
+        "goal": "Collect cheap source-native trending or latest items before expansion.",
+        "target_raw_items": 50,
+        "sources": [
+          "github_trending",
+          "hacker_news_algolia",
+          "product_hunt_feed",
+          "huggingface_models",
+          "arxiv_ai_ml_cl",
+          "v2ex_hot",
+          "kr36_feed"
+        ]
+      },
+      {
+        "id": "query_expansion",
+        "goal": "Fill missing topic families only when native pull produces fewer than 30 viable normalized candidates.",
+        "families": [
+          "agent_workflow",
+          "oss_infra",
+          "demo_signal",
+          "buyer_pain",
+          "commercial_context"
+        ]
+      },
+      {
+        "id": "cross_source_validation",
+        "goal": "Validate Stage 1 survivors before strong claims enter scripting.",
+        "minimum_evidence": "official source plus one independent discussion, demo/code artifact, public homepage/docs, or paper-code/model link"
+      }
+    ],
+    "topic_families": {
+      "agent_workflow": [
+        "AI agent",
+        "coding agent",
+        "browser agent",
+        "MCP",
+        "workflow automation",
+        "智能体",
+        "自动化"
+      ],
+      "oss_infra": [
+        "open source AI",
+        "local LLM",
+        "RAG",
+        "evals",
+        "observability",
+        "开源",
+        "本地大模型",
+        "知识库"
+      ],
+      "demo_signal": [
+        "demo",
+        "playground",
+        "try it",
+        "live preview",
+        "screenshot",
+        "video",
+        "演示",
+        "试用"
+      ],
+      "buyer_pain": [
+        "automate",
+        "replace",
+        "faster",
+        "reduce cost",
+        "self-hosted",
+        "降本",
+        "提效",
+        "私有化"
+      ],
+      "commercial_context": [
+        "SaaS",
+        "API",
+        "pricing",
+        "launch",
+        "beta",
+        "融资",
+        "企业服务"
+      ]
+    },
+    "stop_rules": {
+      "max_raw_items": 100,
+      "target_surviving_candidates": 30,
+      "shortlist_size": 20,
+      "minimum_source_families_in_shortlist": 4,
+      "stop_expansion_if_new_candidates_below": 3
+    }
+  },
   "backlog_sources": [
     {
       "id": "juejin_hot",
@@ -338,12 +429,14 @@
       "reason": "AI tool directory signal; needs custom source check."
     },
     {
-      "id": "reddit_ml_ai",
-      "reason": "Useful for discussion validation but should use official API where possible."
-    },
-    {
       "id": "x_api",
       "reason": "High-value social signal, but auth/cost makes it non-MVP."
+    }
+  ],
+  "paused_sources": [
+    {
+      "id": "reddit_ml_ai",
+      "reason": "Paused until Reddit API access is approved."
     }
   ]
 }

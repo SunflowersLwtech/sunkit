@@ -12,7 +12,7 @@
 | P1 | V2EX | Chinese developer pain and reactions | JSON API | `https://www.v2ex.com/api/topics/hot.json` |
 | P1 | 36Kr | Chinese tech/business context | RSS feed | `https://36kr.com/feed` |
 
-Backlog sources: Juejin, Zhihu, Bilibili, Linux.do, WaytoAGI, Reddit, X/Twitter.
+Backlog sources: Juejin, Zhihu, Bilibili, Linux.do, WaytoAGI, X/Twitter. Reddit is paused until API access is approved.
 
 ## Purpose
 
@@ -59,7 +59,7 @@ Still optional / only needed later:
 
 - `PRODUCTHUNT_API_TOKEN`: Product Hunt GraphQL metrics beyond the public feed.
 - `HUGGINGFACE_TOKEN`: higher Hugging Face quota or gated/private model access.
-- `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`: Reddit backlog source.
+- `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`: paused; only use after Reddit API approval.
 - `X_BEARER_TOKEN`: X/Twitter backlog source if not using the existing Twitter API provider keys.
 
 For Gemini shell calls:
