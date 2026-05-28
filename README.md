@@ -46,3 +46,19 @@ Validate JSON files:
 ```bash
 jq empty phase1_data_prep/source_registry.json phase1_data_prep/schemas/*.json
 ```
+
+## API Keys
+
+Current MVP sources can run without required API keys.
+
+Open first:
+
+- `GITHUB_TOKEN`: recommended for GitHub Search API quota and repo expansion.
+
+Open later only when needed:
+
+- `PRODUCTHUNT_API_TOKEN`: Product Hunt GraphQL metrics beyond the public feed.
+- `HUGGINGFACE_TOKEN`: higher API quota or gated/private model access.
+- `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`: Reddit backlog source.
+- `X_BEARER_TOKEN`: X/Twitter backlog source.
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`: LLM scoring/review layer.
