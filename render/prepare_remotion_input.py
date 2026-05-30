@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy an agent render payload into Remotion's public input file."""
+"""Prepare run-scoped Remotion props without modifying tracked public fixtures."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
-PUBLIC_INPUT = ROOT / "public" / "searchpo-content.json"
+PUBLIC_GENERATED_DIR = ROOT / "public" / "generated"
+PUBLIC_VOICEOVER = PUBLIC_GENERATED_DIR / "voiceover.wav"
 
 
 def latest_run_dir() -> Path:
@@ -30,13 +31,30 @@ def main() -> int:
     if not source.exists():
         raise SystemExit(f"render payload missing: {source}")
     payload = json.loads(source.read_text(encoding="utf-8"))
-    PUBLIC_INPUT.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, PUBLIC_INPUT)
+    voiceover_source = run_dir / "voiceover.wav"
+    if payload.get("audioSrc") and not voiceover_source.exists():
+        raise SystemExit(f"render payload references audioSrc but voiceover is missing: {voiceover_source}")
+    props_path = run_dir / "remotion_input_props.json"
+    PUBLIC_GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    if voiceover_source.exists():
+        shutil.copyfile(voiceover_source, PUBLIC_VOICEOVER)
+        payload["audioSrc"] = f"{PUBLIC_GENERATED_DIR.name}/{PUBLIC_VOICEOVER.name}"
+    props_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (run_dir / "render_input_manifest.json").write_text(
-        json.dumps({"public_input": str(PUBLIC_INPUT), "title": payload.get("title")}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {
+                "props": str(props_path),
+                "public_fixture": str(ROOT / "public" / "searchpo-content.json"),
+                "voiceover": str(PUBLIC_VOICEOVER) if voiceover_source.exists() else None,
+                "title": payload.get("title"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({"public_input": str(PUBLIC_INPUT), "source": str(source)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"props": str(props_path), "source": str(source)}, ensure_ascii=False, indent=2))
     return 0
 
 

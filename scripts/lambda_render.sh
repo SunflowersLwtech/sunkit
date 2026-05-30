@@ -22,6 +22,14 @@ PRIVACY="${REMOTION_LAMBDA_PRIVACY:-private}"
 SITE_NAME="${REMOTION_LAMBDA_SITE_NAME:-searchpo-radar}"
 CONCURRENCY="${REMOTION_LAMBDA_CONCURRENCY:-4}"
 ACTION="${1:-check}"
+RUN_DIR="${SEARCHPO_RUN_DIR:-}"
+if [[ -z "$RUN_DIR" && -f runtime/latest_run.txt ]]; then
+  RUN_DIR="$(cat runtime/latest_run.txt)"
+fi
+PROPS_FILE="${SEARCHPO_REMOTION_PROPS:-}"
+if [[ -z "$PROPS_FILE" && -n "$RUN_DIR" ]]; then
+  PROPS_FILE="$RUN_DIR/remotion_input_props.json"
+fi
 
 require() {
   local name="$1"
@@ -50,10 +58,16 @@ case "$ACTION" in
   render)
     require FUNCTION_NAME
     require BUCKET_NAME
+    if [[ -z "$PROPS_FILE" || ! -f "$PROPS_FILE" ]]; then
+      echo "Missing Remotion props file: ${PROPS_FILE:-<unset>}" >&2
+      echo "Run: python3 render/prepare_remotion_input.py \"${RUN_DIR:-<run_dir>}\"" >&2
+      exit 1
+    fi
     npx remotion lambda render "$SITE_NAME" SearchpoRadar out/searchpo-radar-lambda.mp4 \
       --region "$REGION" \
       --function-name "$FUNCTION_NAME" \
       --force-bucket-name "$BUCKET_NAME" \
+      --props "$PROPS_FILE" \
       --privacy "$PRIVACY" \
       --concurrency "$CONCURRENCY" \
       --codec=h264 \

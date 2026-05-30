@@ -1,5 +1,6 @@
-import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Audio, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import payload from '../public/searchpo-content.json';
+import {Captions} from './Captions';
 
 type Card = {
   label: string;
@@ -7,17 +8,28 @@ type Card = {
   detail: string;
 };
 
-type Payload = {
+export type Payload = {
+  badge?: string;
   title: string;
   summary: string;
   source: string;
   url: string;
   score: number | string | null;
+  metricLine?: string;
   cards: Card[];
+  audioSrc?: string | null;
+  voiceoverText?: string | null;
+  cta?: string;
   footer: string;
 };
 
-const data = payload as Payload;
+const samplePayload = payload as Payload;
+
+const payloadFor = (props: Partial<Payload>): Payload => ({
+  ...samplePayload,
+  ...props,
+  cards: props.cards && props.cards.length > 0 ? props.cards : samplePayload.cards,
+});
 
 const fitText = (text: string, max = 96) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -45,46 +57,60 @@ const CardBlock: React.FC<{card: Card; index: number}> = ({card, index}) => {
   );
 };
 
-export const SearchpoRadar: React.FC = () => {
+export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
+  const data = payloadFor(props);
   const frame = useCurrentFrame();
-  const sweep = interpolate(frame % 180, [0, 180], [-30, 130]);
-  const titleEnter = spring({frame, fps: 30, config: {damping: 16, stiffness: 90}});
-  const pulse = interpolate(Math.sin(frame / 12), [-1, 1], [0.2, 1]);
+  const {durationInFrames} = useVideoConfig();
+  const sweep = interpolate(frame % 150, [0, 150], [-45, 125]);
+  const titleEnter = spring({frame: frame - 8, fps: 30, config: {damping: 16, stiffness: 90}});
+  const cardEnter = spring({frame: frame - 42, fps: 30, config: {damping: 20, stiffness: 95}});
+  const pulse = interpolate(Math.sin(frame / 10), [-1, 1], [0.45, 1]);
+
+  const introOpacity = interpolate(frame, [0, 18], [0, 1], {extrapolateRight: 'clamp'});
+  const outroOpacity = interpolate(frame, [durationInFrames - 30, durationInFrames - 6], [1, 0], {extrapolateLeft: 'clamp'});
+  const masterOpacity = Math.min(introOpacity, outroOpacity);
 
   return (
-    <AbsoluteFill className="canvas">
-      <div className="grid" />
-      <div className="beam" style={{transform: `translateX(${sweep}%) rotate(-18deg)`}} />
+    <AbsoluteFill className="canvas" style={{opacity: masterOpacity}}>
+      {data.audioSrc ? <Audio src={staticFile(data.audioSrc)} /> : null}
+      <div className="noise" />
+      <div className="beam" style={{transform: `translateX(${sweep}%) rotate(-14deg)`}} />
       <div className="topbar">
-        <span>searchpo radar</span>
-        <span>daily candidate loop</span>
+        <span>{data.badge || '今日 AI 工具热点'}</span>
+        <span>#{fitText(data.source, 18)}</span>
       </div>
 
       <section className="hero" style={{transform: `translateY(${interpolate(titleEnter, [0, 1], [56, 0])}px)`}}>
-        <div className="kicker">Candidate Signal</div>
+        <div className="kicker">今天为什么刷到它</div>
         <h1>{fitText(data.title, 72)}</h1>
-        <p>{fitText(data.summary, 168)}</p>
+        <p>{fitText(data.voiceoverText || data.summary, 112)}</p>
       </section>
 
-      <section className="score-row">
-        <div className="score-ring" style={{boxShadow: `0 0 ${26 + pulse * 38}px rgba(32, 196, 133, 0.42)`}}>
-          <span>{data.score ?? '-'}</span>
-          <small>score</small>
+      <section className="signal-row">
+        <div className="signal-pill" style={{boxShadow: `0 0 ${18 + pulse * 28}px rgba(255, 214, 10, 0.28)`}}>
+          <span>{fitText(data.metricLine || `score ${data.score ?? '-'}`, 28)}</span>
+          <small>实时信号</small>
         </div>
-        <div className="source-box">
-          <span>source</span>
-          <strong>{fitText(data.source, 42)}</strong>
-          <small>{fitText(data.url, 82)}</small>
+        <div className="source-line">
+          <span>来源边界</span>
+          <strong>{fitText(data.url, 66)}</strong>
         </div>
       </section>
 
-      <section className="cards">
+      <section className="cards" style={{opacity: interpolate(cardEnter, [0, 1], [0, 1])}}>
         {(data.cards || []).slice(0, 3).map((card, index) => (
           <CardBlock card={card} index={index} key={card.label} />
         ))}
       </section>
 
-      <footer>{fitText(data.footer, 118)}</footer>
+      {data.voiceoverText ? (
+        <Captions text={data.voiceoverText} startFrame={20} />
+      ) : null}
+
+      <footer>
+        <span>{fitText(data.cta || '先放进候选池，别把热度当结论。', 42)}</span>
+        <small>{fitText(data.footer, 48)}</small>
+      </footer>
     </AbsoluteFill>
   );
 };

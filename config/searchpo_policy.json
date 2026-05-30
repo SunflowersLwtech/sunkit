@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "content": {
+    "default_summary": "Fresh signal detected from the daily source sweep.",
+    "source_registry_label": "source registry",
+    "profiles": {
+      "daily_radar": {
+        "badge": "今日 AI 工具热点",
+        "source": "searchpo",
+        "metric_template": "candidate score {score}",
+        "cta": "先放进候选池，别把热度当结论。",
+        "footer": "来源: searchpo live sources · 发布前保留证据边界",
+        "cards": [
+          {
+            "label": "为什么火",
+            "value": "{title}",
+            "detail": "{summary}"
+          },
+          {
+            "label": "证据边界",
+            "value": "{source_ids}",
+            "detail": "{url}"
+          },
+          {
+            "label": "先别吹",
+            "value": "score {score}",
+            "detail": "code={has_code_signal} demo={has_demo_keyword} source_count={source_count}"
+          }
+        ],
+        "douyin": {
+          "title_template": "searchpo 雷达：{title}",
+          "desc_lines": [
+            "今天的 searchpo 雷达先看这个信号：{title}。",
+            "来源边界：{source}；候选分数 {score}。",
+            "它现在只是进入候选池，不是验证后的爆款结论。",
+            "原始来源：{url}"
+          ],
+          "tags": ["AI工具", "开源项目", "产品观察", "searchpo"]
+        },
+        "plan": {
+          "mode": "deterministic_plan",
+          "angle": "Lead with source-bound candidate evidence and avoid trend or ranking claims.",
+          "execution_steps": [
+            "Use candidate_shortlist.json as the only source of public claims.",
+            "Create a short vertical-video payload from title, summary, source IDs, URL, score, and cheap signals.",
+            "Create Douyin package files for contract-check mode only.",
+            "Block live publishing unless a later command explicitly enables SEARCHPO_DOUYIN_LIVE=1."
+          ],
+          "gates": [
+            "selected candidate has canonical_url",
+            "render payload written",
+            "claim ledger contains only pipeline facts",
+            "live upload remains disabled by default"
+          ]
+        },
+        "posting": {
+          "subject_label": "Candidate",
+          "caveat": "Filtered candidate only; public claims need manual cross-source review before live posting.",
+          "claim_source": "candidate_shortlist.json",
+          "claim_template": "{title} was selected by the searchpo candidate filter."
+        }
+      },
+      "operator_topic": {
+        "badge": "指定主题分析",
+        "source": "operator topic",
+        "metric_template": "operator supplied topic",
+        "cta": "先把判断边界讲清楚，再决定是否发布。",
+        "footer": "来源: operator topic · 发布前保留证据边界",
+        "manual_source_label": "指定主题",
+        "cards": [
+          {
+            "label": "要回答的问题",
+            "value": "{title}",
+            "detail": "{summary}"
+          },
+          {
+            "label": "证据边界",
+            "value": "{evidence_value}",
+            "detail": "未附外部来源时，只输出分析框架，不做事实定论。"
+          },
+          {
+            "label": "发布前检查",
+            "value": "保留审核和 live gate",
+            "detail": "视频、文案、发布包仍走同一套 gate。"
+          }
+        ],
+        "douyin": {
+          "title_template": "主题分析：{title}",
+          "desc_lines": [
+            "这期按指定主题做一版分析：{title}。",
+            "当前输入来自 operator topic，不等同于 searchpo 自动选出的热点结论。",
+            "涉及事实判断仍需要在发布前补充来源或人工确认。",
+            "参考来源：{url}"
+          ],
+          "tags": ["AI工具", "产品观察", "主题分析", "searchpo"]
+        },
+        "plan": {
+          "mode": "operator_topic_plan",
+          "angle": "Analyze the operator-specified topic without pretending it was selected by the daily source radar.",
+          "execution_steps": [
+            "Use subject_request.json as the operator input boundary.",
+            "Create a short vertical-video payload from the topic, optional context, and optional source URL.",
+            "Create Douyin package files for contract-check mode only.",
+            "Block live publishing unless a later command explicitly enables SEARCHPO_DOUYIN_LIVE=1."
+          ],
+          "gates": [
+            "operator topic recorded",
+            "render payload written",
+            "claim ledger marks operator-topic evidence separately from source-radar evidence",
+            "live upload remains disabled by default"
+          ]
+        },
+        "posting": {
+          "subject_label": "Operator topic",
+          "caveat": "Operator-specified topic only; factual claims need source review before live posting.",
+          "claim_source": "subject_request.json",
+          "claim_template": "{title} was supplied by the operator as the analysis topic."
+        }
+      }
+    }
+  },
+  "claims": {
+    "posting_strategy": "Lead with the evidence boundary, not hype. Keep the first public pass as a Douyin candidate radar or operator-topic analysis video.",
+    "boundary_claim": "The post package is a candidate radar package, not a verified ranking or market conclusion.",
+    "unknown_or_unsafe": [
+      "Do not claim market leadership, benchmark rank, funding, or production maturity without extra sources."
+    ],
+    "unsupported_terms": [
+      "best",
+      "first",
+      "only",
+      "ultimate",
+      "game.?changer",
+      "revolutionary",
+      "10x",
+      "唯一",
+      "首个",
+      "最强",
+      "第一",
+      "革命性",
+      "刚开源",
+      "刚发布",
+      "正式发布",
+      "首发"
+    ]
+  },
+  "subject_inputs": {
+    "operator_topic": {
+      "input_mode": "operator_topic",
+      "selection_source": "operator_topic",
+      "source_id": "operator_topic",
+      "manual_url_scheme": "manual-topic://",
+      "summary_template": "Operator-specified topic for searchpo analysis: {topic}",
+      "risk_flag_without_url": "operator_topic_requires_source_review",
+      "default_score": 8.0,
+      "reliability": {
+        "with_url": 0.7,
+        "without_url": 0.45
+      }
+    }
+  },
+  "data_prep": {
+    "regex": {
+      "demo": "\\b(demo|playground|try it|preview|screenshot|video|example|演示|试用)\\b",
+      "code": "\\b(github|repo|code|sdk|api|cli|open source|model|paper|arxiv|开源|代码|模型)\\b",
+      "buyer": "\\b(saas|api|pricing|customer|enterprise|workflow|automation|降本|提效|私有化|企业|工作流)\\b",
+      "pain": "\\b(replace|faster|slow|cost|manual|bug|risk|pain|complaint|坑|慢|贵|手动|替代|风险)\\b",
+      "ad": "\\b(best|ultimate|game.?changer|revolutionary|unlock|10x|限时|重磅|首个|唯一)\\b"
+    },
+    "generic_titles": ["ai", "agent", "llm", "rag"],
+    "risk_thresholds": {
+      "generic_title_min_chars": 8,
+      "old_item_hours": 720,
+      "ad_language_density": 0.08
+    },
+    "score": {
+      "has_code_signal": 2.5,
+      "has_demo_keyword": 1.5,
+      "has_buyer_keyword": 1.2,
+      "has_pain_keyword": 1.0,
+      "metric_strength_divisor": 2.0,
+      "metric_strength_cap": 2.0,
+      "extra_source_weight": 0.5,
+      "extra_source_cap": 1.0,
+      "unknown_freshness": 0.4,
+      "fresh_hours": 72,
+      "fresh_bonus": 1.0,
+      "recent_hours": 720,
+      "recent_bonus": 0.5,
+      "penalties": {
+        "marketing_biased": 0.8,
+        "generic_title": 0.7,
+        "community_only": 0.4
+      },
+      "hard_reject_flags": ["missing_url", "generic_title"],
+      "min_keep_score": 1.0
+    }
+  },
+  "deepseek": {
+    "chars_per_second": 7,
+    "temperatures": [0.3, 0.5, 0.7],
+    "required_keys": ["polished_title", "voiceover_text", "douyin_title", "douyin_desc", "tags", "cards"],
+    "hook_terms": ["为什么", "怎么", "竟然", "原来", "居然", "到底"],
+    "system": "You polish source-bounded Chinese short-video copy for a Douyin tech-hotspot video. Do not invent facts. Do not claim unsupported superiority, market leadership, funding, benchmarks, or production maturity. Respect the forbidden claim terms from the user payload. Write like a sharp Chinese tech creator, not a dashboard report. Return strict JSON only.",
+    "constraints": [
+      "Use only the selected_candidate and content_plan facts.",
+      "Voiceover must be Mandarin Chinese, {voiceover_chars_range}, suitable for a {video_seconds} second vertical video.",
+      "Lead with a human hook: why this matters today, not a repo summary.",
+      "If the only source is GitHub Trending, say it appeared on GitHub Trending; do not say it was just open-sourced or just released.",
+      "Cards should be Chinese short-video beats: 为什么火, 解决什么, 先别吹.",
+      "Keep claims conditional and source-bounded.",
+      "Return exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, caveats.",
+      "cards must be 3 objects with label, value, detail."
+    ]
+  },
+  "gemini_visual_audit": {
+    "fail_if": [
+      "the video is blank or unreadable",
+      "text overlaps or important text is cut off",
+      "the rendered candidate differs from selected_candidate",
+      "the video contains forbidden claim terms without evidence",
+      "audio or visible copy contradicts the run artifacts",
+      "caption text is unreadable due to low contrast against background",
+      "any frame is fully black or has rendering artifacts"
+    ],
+    "enhanced_checks": [
+      "Verify text contrast: all text should be clearly readable on its background (WCAG AA equivalent).",
+      "Check caption overlay: if subtitle bar is visible, text must not be clipped or overflow.",
+      "Verify intro: video should fade in smoothly, no jump cut on first frame.",
+      "Verify outro: video should fade out, no abrupt end."
+    ],
+    "important": "Do not fail only because the voiceover and screen text are not word-for-word identical. Fail only if they contradict each other or describe different candidate facts."
+  }
+}

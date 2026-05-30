@@ -30,14 +30,25 @@ The target candidate has:
 
 - `data_prep/DATA_PREP.md`: compact source, search, and preprocessing plan.
 - `data_prep/source_registry.json`: machine-readable source registry.
+- `config/searchpo_policy.json`: central keyword, scoring, claim-safety, and copy policy used by prep, harness, and provider prompts.
 - `data_prep/schemas/`: raw item and normalized candidate contracts.
 - `data_prep/scripts/probe_sources.py`: endpoint reachability probe.
 - `data_prep/scripts/run_pipeline.py`: live source fetch, raw JSONL, normalize, dedupe, and shortlist.
-- `agent_harness/run_agent_loop.py`: deterministic local agent loop over the shortlist; emits render and post artifacts.
-- `src/`: Remotion vertical video composition driven by `public/searchpo-content.json`.
-- `scripts/run_e2e.sh`: no-side-effect E2E from source probes through Douyin upload contract checks.
+- `agent_harness/core.py`: tracked harness core with SQLite tasks, events, artifacts, and gates.
+- `agent_harness/stages.py`: main/impl agent flow over shortlist loading, candidate selection, task planning, optional provider stages, render payloads, publishing package, and release gates.
+- `agent_harness/run_agent_loop.py`: CLI entrypoint for the tracked local harness over the shortlist; emits render, post, board, and review artifacts.
+- `scripts/deepseek_polish.py`: DeepSeek copy-polish adapter. Fails fast on missing key/provider error; no placeholder output.
+- `scripts/gemini_tts.py`: Gemini TTS adapter that writes `voiceover.wav` plus a manifest.
+- `scripts/gemini_visual_audit.py`: Gemini MP4 visual-audit adapter. Its `pass` verdict is required before publish.
+- `skills/`: project-level agent skills that are the source of truth for both Claude Code and Codex.
+- `.claude/skills/`, `.claude/agents/`, and `.codex/skills/`: generated/project bridge surfaces for the main/impl runtime split.
+- `src/`: Remotion vertical video composition using tracked fixture defaults plus run-scoped props.
+- `render/prepare_remotion_input.py`: writes `runtime/.../remotion_input_props.json` and ignored `public/generated/` assets; it does not mutate tracked fixtures.
+- `scripts/run_e2e.sh`: profile-driven E2E from source probes through render and Douyin checks.
+- `docs/`: production structure, claim governance, runbooks, and env ownership.
+- `contracts/schemas/`: JSON contracts for generated payloads and post manifests.
 
-`runtime/` is ignored local runtime state. It currently contains historical `oss_agent_layer`, `multica`, and `social-auto-upload` checkouts/runs. Treat it as operational evidence, not tracked source.
+`runtime/` is ignored local runtime state. It currently contains historical `oss_agent_layer`, `multica`, and `social-auto-upload` checkouts/runs. Treat it as operational evidence, not tracked source. The tracked harness now lives under `agent_harness/`; `runtime/oss_agent_layer` remains a historical multi-agent prototype, not the current source of truth.
 
 ## Commands
 
@@ -47,7 +58,7 @@ Probe current source availability:
 ./data_prep/scripts/probe_sources.py
 ```
 
-Run the full E2E. By default this uses Remotion Lambda + S3 for rendering and keeps Douyin upload in preflight mode:
+Run the safe local E2E. This is the default production contract check: no DeepSeek/Gemini provider calls, no AWS/S3/Lambda, and no live Douyin upload.
 
 ```bash
 npm install
@@ -59,31 +70,86 @@ This does:
 1. `.env` coverage audit without printing secret values.
 2. live source probe and source fetch.
 3. raw/normalized/dedupe/filter/shortlist artifacts under `runtime/artifacts/YYYY-MM-DD/<run_id>/`.
-4. local deterministic agent loop.
-5. Remotion site upload to S3 and AWS Lambda render download to `out/searchpo-radar-lambda.mp4`.
-6. Douyin publishing preflight through `runtime/social-auto-upload` without live upload.
+4. local contract-mode harness with explicit task board and gates.
+5. run-scoped Remotion props under the run directory.
+6. local Remotion render to `out/searchpo-radar.mp4`.
+7. manifest-level Douyin contract check with `SEARCHPO_DOUYIN_LIVE=0`.
+
+Explicit higher-side-effect tiers:
+
+```bash
+npm run e2e:provider  # DeepSeek + Gemini provider calls, local render, adapter preflight
+npm run e2e:lambda    # provider calls plus S3/Lambda render
+npm run e2e:live      # provider calls plus S3/Lambda render plus live Douyin upload
+```
 
 Run individual stages:
 
 ```bash
 python3 data_prep/scripts/run_pipeline.py
-python3 agent_harness/run_agent_loop.py
+SEARCHPO_AGENT_MODE=contract python3 agent_harness/run_agent_loop.py
 python3 render/prepare_remotion_input.py
-npm run render
+npm run render:run
+python3 scripts/gemini_visual_audit.py "$(cat runtime/latest_run.txt)" --video out/searchpo-radar.mp4
 npm run douyin:check
 ```
 
-Use local Remotion rendering only for smoke tests:
+Run with an operator-specified topic instead of the daily source radar selecting a candidate:
 
 ```bash
-SEARCHPO_REMOTION_RENDER_MODE=local npm run e2e
+SEARCHPO_TOPIC="Claude Code 多代理工作流怎么拆分职责" npm run e2e:topic
 ```
 
-Validate JSON files:
+Optional boundaries:
 
 ```bash
-jq empty data_prep/source_registry.json data_prep/schemas/*.json
+SEARCHPO_TOPIC="某个你指定的主题" \
+SEARCHPO_TOPIC_SUMMARY="你希望它重点分析的上下文" \
+SEARCHPO_TOPIC_URL="https://example.com/source-or-brief" \
+npm run e2e:topic
 ```
+
+Topic mode skips source probing and shortlist generation, writes `subject_request.json`, then reuses the same harness, Remotion, visual-audit, and Douyin gate path. Without `SEARCHPO_TOPIC_URL`, the claim ledger marks the run as an operator-topic analysis and keeps factual claims conditional.
+
+The tracked harness writes these per-run files under `runtime/artifacts/YYYY-MM-DD/<run_id>/`:
+
+- `harness_board.sqlite3`: task board with stage tasks, events, artifacts, and gates.
+- `agent_run.json`: run summary plus board snapshot, including `subject_input_mode`.
+- `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `render_payload.json`, `agent_review.json`.
+- Provider profiles also write `deepseek_polish.json`, `voiceover_manifest.json`, and `gemini_visual_audit.json`.
+- `post/`: Douyin contract-check package, claim ledger, and cross-check review.
+
+This is still a synchronous local harness, but the ownership model is explicit: the main agent owns task-plan state and release gates, while the implementation agent runs scripts, Remotion, audit, and publish adapters. Project skills under `skills/` encode that split for Claude Code and Codex agent-team runs.
+
+Validate static contracts and safe command wiring:
+
+```bash
+npm run ci:static
+```
+
+## Agent Skills Runtime
+
+The intended agent-team shape is:
+
+- `searchpo-main-agent`: assigns tasks, owns `main_task_plan.json`, validates gates, and decides whether publish may proceed.
+- `searchpo-impl-agent`: runs `scripts/deepseek_polish.py`, `scripts/gemini_tts.py`, Remotion render commands, `scripts/gemini_visual_audit.py`, and `scripts/douyin_upload_check.sh`.
+
+Project instructions live in `AGENTS.md`, `CLAUDE.md`, `skills/`, `.claude/skills/`, `.codex/skills/`, and `.claude/agents/searchpo-impl-agent.md`. The durable skill source is `skills/`; regenerate host bridges with:
+
+```bash
+npm run skills:sync
+npm run skills:check
+```
+
+From Claude Code, run:
+
+```text
+/searchpo-full-flow
+```
+
+From Codex, ask for the `searchpo-main-agent` flow or open `skills/searchpo-main-agent/SKILL.md` if the active session has not loaded the project skill registry yet. `npm run skills:sync:codex` installs user-level Codex symlinks under `~/.codex/skills/searchpo-*` for future sessions.
+
+If the user says `发抖音`, `发布`, `live`, or `post --live`, the Claude Code flow should run `npm run e2e:live`; otherwise it stays in contract-check mode.
 
 ## API Keys
 
@@ -91,7 +157,9 @@ Current source fetching can run without required API keys. Use existing keys whe
 
 - GitHub private/public repo access: `GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_PERSONAL_ACCESS_TOKEN`.
 - Gemini calls: use `GOOGLE_AGENT_PLATFORM_API` as the source value and export it as `GOOGLE_API_KEY` for Google AI Platform requests.
-- LLM scoring/review: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, or Gemini via `GOOGLE_AGENT_PLATFORM_API`.
+- LLM scoring/review: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`.
+- Script agents: `DEEPSEEK_API_KEY` for polish, and `GOOGLE_AGENT_PLATFORM_API` or `GOOGLE_API_KEY` for Gemini TTS and visual audit.
+- Gemini API mode: `SEARCHPO_GEMINI_API_MODE=vertex_express` for Agent Platform / Vertex keys on `aiplatform.googleapis.com`; use `developer` only for AI Studio keys that can call `generativelanguage.googleapis.com`.
 
 Still optional / only needed later:
 
@@ -106,6 +174,8 @@ For Gemini shell calls:
 ```bash
 export GOOGLE_API_KEY="$GOOGLE_AGENT_PLATFORM_API"
 ```
+
+The scripts default to the Vertex/Agent Platform host when `GOOGLE_AGENT_PLATFORM_API` is the available key, because some local keys are blocked from the regular Gemini Developer API host.
 
 For images or screenshots, do not give Gemini a private browser URL and expect it to fetch it. Download or capture the image locally, then send bytes as base64 `inline_data`. Private GitHub repo contents require a GitHub token first; Gemini only receives the extracted text/image evidence.
 
@@ -136,7 +206,7 @@ npm run lambda:site    # upload/update the Remotion site bundle in S3
 npm run lambda:render  # invoke Lambda render and download out/searchpo-radar-lambda.mp4
 ```
 
-The Lambda path maps local `REMOTION_AWS_*` keys to the AWS SDK env names before invoking the official Remotion CLI. The site name defaults to `REMOTION_LAMBDA_SITE_NAME` or `searchpo-radar`.
+The Lambda path maps local `REMOTION_AWS_*` keys to the AWS SDK env names before invoking the official Remotion CLI. The site name defaults to `REMOTION_LAMBDA_SITE_NAME` or `searchpo-radar`, and render commands use the run-scoped props recorded by `render/prepare_remotion_input.py`.
 `REMOTION_LAMBDA_CONCURRENCY` defaults to `4` to avoid account-level Lambda rate limits during small E2E renders.
 
 ## Publishing Boundaries
@@ -181,7 +251,7 @@ DOUYIN_ACCOUNT_NAME=<account_name> SEARCHPO_DOUYIN_LIVE=1 npm run douyin:upload
 Run one full live publish from source fetch through Lambda/S3 render and Douyin submit:
 
 ```bash
-DOUYIN_ACCOUNT_NAME=<account_name> SEARCHPO_DOUYIN_LIVE=1 npm run e2e
+DOUYIN_ACCOUNT_NAME=<account_name> npm run e2e:live
 ```
 
 Live Douyin upload defaults to headed browser mode so password or risk-control prompts can be handled during submit. Set `SOCIAL_UPLOAD_HEADED=0` only when you know headless publishing works for the account.

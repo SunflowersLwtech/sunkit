@@ -1,0 +1,20 @@
+{
+  "sourceRoot": "skills",
+  "claudeProjectRoot": ".claude/skills",
+  "codexProjectRoot": ".codex/skills",
+  "codexUserRoot": "~/.codex/skills",
+  "skills": [
+    {
+      "name": "searchpo-main-agent",
+      "description": "End-to-end Searchpo orchestration, release gates, and publish decisions."
+    },
+    {
+      "name": "searchpo-impl-agent",
+      "description": "Searchpo script execution, Remotion rendering, Gemini audit, and Douyin checks."
+    },
+    {
+      "name": "remotion-best-practices",
+      "description": "Remotion composition, rendering, animation, captions, and Douyin video output guidance."
+    }
+  ]
+}

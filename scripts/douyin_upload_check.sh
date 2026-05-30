@@ -8,6 +8,7 @@ RUN_DIR="${1:-$(cat runtime/latest_run.txt)}"
 ENV_FILE="${SEARCHPO_ENV_FILE:-.env}"
 CHECK_JSON="$RUN_DIR/post/douyin_upload_check.json"
 LIVE="${SEARCHPO_DOUYIN_LIVE:-0}"
+CHECK_LEVEL="${SEARCHPO_DOUYIN_CHECK_LEVEL:-adapter}"
 
 env_value() {
   local key="$1"
@@ -74,7 +75,12 @@ esac
 
 mkdir -p "$RUN_DIR/post"
 
-python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" <<'PY'
+if [[ "$LIVE" == "1" && "$CHECK_LEVEL" != "adapter" ]]; then
+  echo "Live Douyin upload requires SEARCHPO_DOUYIN_CHECK_LEVEL=adapter" >&2
+  exit 2
+fi
+
+python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" "$CHECK_LEVEL" <<'PY'
 from __future__ import annotations
 
 import json
@@ -97,6 +103,7 @@ rendered_video = sys.argv[7]
 upload_headed = sys.argv[8] == "1"
 live = sys.argv[9] == "1"
 check_json = Path(sys.argv[10])
+check_level = sys.argv[11]
 
 post_dir = run_dir / "post"
 manifest_path = post_dir / "douyin_upload_manifest.json"
@@ -161,14 +168,21 @@ warnings: list[str] = []
 manifest: dict[str, Any] = {}
 
 required_files = {
-    "social_root": social_root.exists(),
-    "sau_cli": cli_path.is_file(),
-    "sau_entrypoint": not social_cli or social_cli == "sau" or (cli_entrypoint_path is not None and cli_entrypoint_path.is_file()),
-    "pyproject": pyproject_path.is_file(),
-    "douyin_contract": contract_path.is_file(),
     "douyin_manifest": manifest_path.is_file(),
     "rendered_video": video_path.is_file(),
 }
+if check_level == "adapter":
+    required_files.update(
+        {
+            "social_root": social_root.exists(),
+            "sau_cli": cli_path.is_file(),
+            "sau_entrypoint": not social_cli or social_cli == "sau" or (cli_entrypoint_path is not None and cli_entrypoint_path.is_file()),
+            "pyproject": pyproject_path.is_file(),
+            "douyin_contract": contract_path.is_file(),
+        }
+    )
+elif check_level != "manifest":
+    errors.append(f"Unsupported SEARCHPO_DOUYIN_CHECK_LEVEL: {check_level}")
 for name, ok in required_files.items():
     if not ok:
         errors.append(f"Missing required file: {name}")
@@ -180,7 +194,7 @@ if manifest_path.is_file():
             errors.append(f"douyin_upload_manifest.json missing `{key}`")
 
 cli_help: dict[str, Any] | None = None
-if cli_path.is_file():
+if check_level == "adapter" and cli_path.is_file():
     cli_help = run_sau(["douyin", "--help"])
     if cli_help["returncode"] != 0:
         warnings.append(
@@ -189,7 +203,9 @@ if cli_path.is_file():
         )
 
 account_check: dict[str, Any] = {"status": "skipped", "reason": "DOUYIN_ACCOUNT_NAME/SOCIAL_UPLOAD_ACCOUNT_NAME not set"}
-if account_name:
+if check_level != "adapter":
+    account_check = {"status": "skipped", "reason": f"SEARCHPO_DOUYIN_CHECK_LEVEL={check_level}"}
+elif account_name:
     result = run_sau(["douyin", "check", "--account", account_name])
     account_check = {"status": "valid" if result["returncode"] == 0 else "invalid", **result}
     if result["returncode"] != 0:
@@ -217,6 +233,7 @@ result = {
     "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     "platform": "douyin",
     "adapter": "dreammis/social-auto-upload",
+    "check_level": check_level,
     "run_dir": str(run_dir),
     "rendered_video_path": str(video_path),
     "social_auto_upload_root": str(social_root),

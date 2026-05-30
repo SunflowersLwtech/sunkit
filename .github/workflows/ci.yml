@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    env:
+      SEARCHPO_E2E_PROFILE: contract
+      SEARCHPO_AGENT_MODE: contract
+      SEARCHPO_REMOTION_RENDER_MODE: local
+      SEARCHPO_DOUYIN_LIVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm run ci:static

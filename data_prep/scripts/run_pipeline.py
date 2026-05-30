@@ -11,6 +11,7 @@ import json
 import re
 import socket
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +23,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_harness.policy import compile_policy_regex, policy_get
+
 REGISTRY_PATH = ROOT / "data_prep" / "source_registry.json"
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 
@@ -30,11 +36,11 @@ HEADERS = {
     "Accept": "application/json, application/atom+xml, application/rss+xml, text/html;q=0.8, */*;q=0.5",
 }
 
-DEMO_RE = re.compile(r"\b(demo|playground|try it|preview|screenshot|video|example|演示|试用)\b", re.I)
-CODE_RE = re.compile(r"\b(github|repo|code|sdk|api|cli|open source|model|paper|arxiv|开源|代码|模型)\b", re.I)
-BUYER_RE = re.compile(r"\b(saas|api|pricing|customer|enterprise|workflow|automation|降本|提效|私有化|企业|工作流)\b", re.I)
-PAIN_RE = re.compile(r"\b(replace|faster|slow|cost|manual|bug|risk|pain|complaint|坑|慢|贵|手动|替代|风险)\b", re.I)
-AD_RE = re.compile(r"\b(best|ultimate|game.?changer|revolutionary|unlock|10x|限时|重磅|首个|唯一)\b", re.I)
+DEMO_RE = compile_policy_regex("data_prep.regex.demo")
+CODE_RE = compile_policy_regex("data_prep.regex.code")
+BUYER_RE = compile_policy_regex("data_prep.regex.buyer")
+PAIN_RE = compile_policy_regex("data_prep.regex.pain")
+AD_RE = compile_policy_regex("data_prep.regex.ad")
 
 
 def utc_now() -> str:
@@ -378,16 +384,18 @@ def metric_strength(metrics: dict[str, Any]) -> float | None:
 
 def risk_flags(row: dict[str, Any], signals: dict[str, Any]) -> list[str]:
     flags: list[str] = []
+    thresholds = policy_get("data_prep.risk_thresholds", {})
+    generic_titles = set(policy_get("data_prep.generic_titles", ["ai", "agent", "llm", "rag"]))
     if not row.get("url"):
         flags.append("missing_url")
     title = row.get("title") or ""
-    if len(title) < 8 or title.lower() in {"ai", "agent", "llm", "rag"}:
+    if len(title) < int(thresholds.get("generic_title_min_chars", 8)) or title.lower() in generic_titles:
         flags.append("generic_title")
-    if signals.get("freshness_hours") and signals["freshness_hours"] > 720:
+    if signals.get("freshness_hours") and signals["freshness_hours"] > float(thresholds.get("old_item_hours", 720)):
         flags.append("old_item")
     if not signals["has_demo_keyword"] and not signals["has_code_signal"]:
         flags.append("no_demo_signal")
-    if signals["ad_language_density"] and signals["ad_language_density"] > 0.08:
+    if signals["ad_language_density"] and signals["ad_language_density"] > float(thresholds.get("ad_language_density", 0.08)):
         flags.append("marketing_biased")
     if row["source"] in {"v2ex_hot", "hacker_news_algolia"}:
         flags.append("community_only")
@@ -454,23 +462,24 @@ def normalize(rows: list[dict[str, Any]], registry: dict[str, Any]) -> tuple[lis
 
 def candidate_score(candidate: dict[str, Any]) -> float:
     signals = candidate["signals"]
+    weights = policy_get("data_prep.score", {})
     score = 0.0
-    score += 2.5 if signals.get("has_code_signal") else 0.0
-    score += 1.5 if signals.get("has_demo_keyword") else 0.0
-    score += 1.2 if signals.get("has_buyer_keyword") else 0.0
-    score += 1.0 if signals.get("has_pain_keyword") else 0.0
-    score += min(2.0, float(signals.get("metric_strength") or 0) / 2)
-    score += min(1.0, max(0, int(signals.get("source_count") or 1) - 1) * 0.5)
+    score += float(weights.get("has_code_signal", 2.5)) if signals.get("has_code_signal") else 0.0
+    score += float(weights.get("has_demo_keyword", 1.5)) if signals.get("has_demo_keyword") else 0.0
+    score += float(weights.get("has_buyer_keyword", 1.2)) if signals.get("has_buyer_keyword") else 0.0
+    score += float(weights.get("has_pain_keyword", 1.0)) if signals.get("has_pain_keyword") else 0.0
+    score += min(float(weights.get("metric_strength_cap", 2.0)), float(signals.get("metric_strength") or 0) / float(weights.get("metric_strength_divisor", 2.0)))
+    score += min(float(weights.get("extra_source_cap", 1.0)), max(0, int(signals.get("source_count") or 1) - 1) * float(weights.get("extra_source_weight", 0.5)))
     freshness = signals.get("freshness_hours")
     if freshness is None:
-        score += 0.4
-    elif freshness <= 72:
-        score += 1.0
-    elif freshness <= 720:
-        score += 0.5
-    score -= 0.8 if "marketing_biased" in candidate["risk_flags"] else 0.0
-    score -= 0.7 if "generic_title" in candidate["risk_flags"] else 0.0
-    score -= 0.4 if "community_only" in candidate["risk_flags"] else 0.0
+        score += float(weights.get("unknown_freshness", 0.4))
+    elif freshness <= float(weights.get("fresh_hours", 72)):
+        score += float(weights.get("fresh_bonus", 1.0))
+    elif freshness <= float(weights.get("recent_hours", 720)):
+        score += float(weights.get("recent_bonus", 0.5))
+    penalties = weights.get("penalties", {})
+    for flag, penalty in penalties.items():
+        score -= float(penalty) if flag in candidate["risk_flags"] else 0.0
     return round(max(0.0, score), 3)
 
 
@@ -480,8 +489,9 @@ def filter_candidates(candidates: list[dict[str, Any]], limit: int) -> tuple[lis
     for candidate in candidates:
         score = candidate_score(candidate)
         item = {**candidate, "candidate_score": score}
-        hard_flags = {"missing_url", "generic_title"}
-        if hard_flags.intersection(candidate["risk_flags"]) or score < 1.0:
+        hard_flags = set(policy_get("data_prep.score.hard_reject_flags", ["missing_url", "generic_title"]))
+        min_keep_score = float(policy_get("data_prep.score.min_keep_score", 1.0))
+        if hard_flags.intersection(candidate["risk_flags"]) or score < min_keep_score:
             rejected.append({"candidate_id": candidate["candidate_id"], "title": candidate["title"], "score": score, "risk_flags": candidate["risk_flags"]})
         else:
             kept.append(item)

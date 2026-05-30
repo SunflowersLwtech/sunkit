@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo Douyin Upload Manifest",
+  "type": "object",
+  "required": ["schema_version", "platform", "adapter", "title", "desc", "tags", "live_upload_default", "live_upload_gate"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "created_at": {"type": "string"},
+    "platform": {"const": "douyin"},
+    "adapter": {"type": "string"},
+    "cli": {"type": "string"},
+    "account_env": {"type": "array", "items": {"type": "string"}},
+    "expected_video_path": {"type": "string"},
+    "title": {"type": "string", "minLength": 1},
+    "desc": {"type": "string", "minLength": 1},
+    "tags": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "live_upload_default": {"type": "boolean"},
+    "live_upload_gate": {"type": "string"},
+    "contract_path": {"type": "string"}
+  }
+}

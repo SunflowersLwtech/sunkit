@@ -53,6 +53,22 @@ else
   echo "Applied social-auto-upload Douyin timeout patch."
 fi
 
+if ! rg -q 'content/upload", timeout=90000' "$TARGET"; then
+  python3 - "$TARGET" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    'await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload")',
+    'await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload", timeout=90000)',
+)
+path.write_text(text, encoding="utf-8")
+PY
+  echo "Applied social-auto-upload Douyin wait_for_url timeout patch."
+fi
+
 if [[ -x "$SOCIAL_ROOT/.venv/bin/uv" ]]; then
   (cd "$SOCIAL_ROOT" && .venv/bin/uv pip install --force-reinstall .)
 elif command -v uv >/dev/null 2>&1; then

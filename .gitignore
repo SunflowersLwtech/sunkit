@@ -12,5 +12,7 @@ node_modules/
 out/
 dist/
 build/
+public/voiceover.wav
+public/generated/
 .idea/
 .vscode/

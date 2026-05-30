@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo Remotion Render Payload",
+  "type": "object",
+  "required": ["title", "summary", "source", "url", "cards", "footer"],
+  "additionalProperties": true,
+  "properties": {
+    "badge": {"type": "string"},
+    "title": {"type": "string", "minLength": 1},
+    "summary": {"type": "string", "minLength": 1},
+    "source": {"type": "string"},
+    "url": {"type": "string"},
+    "score": {"type": ["number", "string", "null"]},
+    "metricLine": {"type": "string"},
+    "cards": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["label", "value", "detail"],
+        "properties": {
+          "label": {"type": "string"},
+          "value": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "audioSrc": {"type": ["string", "null"]},
+    "voiceoverText": {"type": ["string", "null"]},
+    "cta": {"type": "string"},
+    "footer": {"type": "string"}
+  }
+}
