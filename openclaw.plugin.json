@@ -1,0 +1,67 @@
+{
+  "name": "searchpo",
+  "version": "0.1.0",
+  "description": "Agent workbench for turning source radar signals into gated Douyin-ready short videos.",
+  "family": "bundle-plugin",
+  "configSchema": {
+    "deepseek_api_key": {
+      "type": "string",
+      "required": false,
+      "description": "DeepSeek API key for provider-mode copy polish.",
+      "uiHints": {
+        "sensitive": true
+      }
+    },
+    "google_api_key": {
+      "type": "string",
+      "required": false,
+      "description": "Google or Vertex key for Gemini scoring, TTS, and visual audit.",
+      "uiHints": {
+        "sensitive": true
+      }
+    },
+    "social_auto_upload_root": {
+      "type": "string",
+      "required": false,
+      "description": "Local checkout path for social-auto-upload when adapter or live Douyin checks are requested."
+    },
+    "searchpo_douyin_live": {
+      "type": "boolean",
+      "required": false,
+      "description": "Live publishing guard. Must remain false unless the operator explicitly asks for live publishing in the current run."
+    }
+  },
+  "skills": [
+    "skills/searchpo-main-agent",
+    "skills/searchpo-impl-agent",
+    "skills/remotion-best-practices",
+    "skills/searchpo-plugin-check"
+  ],
+  "shared_deps": [
+    "skills/RESOLVER.md",
+    "skills/_AGENT_README.md"
+  ],
+  "excluded_from_install": [],
+  "searchpo": {
+    "safeDefaultCommand": "npm run e2e",
+    "providerCommand": "npm run e2e:provider",
+    "lambdaCommand": "npm run e2e:lambda",
+    "liveCommand": "npm run e2e:live",
+    "livePublishRequires": [
+      "explicit user request for the current run",
+      "SEARCHPO_DOUYIN_LIVE=1"
+    ]
+  },
+  "contracts": {
+    "artifactRoots": [
+      "runtime/artifacts/YYYY-MM-DD/<run_id>/",
+      "out/"
+    ],
+    "releaseGates": [
+      "agent_review.json status == pass",
+      "gemini_visual_audit.json status == pass in provider/live mode",
+      "post/douyin_upload_check.json status == pass for live publish",
+      "harness_board.sqlite3 gates all pass"
+    ]
+  }
+}

@@ -26,7 +26,8 @@
     "skills:sync": "node tools/sync-agent-skills.js all",
     "skills:sync:claude": "node tools/sync-claude-skills.js",
     "skills:sync:codex": "node tools/sync-codex-skills.js",
-    "skills:check": "node tools/sync-agent-skills.js check",
+    "agent-plugin:check": "node tools/check-agent-plugin.js",
+    "skills:check": "node tools/check-agent-plugin.js && node tools/sync-agent-skills.js check",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

@@ -4,7 +4,7 @@
 Douyin treats a hashtag topic as ``#text`` terminated by whitespace or the next
 ``#``. That means a topic may not contain spaces or most punctuation, only a
 limited number of topics are effective, and over-long topics get truncated by
-the client. The previous pipeline passed raw DeepSeek/​fallback tags straight to
+the client. The previous pipeline passed raw DeepSeek/policy-derived tags straight to
 the uploader, so ``"AI 工具"`` silently became the topic ``#AI`` plus the literal
 text ``工具``, and there was no cap on how many ``#`` topics were emitted.
 

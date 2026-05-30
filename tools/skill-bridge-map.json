@@ -3,6 +3,10 @@
   "claudeProjectRoot": ".claude/skills",
   "codexProjectRoot": ".codex/skills",
   "codexUserRoot": "~/.codex/skills",
+  "sharedDeps": [
+    "RESOLVER.md",
+    "_AGENT_README.md"
+  ],
   "skills": [
     {
       "name": "searchpo-main-agent",
@@ -15,6 +19,10 @@
     {
       "name": "remotion-best-practices",
       "description": "Remotion composition, rendering, animation, captions, and Douyin video output guidance."
+    },
+    {
+      "name": "searchpo-plugin-check",
+      "description": "Searchpo agent plugin manifest, resolver, frontmatter, and bridge health checks."
     }
   ]
 }

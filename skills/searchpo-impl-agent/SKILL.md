@@ -1,6 +1,25 @@
 ---
 name: searchpo-impl-agent
 description: Use when implementing or running searchpo provider scripts, Remotion rendering, Gemini visual audit, and Douyin publish/check commands.
+version: 1.1.0
+triggers:
+  - "run searchpo scripts"
+  - "provider scripts"
+  - "DeepSeek polish"
+  - "Gemini TTS"
+  - "visual audit"
+  - "Remotion render"
+  - "Douyin check"
+  - "Douyin upload"
+  - "resume from"
+tools:
+  - shell
+  - filesystem
+mutating: true
+writes_to:
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/"
+  - "out/"
+  - "public/generated/"
 ---
 
 # Searchpo Implementation Agent

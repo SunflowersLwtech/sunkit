@@ -1,6 +1,25 @@
 ---
 name: searchpo-main-agent
 description: Use when orchestrating a searchpo run from source selection through Remotion render, Gemini audit, and gated Douyin publishing. Owns task-plan state, verification, and release gates.
+version: 1.1.0
+triggers:
+  - "searchpo full flow"
+  - "daily radar"
+  - "topic mode"
+  - "SEARCHPO_TOPIC"
+  - "release gate"
+  - "publish decision"
+  - "发抖音"
+  - "发布"
+  - "live"
+tools:
+  - shell
+  - filesystem
+mutating: true
+owns_state:
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/main_task_plan.json"
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/agent_run.json"
+  - "runtime/latest_run.txt"
 ---
 
 # Searchpo Main Agent

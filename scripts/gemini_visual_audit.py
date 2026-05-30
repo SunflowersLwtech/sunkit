@@ -147,7 +147,7 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
-    parser.add_argument("--video", default="", help="Rendered MP4 path. Defaults to lambda output, then local output.")
+    parser.add_argument("--video", required=True, help="Rendered MP4 path.")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=float, default=180)
     args = parser.parse_args()
@@ -159,14 +159,9 @@ def main() -> int:
         raise SystemExit("GOOGLE_API_KEY or GOOGLE_AGENT_PLATFORM_API is required for scripts/gemini_visual_audit.py")
     model = env_value("SEARCHPO_GEMINI_AUDIT_MODEL", env_file, "gemini-3.5-flash")
     max_bytes = int(env_value("SEARCHPO_GEMINI_INLINE_VIDEO_MAX_BYTES", env_file, str(18 * 1024 * 1024)))
-    if args.video:
-        video_path = Path(args.video).expanduser()
-        if not video_path.is_absolute():
-            video_path = ROOT / video_path
-    else:
-        lambda_path = ROOT / "out" / "searchpo-radar-lambda.mp4"
-        local_path = ROOT / "out" / "searchpo-radar.mp4"
-        video_path = lambda_path if lambda_path.exists() else local_path
+    video_path = Path(args.video).expanduser()
+    if not video_path.is_absolute():
+        video_path = ROOT / video_path
     if not video_path.is_file():
         raise SystemExit(f"Rendered video missing: {video_path}")
     video_size = video_path.stat().st_size

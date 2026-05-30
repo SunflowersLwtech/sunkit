@@ -40,6 +40,8 @@ The target candidate has:
 - `scripts/deepseek_polish.py`: DeepSeek copy-polish adapter. Fails fast on missing key/provider error; no placeholder output.
 - `scripts/gemini_tts.py`: Gemini TTS adapter that writes `voiceover.wav` plus a manifest.
 - `scripts/gemini_visual_audit.py`: Gemini MP4 visual-audit adapter. Its `pass` verdict is required before publish.
+- `openclaw.plugin.json`: plugin-style bundle manifest for agent hosts.
+- `INSTALL_FOR_AGENTS.md`: concise install and verification protocol for agent hosts.
 - `skills/`: project-level agent skills that are the source of truth for both Claude Code and Codex.
 - `.claude/skills/`, `.claude/agents/`, and `.codex/skills/`: generated/project bridge surfaces for the main/impl runtime split.
 - `src/`: Remotion vertical video composition using tracked fixture defaults plus run-scoped props.
@@ -133,13 +135,18 @@ The intended agent-team shape is:
 
 - `searchpo-main-agent`: assigns tasks, owns `main_task_plan.json`, validates gates, and decides whether publish may proceed.
 - `searchpo-impl-agent`: runs `scripts/deepseek_polish.py`, `scripts/gemini_tts.py`, Remotion render commands, `scripts/gemini_visual_audit.py`, and `scripts/douyin_upload_check.sh`.
+- `remotion-best-practices`: governs Remotion composition, captions, cover output, render metadata, and video-quality edits.
+- `searchpo-plugin-check`: validates the plugin manifest, resolver shared deps, skill metadata, and bridge sync.
 
-Project instructions live in `AGENTS.md`, `CLAUDE.md`, `skills/`, `.claude/skills/`, `.codex/skills/`, and `.claude/agents/searchpo-impl-agent.md`. The durable skill source is `skills/`; regenerate host bridges with:
+Project instructions live in `AGENTS.md`, `CLAUDE.md`, `openclaw.plugin.json`, `INSTALL_FOR_AGENTS.md`, `skills/`, `.claude/skills/`, `.codex/skills/`, and `.claude/agents/searchpo-impl-agent.md`. The durable skill source is `skills/`; regenerate host bridges with:
 
 ```bash
 npm run skills:sync
+npm run agent-plugin:check
 npm run skills:check
 ```
+
+`skills/RESOLVER.md` is the short dispatcher. `skills/_AGENT_README.md` is the skill-directory contract. Both are copied into the Claude and Codex project bridge directories by `npm run skills:sync`.
 
 From Claude Code, run:
 

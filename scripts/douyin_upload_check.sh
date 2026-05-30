@@ -47,6 +47,7 @@ if [[ -z "$ACCOUNT_NAME" ]]; then
   ACCOUNT_NAME="$(env_value SOCIAL_UPLOAD_ACCOUNT_NAME)"
 fi
 RENDERED_VIDEO="$(env_value SEARCHPO_RENDERED_VIDEO)"
+RENDERED_COVER="$(env_value SEARCHPO_RENDERED_COVER)"
 SOCIAL_UPLOAD_HEADED="$(env_value SOCIAL_UPLOAD_HEADED)"
 if [[ -z "$SOCIAL_UPLOAD_HEADED" && "$LIVE" == "1" ]]; then
   SOCIAL_UPLOAD_HEADED="1"
@@ -80,7 +81,7 @@ if [[ "$LIVE" == "1" && "$CHECK_LEVEL" != "adapter" ]]; then
   exit 2
 fi
 
-python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" "$CHECK_LEVEL" <<'PY'
+python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$RENDERED_COVER" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" "$CHECK_LEVEL" <<'PY'
 from __future__ import annotations
 
 import json
@@ -100,24 +101,25 @@ social_python = sys.argv[4]
 social_cli = sys.argv[5]
 account_name = sys.argv[6]
 rendered_video = sys.argv[7]
-upload_headed = sys.argv[8] == "1"
-live = sys.argv[9] == "1"
-check_json = Path(sys.argv[10])
-check_level = sys.argv[11]
+rendered_cover = sys.argv[8]
+upload_headed = sys.argv[9] == "1"
+live = sys.argv[10] == "1"
+check_json = Path(sys.argv[11])
+check_level = sys.argv[12]
 
 post_dir = run_dir / "post"
 manifest_path = post_dir / "douyin_upload_manifest.json"
-if rendered_video:
-    configured_video_path = Path(rendered_video).expanduser()
-    video_path = configured_video_path if configured_video_path.is_absolute() else root / configured_video_path
-else:
-    lambda_video_path = root / "out" / "searchpo-radar-lambda.mp4"
-    local_video_path = root / "out" / "searchpo-radar.mp4"
-    video_path = lambda_video_path if lambda_video_path.is_file() else local_video_path
+if not rendered_video:
+    raise SystemExit("SEARCHPO_RENDERED_VIDEO is required")
+configured_video_path = Path(rendered_video).expanduser()
+video_path = configured_video_path if configured_video_path.is_absolute() else root / configured_video_path
+configured_cover_path = Path(rendered_cover).expanduser() if rendered_cover else None
+cover_path = configured_cover_path if configured_cover_path and configured_cover_path.is_absolute() else (root / configured_cover_path if configured_cover_path else None)
 contract_path = social_root / "skills" / "douyin-upload" / "references" / "cli-contract.md"
 cli_path = social_root / "sau_cli.py"
 pyproject_path = social_root / "pyproject.toml"
 cli_entrypoint_path = Path(social_cli) if social_cli and social_cli != "sau" else None
+command_timeout = int(os.environ.get("SEARCHPO_SOCIAL_UPLOAD_TIMEOUT") or (600 if live else 120))
 
 def upload_args(manifest: dict[str, Any]) -> list[str]:
     args = [
@@ -134,6 +136,8 @@ def upload_args(manifest: dict[str, Any]) -> list[str]:
         "--tags",
         ",".join(manifest["tags"]),
     ]
+    if cover_path and cover_path.is_file():
+        args.extend(["--thumbnail", str(cover_path)])
     if upload_headed:
         args.append("--headed")
     return args
@@ -147,17 +151,29 @@ def sau_command(args: list[str]) -> list[str]:
 
 def run_sau(args: list[str]) -> dict[str, Any]:
     command = sau_command(args)
-    proc = subprocess.run(
-        command,
-        cwd=social_root,
-        text=True,
-        capture_output=True,
-        timeout=120,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=social_root,
+            text=True,
+            capture_output=True,
+            timeout=command_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": " ".join(shlex.quote(part) for part in command),
+            "returncode": -1,
+            "timed_out": True,
+            "timeout_sec": command_timeout,
+            "stdout": ((exc.stdout or "") if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace"))[-1200:],
+            "stderr": ((exc.stderr or "") if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace"))[-1200:],
+        }
     return {
         "command": " ".join(shlex.quote(part) for part in command),
         "returncode": proc.returncode,
+        "timed_out": False,
+        "timeout_sec": command_timeout,
         "stdout": proc.stdout[-1200:],
         "stderr": proc.stderr[-1200:],
     }
@@ -193,11 +209,12 @@ if manifest_path.is_file():
         if not manifest.get(key):
             errors.append(f"douyin_upload_manifest.json missing `{key}`")
 
-# Cover is recommended but never blocks publishing (warning only).
-cover_path_value = (manifest.get("cover_path") if manifest else "") or str(root / "out" / "searchpo-cover.jpg")
-cover_present = Path(cover_path_value).is_file()
+if not rendered_cover:
+    errors.append("SEARCHPO_RENDERED_COVER is required")
+cover_path_value = rendered_cover
+cover_present = bool(cover_path and cover_path.is_file())
 if not cover_present:
-    warnings.append(f"Douyin cover image missing (upload will use the platform default): {cover_path_value}")
+    errors.append(f"Douyin cover image missing: {cover_path_value}")
 
 cli_help: dict[str, Any] | None = None
 if check_level == "adapter" and cli_path.is_file():
@@ -227,6 +244,8 @@ upload_result: dict[str, Any] = {
 if live:
     if not account_name:
         errors.append("Live Douyin upload requires DOUYIN_ACCOUNT_NAME or SOCIAL_UPLOAD_ACCOUNT_NAME.")
+    elif errors:
+        upload_result = {"status": "not-run", "reason": "pre-flight errors blocked live upload"}
     elif manifest and video_path.is_file():
         upload_result = run_sau(upload_args(manifest))
         upload_result["status"] = "submitted" if upload_result["returncode"] == 0 else "failed"
@@ -237,6 +256,8 @@ command = sau_command(upload_args(manifest)) if manifest else []
 result = {
     "schema_version": 1,
     "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    "status": "pass" if not errors else "fail",
+    "publish_mode": "live" if live else "contract-check",
     "platform": "douyin",
     "adapter": "dreammis/social-auto-upload",
     "check_level": check_level,

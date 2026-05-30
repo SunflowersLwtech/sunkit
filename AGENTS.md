@@ -1,14 +1,19 @@
 # searchpo Agent Runtime
 
-Codex and Claude Code use the same project skills in this repo.
+Codex, Claude Code, and plugin-style agent hosts use the same project skills in this repo.
 
 ## Skill Source Of Truth
 
+Installable bundle metadata lives at `openclaw.plugin.json`.
+
 Long-lived skill logic lives under `skills/`:
 
+- `skills/RESOLVER.md`: routes user requests to the right Searchpo skill.
+- `skills/_AGENT_README.md`: explains the local skill directory contract.
 - `skills/searchpo-main-agent/`: orchestrates source selection, task-plan state, release gates, and final publish decisions.
 - `skills/searchpo-impl-agent/`: runs scripts, Remotion commands, Gemini audit, and Douyin publish/check commands.
 - `skills/remotion-best-practices/`: guides edits to the Remotion video composition and render path.
+- `skills/searchpo-plugin-check/`: validates plugin manifest, skill metadata, resolver deps, and bridge sync.
 
 Generated bridges live outside the source of truth:
 
@@ -16,7 +21,7 @@ Generated bridges live outside the source of truth:
 - `.codex/skills/`: Codex project skill mirror for local inspection.
 - `/Users/sunfl/.codex/skills/searchpo-*`: Codex user-level symlinks installed by `npm run skills:sync:codex`.
 
-When a task matches a Searchpo skill but the skill is not listed in the active Codex skill registry for the current session, open the matching `skills/*/SKILL.md` file manually and follow it.
+When a task matches a Searchpo skill but the skill is not listed in the active Codex skill registry for the current session, read `skills/RESOLVER.md`, open the matching `skills/*/SKILL.md` file manually, and follow it.
 
 ## Operating Rules
 
@@ -63,5 +68,6 @@ Sync skill bridges after editing `skills/`:
 
 ```bash
 npm run skills:sync
+npm run agent-plugin:check
 npm run skills:check
 ```

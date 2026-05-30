@@ -16,21 +16,27 @@ fi
 
 CRF="${SEARCHPO_RENDER_CRF:-18}"
 AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
+IMAGE_FORMAT="${SEARCHPO_RENDER_IMAGE_FORMAT:-jpeg}"
+JPEG_QUALITY="${SEARCHPO_RENDER_JPEG_QUALITY:-95}"
 
 case "$ACTION" in
   local)
-    npx remotion render SearchpoRadar out/searchpo-radar.mp4 \
+    RENDER_OUT="${SEARCHPO_RENDER_OUTPUT:-out/searchpo-radar.mp4}"
+    npx remotion render SearchpoRadar "$RENDER_OUT" \
       --props "$PROPS_FILE" \
       --codec=h264 \
       --pixel-format=yuv420p \
       --crf="$CRF" \
-      --audio-bitrate="$AUDIO_BITRATE"
+      --audio-bitrate="$AUDIO_BITRATE" \
+      --image-format="$IMAGE_FORMAT" \
+      --jpeg-quality="$JPEG_QUALITY"
     ;;
   cover)
     COVER_OUT="${SEARCHPO_COVER_OUTPUT:-out/searchpo-cover.jpg}"
     npx remotion still SearchpoCover "$COVER_OUT" \
       --props "$PROPS_FILE" \
-      --image-format=jpeg
+      --image-format=jpeg \
+      --jpeg-quality="$JPEG_QUALITY"
     ;;
   *)
     echo "Usage: $0 [local|cover]" >&2

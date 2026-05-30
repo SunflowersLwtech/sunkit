@@ -111,7 +111,7 @@ h1 {
   margin: 0;
   font-size: 96px;
   line-height: 1.03;
-  letter-spacing: -1px;
+  letter-spacing: 0;
   text-wrap: balance;
 }
 
@@ -339,10 +339,13 @@ h1 {
   position: relative;
   z-index: 2;
   margin: 34px 0 0;
+  max-width: 100%;
   font-size: 132px;
-  line-height: 1.0;
-  letter-spacing: -2px;
+  line-height: 1.04;
+  letter-spacing: 0;
   text-wrap: balance;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cover-metric {

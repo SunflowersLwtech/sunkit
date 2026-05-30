@@ -8,7 +8,6 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import payload from '../public/searchpo-content.json';
 import {Captions, type CaptionSegment} from './Captions';
 
 type Card = {
@@ -18,39 +17,83 @@ type Card = {
 };
 
 export type Payload = {
-  badge?: string;
+  badge: string;
   title: string;
   summary: string;
   source: string;
   url: string;
   score: number | string | null;
-  metricLine?: string;
+  metricLine: string;
   cards: Card[];
-  audioSrc?: string | null;
-  voiceoverText?: string | null;
-  captions?: CaptionSegment[] | null;
-  durationInFrames?: number;
-  fps?: number;
-  cta?: string;
+  audioSrc: string;
+  voiceoverText: string;
+  captions: CaptionSegment[];
+  durationInFrames: number;
+  fps: number;
+  cta: string;
   footer: string;
 };
-
-const samplePayload = payload as Payload;
-
-const payloadFor = (props: Partial<Payload>): Payload => ({
-  ...samplePayload,
-  ...props,
-  cards: props.cards && props.cards.length > 0 ? props.cards : samplePayload.cards,
-});
 
 const fitText = (text: string, max = 96) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 const CARD_ACCENTS = ['#ffd60a', '#72e7ff', '#ff2d55'];
 
+const requireText = (value: string | null | undefined, field: string): string => {
+  if (!value || !value.trim()) {
+    throw new Error(`SearchpoRadar missing required prop: ${field}`);
+  }
+  return value;
+};
+
+const requireCards = (cards: Card[] | null | undefined): Card[] => {
+  if (!Array.isArray(cards) || cards.length === 0) {
+    throw new Error('SearchpoRadar requires at least one card from DeepSeek polish output.');
+  }
+  return cards;
+};
+
+const requireCaptions = (captions: CaptionSegment[] | null | undefined): CaptionSegment[] => {
+  if (!Array.isArray(captions) || captions.length === 0) {
+    throw new Error('SearchpoRadar requires timed captions from scripts/build_captions.py.');
+  }
+  return captions;
+};
+
+export const assertPayload = (props: Partial<Payload>): Payload => {
+  const durationInFrames = props.durationInFrames;
+  const fps = props.fps;
+  if (!Number.isFinite(durationInFrames) || !durationInFrames || durationInFrames < 60) {
+    throw new Error('SearchpoRadar requires props.durationInFrames >= 60.');
+  }
+  if (!Number.isFinite(fps) || !fps || fps < 1) {
+    throw new Error('SearchpoRadar requires props.fps.');
+  }
+  return {
+    badge: requireText(props.badge, 'badge'),
+    title: requireText(props.title, 'title'),
+    summary: requireText(props.summary, 'summary'),
+    source: requireText(props.source, 'source'),
+    url: requireText(props.url, 'url'),
+    score: props.score ?? null,
+    metricLine: requireText(props.metricLine, 'metricLine'),
+    cards: requireCards(props.cards),
+    audioSrc: requireText(props.audioSrc, 'audioSrc'),
+    voiceoverText: requireText(props.voiceoverText, 'voiceoverText'),
+    captions: requireCaptions(props.captions),
+    durationInFrames: Math.round(durationInFrames),
+    fps: Math.round(fps),
+    cta: requireText(props.cta, 'cta'),
+    footer: requireText(props.footer, 'footer'),
+  };
+};
+
 // Allocate integer scene durations that sum exactly to the total, distributing
 // the rounding remainder to the largest fractional parts.
 const computeSceneFrames = (total: number, weights: number[]): number[] => {
-  const wsum = weights.reduce((a, b) => a + b, 0) || 1;
+  const wsum = weights.reduce((a, b) => a + b, 0);
+  if (wsum <= 0) {
+    throw new Error('SearchpoRadar scene weights must sum to a positive value.');
+  }
   const raw = weights.map((w) => (w / wsum) * total);
   const floored = raw.map(Math.floor);
   let remainder = total - floored.reduce((a, b) => a + b, 0);
@@ -83,7 +126,7 @@ const Background: React.FC = () => {
 
 const TopBar: React.FC<{data: Payload}> = ({data}) => (
   <div className="topbar">
-    <span>{data.badge || '今日 AI 工具热点'}</span>
+    <span>{requireText(data.badge, 'badge')}</span>
     <span className="topbar-source">{fitText(data.source, 18)}</span>
   </div>
 );
@@ -117,7 +160,7 @@ const HookScene: React.FC<{data: Payload}> = ({data}) => {
       <h1 style={{transform: `translateY(${interpolate(enter, [0, 1], [48, 0])}px)`}}>
         {fitText(data.title, 60)}
       </h1>
-      <p className="hook-sub">{fitText(data.voiceoverText || data.summary, 80)}</p>
+      <p className="hook-sub">{fitText(requireText(data.voiceoverText, 'voiceoverText'), 80)}</p>
     </AbsoluteFill>
   );
 };
@@ -137,7 +180,7 @@ const OverviewScene: React.FC<{data: Payload}> = ({data}) => {
           className="signal-pill"
           style={{boxShadow: `0 0 ${18 + pulse * 28}px rgba(255, 214, 10, 0.28)`}}
         >
-          <span>{fitText(data.metricLine || `score ${data.score ?? '-'}`, 26)}</span>
+          <span>{fitText(requireText(data.metricLine, 'metricLine'), 26)}</span>
           <small>实时信号</small>
         </div>
         <div className="source-line">
@@ -172,7 +215,7 @@ const CtaScene: React.FC<{data: Payload}> = ({data}) => {
     <AbsoluteFill className="scene scene-cta" style={{opacity: enter}}>
       <div className="kicker kicker-red">先别急着下结论</div>
       <div className="cta-text" style={{transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`}}>
-        {fitText(data.cta || '先放进候选池，别把热度当结论。', 42)}
+        {fitText(requireText(data.cta, 'cta'), 42)}
       </div>
       <div className="cta-footer">{fitText(data.footer, 56)}</div>
     </AbsoluteFill>
@@ -180,11 +223,12 @@ const CtaScene: React.FC<{data: Payload}> = ({data}) => {
 };
 
 export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
-  const data = payloadFor(props);
+  const data = assertPayload(props);
   const frame = useCurrentFrame();
   const {durationInFrames} = useVideoConfig();
 
-  const cards = (data.cards || []).slice(0, 3);
+  const captions = data.captions;
+  const cards = data.cards.slice(0, 3);
   // hook, overview, one weight per card, cta
   const weights = [0.2, 0.18, ...cards.map(() => 0.15), 0.17];
   const sceneFrames = computeSceneFrames(durationInFrames, weights);
@@ -205,7 +249,7 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
 
   return (
     <AbsoluteFill className="canvas" style={{opacity: masterOpacity}}>
-      {data.audioSrc ? <Audio src={staticFile(data.audioSrc)} /> : null}
+      <Audio src={staticFile(data.audioSrc)} />
       <Background />
       <TopBar data={data} />
       <SceneProgress boundaries={boundaries} total={durationInFrames} />
@@ -227,10 +271,7 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
         </Series.Sequence>
       </Series>
 
-      <Captions
-        segments={data.captions || undefined}
-        text={data.voiceoverText || undefined}
-      />
+      <Captions segments={captions} />
     </AbsoluteFill>
   );
 };

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 from douyin_tags import build_tag_bundle, extract_inline_hashtags  # noqa: E402
+from build_captions import build_caption_segments  # noqa: E402
 
 
 PROVIDER_ENV_CONTRACT = {
@@ -52,6 +54,102 @@ def _render_template_list(templates: list[str], **values: Any) -> list[str]:
     return rows
 
 
+def _fallback_title_summary(candidate: dict[str, Any], polish: dict[str, Any] | None = None) -> tuple[str, str]:
+    title = str((polish or {}).get("polished_title") or candidate.get("title") or "Searchpo Radar").strip()
+    summary = str(
+        (polish or {}).get("voiceover_text")
+        or candidate.get("summary")
+        or policy_get("content.default_summary", "Fresh signal detected from the daily source sweep.")
+    ).strip()
+    if not title:
+        raise RuntimeError("selected candidate missing title")
+    if not summary:
+        raise RuntimeError("selected candidate missing summary")
+    return title, summary
+
+
+def _write_silent_wav(path: Path, *, duration_sec: float, sample_rate: int = 24000) -> None:
+    total_frames = max(1, round(duration_sec * sample_rate))
+    chunk_frames = sample_rate
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        remaining = total_frames
+        silence = b"\x00\x00" * chunk_frames
+        while remaining > 0:
+            count = min(chunk_frames, remaining)
+            wav.writeframes(silence[: count * 2])
+            remaining -= count
+
+
+def _normalize_caption_segments(caption_data: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"text": s["text"], "startFrame": s["start_frame"], "endFrame": s["end_frame"]}
+        for s in caption_data.get("segments") or []
+        if str(s.get("text") or "").strip()
+    ]
+
+
+def ensure_contract_media_artifacts(
+    run_dir: Path,
+    candidate: dict[str, Any],
+    polish: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Create local no-provider audio/caption artifacts for contract renders."""
+    _, voiceover_text = _fallback_title_summary(candidate, polish)
+    fps = int(os.environ.get("SEARCHPO_VIDEO_FPS") or 30)
+    manifest_path = run_dir / "voiceover_manifest.json"
+    audio_path = run_dir / "voiceover.wav"
+    captions_path = run_dir / "captions.json"
+
+    if manifest_path.exists() and audio_path.exists():
+        manifest = read_json(manifest_path)
+    else:
+        duration_sec = min(18.0, max(8.0, len(voiceover_text) / 16.0))
+        _write_silent_wav(audio_path, duration_sec=duration_sec)
+        audio_duration_sec = round(duration_sec, 3)
+        manifest = {
+            "schema_version": 2,
+            "created_at": utc_now(),
+            "provider": "contract",
+            "model": "contract-silent-audio",
+            "api_mode": "none",
+            "voice": "silent",
+            "status": "pass",
+            "output_mime_type": "audio/wav",
+            "audio_path": str(audio_path),
+            "audio_duration_sec": audio_duration_sec,
+            "audio_frames": round(audio_duration_sec * fps),
+            "fps": fps,
+            "voiceover_text": voiceover_text,
+        }
+        write_json(manifest_path, manifest)
+
+    if captions_path.exists():
+        caption_data = read_json(captions_path)
+    else:
+        audio_sec = float(manifest.get("audio_duration_sec") or 0)
+        segments = build_caption_segments(voiceover_text, audio_sec, fps=int(manifest.get("fps") or fps))
+        caption_data = {
+            "schema_version": 1,
+            "created_at": utc_now(),
+            "fps": int(manifest.get("fps") or fps),
+            "audio_duration_sec": audio_sec,
+            "source": "contract_silent_voiceover",
+            "segment_count": len(segments),
+            "end_frame": segments[-1]["end_frame"] if segments else 0,
+            "segments": segments,
+        }
+        write_json(captions_path, caption_data)
+
+    captions = _normalize_caption_segments(caption_data)
+    if not captions:
+        raise RuntimeError("contract captions fallback produced no segments")
+    return manifest, captions
+
+
 def select_candidate(items: list[dict[str, Any]]) -> dict[str, Any]:
     if not items:
         raise RuntimeError("candidate_shortlist.json has no items")
@@ -60,7 +158,7 @@ def select_candidate(items: list[dict[str, Any]]) -> dict[str, Any]:
         for item in items:
             if item.get("canonical_url") == pin_url:
                 return item
-        return _synthetic_pinned_candidate(pin_url)
+        raise RuntimeError(f"SEARCHPO_PIN_URL was not found in candidate_shortlist.json: {pin_url}")
     return max(
         items,
         key=lambda item: (
@@ -69,52 +167,6 @@ def select_candidate(items: list[dict[str, Any]]) -> dict[str, Any]:
             float(item.get("signals", {}).get("metric_strength") or 0),
         ),
     )
-
-
-def _synthetic_pinned_candidate(url: str) -> dict[str, Any]:
-    import hashlib
-    import urllib.request
-    cid = hashlib.sha256(url.encode()).hexdigest()[:16]
-    title = url.rstrip("/").rsplit("/", 1)[-1]
-    owner_repo = "/".join(url.rstrip("/").split("/")[-2:]) if "github.com" in url else title
-    summary = ""
-    stars = 0
-    try:
-        api_url = f"https://api.github.com/repos/{owner_repo}"
-        req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json", "User-Agent": "searchpo"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            title = data.get("full_name") or owner_repo
-            summary = data.get("description") or ""
-            stars = data.get("stargazers_count") or 0
-    except Exception:
-        pass
-    from datetime import datetime, timezone
-    return {
-        "candidate_id": cid,
-        "entity_type": "repo",
-        "entity_key": f"repo:{owner_repo}",
-        "canonical_url": url,
-        "title": title,
-        "summary": summary,
-        "published_at": None,
-        "collected_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "source_ids": ["pinned"],
-        "evidence": [{"source": "pinned", "url": url, "reliability": 1.0, "claim_role": "primary"}],
-        "metrics": {"stars": str(stars), "stars_today": "0"},
-        "signals": {
-            "freshness_hours": None,
-            "has_demo_keyword": False,
-            "has_code_signal": True,
-            "has_buyer_keyword": False,
-            "has_pain_keyword": False,
-            "ad_language_density": 0.0,
-            "source_count": 1,
-            "metric_strength": min(10.0, stars / 1000),
-        },
-        "risk_flags": [],
-        "candidate_score": 8.0,
-    }
 
 
 class ScriptTransientError(RuntimeError):
@@ -144,7 +196,9 @@ def run_repo_script(context: HarnessContext, args: list[str], timeout: int = 180
         }
         if proc.returncode != 0:
             stderr = proc.stderr[-2000:]
-            if any(sig in stderr for sig in ("429", "rate limit", "quota", "503", "timeout", "ETIMEDOUT")):
+            stderr_lower = stderr.lower()
+            transient_signals = ("429", "rate limit", "quota", "503", "timed out", "etimedout", "temporarily unavailable")
+            if any(sig in stderr_lower for sig in transient_signals):
                 raise ScriptTransientError(
                     f"Script transient failure ({proc.returncode}): {' '.join(command)}\nstderr:\n{stderr}"
                 )
@@ -212,10 +266,17 @@ def build_video_payload(
 ) -> dict[str, Any]:
     operator_topic = is_operator_topic(candidate)
     profile = content_profile(candidate)
-    title = (polish or {}).get("polished_title") or candidate.get("title") or "Searchpo Radar"
-    summary = str((polish or {}).get("voiceover_text") or candidate.get("summary") or policy_get("content.default_summary", "Fresh signal detected from the daily source sweep."))
+    if not voiceover_manifest:
+        raise RuntimeError("voiceover_manifest.json is required to build the render payload.")
+    if not captions:
+        raise RuntimeError("captions.json is required to build the render payload.")
+    title, summary = _fallback_title_summary(candidate, polish)
     source_ids = ", ".join(candidate.get("source_ids") or [])
+    if not source_ids and not operator_topic:
+        raise RuntimeError("selected candidate missing source_ids")
     url = candidate.get("canonical_url") or ""
+    if not url:
+        raise RuntimeError("selected candidate missing canonical_url")
     score = candidate.get("candidate_score")
     signals = candidate.get("signals") or {}
     metrics = candidate.get("metrics") or {}
@@ -248,31 +309,45 @@ def build_video_payload(
         for card in profile.get("cards", [])
     ]
     cards = (polish or {}).get("cards") or fallback_cards
-    # Video length follows the real audio (set by gemini_tts) so captions and
-    # scenes stay in sync; falls back to the configured default for no-audio runs.
-    fps = int((voiceover_manifest or {}).get("fps") or os.environ.get("SEARCHPO_VIDEO_FPS") or 30)
-    audio_frames = (voiceover_manifest or {}).get("audio_frames")
-    if audio_frames:
-        tail = int(os.environ.get("SEARCHPO_VIDEO_TAIL_FRAMES") or round(fps * 0.4))
-        duration_frames = int(audio_frames) + tail
-    else:
-        duration_frames = int(os.environ.get("SEARCHPO_DURATION_FRAMES") or 360)
+    if not cards:
+        raise RuntimeError("render payload requires cards from DeepSeek polish or content profile fallback")
+    fps = int(voiceover_manifest.get("fps") or os.environ.get("SEARCHPO_VIDEO_FPS") or 30)
+    audio_frames = voiceover_manifest.get("audio_frames")
+    if not audio_frames:
+        raise RuntimeError("voiceover_manifest.json missing audio_frames")
+    tail = int(os.environ.get("SEARCHPO_VIDEO_TAIL_FRAMES") or round(fps * 0.4))
+    duration_frames = int(audio_frames) + tail
+    max_caption_end = max(int(segment.get("endFrame") or 0) for segment in captions)
+    if max_caption_end <= 0:
+        raise RuntimeError("captions.json has no positive endFrame values")
+    duration_frames = max(duration_frames, max_caption_end + tail)
+    metric = policy_format(profile.get("metric_template", "candidate score {score}"), score=score) if operator_topic or not metric_line else metric_line
+    if not metric:
+        raise RuntimeError("metricLine is required")
+    badge = profile.get("badge", "指定主题分析" if operator_topic else "今日 AI 工具热点")
+    cta = profile.get("cta", "")
+    footer = profile.get("footer", "")
+    if not badge or not cta or not footer:
+        raise RuntimeError("content profile must define badge, cta, and footer for render payload")
+    voiceover_text = str(voiceover_manifest.get("voiceover_text") or "").strip()
+    if not voiceover_text:
+        raise RuntimeError("voiceover_manifest.json missing voiceover_text")
     return {
-        "badge": profile.get("badge", "指定主题分析" if operator_topic else "今日 AI 工具热点"),
+        "badge": badge,
         "title": sanitize_post(title, 80),
         "summary": sanitize_post(summary, 700),
-        "source": profile.get("source") if operator_topic else (source_ids or profile.get("source", "searchpo")),
+        "source": profile.get("source") if operator_topic else source_ids,
         "url": url,
         "score": score,
-        "metricLine": policy_format(profile.get("metric_template", "candidate score {score}"), score=score) if operator_topic or not metric_line else metric_line,
+        "metricLine": metric,
         "cards": cards,
-        "audioSrc": "voiceover.wav" if voiceover_manifest else None,
-        "voiceoverText": (voiceover_manifest or {}).get("voiceover_text") or (polish or {}).get("voiceover_text"),
-        "captions": captions or None,
+        "audioSrc": "voiceover.wav",
+        "voiceoverText": voiceover_text,
+        "captions": captions,
         "durationInFrames": duration_frames,
         "fps": fps,
-        "cta": profile.get("cta", ""),
-        "footer": profile.get("footer", ""),
+        "cta": cta,
+        "footer": footer,
     }
 
 
@@ -708,15 +783,24 @@ class RenderPayloadStage:
         if captions is None:
             captions_path = context.run_dir / "captions.json"
             if captions_path.exists():
-                segments = read_json(captions_path).get("segments") or []
-                captions = [
-                    {"text": s["text"], "startFrame": s["start_frame"], "endFrame": s["end_frame"]}
-                    for s in segments
-                ]
+                captions = _normalize_caption_segments(read_json(captions_path))
+        voiceover_manifest = context.state.get("voiceover_manifest")
+        if voiceover_manifest is None:
+            manifest_path = context.run_dir / "voiceover_manifest.json"
+            if manifest_path.exists():
+                voiceover_manifest = read_json(manifest_path)
+        if voiceover_manifest is None or captions is None:
+            voiceover_manifest, captions = ensure_contract_media_artifacts(
+                context.run_dir,
+                candidate,
+                context.state.get("deepseek_polish"),
+            )
+            context.state["voiceover_manifest"] = voiceover_manifest
+            context.state["captions"] = captions
         payload = build_video_payload(
             candidate,
             context.state.get("deepseek_polish"),
-            context.state.get("voiceover_manifest"),
+            voiceover_manifest,
             captions,
         )
         path = context.run_dir / "render_payload.json"

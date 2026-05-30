@@ -9,8 +9,7 @@ shorter/longer than the hard-coded 360-frame video.
 
 This script ties captions to the generated audio:
 
-1. Read the real audio duration (seconds) from ``voiceover_manifest.json`` (which
-   now records it) or probe ``voiceover.wav`` directly with ffprobe.
+1. Read the real audio duration (seconds) from ``voiceover_manifest.json``.
 2. Split the voiceover into phrases at natural punctuation pauses (and cap very
    long phrases for readability), keeping latin words intact.
 3. Allocate each phrase a slice of the real audio span weighted by character
@@ -46,8 +45,6 @@ DEFAULT_TAIL_SEC = 0.18
 # A vertical caption bar wraps to ~2 lines; keep a phrase under this spoken
 # weight before we sub-split a long, punctuation-free run.
 DEFAULT_MAX_SEG_CHARS = 24.0
-# Fallback speaking rate (CJK chars/sec) when no audio length is available.
-DEFAULT_CHARS_PER_SEC = 6.0
 
 
 def utc_now() -> str:
@@ -173,9 +170,7 @@ def build_caption_segments(
     if not phrases:
         return []
     if not audio_sec or audio_sec <= 0:
-        # Degraded mode: estimate from a default speaking rate.
-        cjk_equiv = sum(char_weight(c) for p in phrases for c in p["text"]) or 1.0
-        audio_sec = cjk_equiv / DEFAULT_CHARS_PER_SEC + lead_sec + tail_sec
+        raise ValueError("audio_sec is required to build captions; estimated caption timing is disabled")
     total_frames = max(1, round(audio_sec * fps))
     lead = max(0, round(lead_sec * fps))
     tail = max(0, round(tail_sec * fps))
@@ -270,7 +265,7 @@ def main() -> int:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         audio_sec = manifest.get("audio_duration_sec")
     if not audio_sec:
-        audio_sec = probe_audio_seconds(run_dir / "voiceover.wav")
+        raise SystemExit("voiceover_manifest.json missing audio_duration_sec")
 
     segments = build_caption_segments(text, audio_sec, fps=args.fps)
     end_frame = segments[-1]["end_frame"] if segments else 0
@@ -279,7 +274,7 @@ def main() -> int:
         "created_at": utc_now(),
         "fps": args.fps,
         "audio_duration_sec": audio_sec,
-        "source": "voiceover_manifest" if audio_sec else "estimated_rate",
+        "source": "voiceover_manifest_or_probe",
         "segment_count": len(segments),
         "end_frame": end_frame,
         "segments": segments,

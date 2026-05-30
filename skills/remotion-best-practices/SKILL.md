@@ -1,6 +1,26 @@
 ---
 name: remotion-best-practices
 description: Remotion video composition best practices for searchpo. Use when editing src/ components, configuring rendering, optimizing video output, or adding animations/effects to the Remotion pipeline.
+version: 1.1.0
+triggers:
+  - "Remotion"
+  - "src/Composition"
+  - "captions"
+  - "cover"
+  - "render metadata"
+  - "Lambda render"
+  - "video output"
+  - "animation"
+  - "Douyin video"
+tools:
+  - shell
+  - filesystem
+mutating: true
+applies_to:
+  - "src/"
+  - "render/"
+  - "scripts/remotion_render.sh"
+  - "scripts/lambda_render.sh"
 ---
 
 # Remotion Best Practices for Searchpo

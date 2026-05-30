@@ -1,4 +1,5 @@
-import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
+import {useMemo} from 'react';
+import {interpolate, useCurrentFrame} from 'remotion';
 
 export type CaptionSegment = {
   text: string;
@@ -7,45 +8,19 @@ export type CaptionSegment = {
 };
 
 type CaptionsProps = {
-  // Frame-accurate segments produced by scripts/build_captions.py from the real
-  // audio length. When present these are rendered verbatim (the correct path).
-  segments?: CaptionSegment[];
-  // Degraded fallback when timing is unavailable (e.g. no audio): even split.
-  text?: string;
-  startFrame?: number;
+  segments: CaptionSegment[];
 };
 
-const FALLBACK_CHARS_PER_GROUP = 9;
-
-// Build evenly-spaced segments only when real timing is missing. This keeps a
-// readable caption in contract/no-audio runs without pretending to be in sync.
-const fallbackSegments = (text: string, startFrame: number, total: number): CaptionSegment[] => {
-  const groups: string[] = [];
-  for (let i = 0; i < text.length; i += FALLBACK_CHARS_PER_GROUP) {
-    groups.push(text.slice(i, i + FALLBACK_CHARS_PER_GROUP));
-  }
-  if (groups.length === 0) return [];
-  const span = Math.max(groups.length, total - startFrame);
-  const per = span / groups.length;
-  return groups.map((g, i) => ({
-    text: g,
-    startFrame: Math.round(startFrame + i * per),
-    endFrame: Math.round(startFrame + (i + 1) * per),
-  }));
-};
-
-export const Captions: React.FC<CaptionsProps> = ({segments, text, startFrame = 8}) => {
+export const Captions: React.FC<CaptionsProps> = ({segments}) => {
   const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
 
-  const active: CaptionSegment[] =
-    segments && segments.length > 0
-      ? segments
-      : text
-      ? fallbackSegments(text, startFrame, durationInFrames - 24)
-      : [];
+  const active: CaptionSegment[] = useMemo(() => {
+    if (!segments || segments.length === 0) {
+      throw new Error('Captions requires timed segments from scripts/build_captions.py.');
+    }
+    return segments;
+  }, [segments]);
 
-  if (active.length === 0) return null;
 
   const current = active.find((s) => frame >= s.startFrame && frame < s.endFrame);
   if (!current) return null;

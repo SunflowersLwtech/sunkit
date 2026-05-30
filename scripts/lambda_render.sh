@@ -20,7 +20,13 @@ FUNCTION_NAME="${REMOTION_LAMBDA_FUNCTION_NAME:-}"
 BUCKET_NAME="${REMOTION_LAMBDA_BUCKET_NAME:-}"
 PRIVACY="${REMOTION_LAMBDA_PRIVACY:-private}"
 SITE_NAME="${REMOTION_LAMBDA_SITE_NAME:-searchpo-radar}"
-CONCURRENCY="${REMOTION_LAMBDA_CONCURRENCY:-4}"
+FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-60}"
+CONCURRENCY="${SEARCHPO_LAMBDA_CONCURRENCY:-${REMOTION_LAMBDA_CONCURRENCY:-}}"
+CONCURRENCY_PER_LAMBDA="${SEARCHPO_LAMBDA_CONCURRENCY_PER_LAMBDA:-1}"
+CRF="${SEARCHPO_RENDER_CRF:-18}"
+AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
+IMAGE_FORMAT="${SEARCHPO_RENDER_IMAGE_FORMAT:-jpeg}"
+JPEG_QUALITY="${SEARCHPO_RENDER_JPEG_QUALITY:-95}"
 ACTION="${1:-check}"
 RUN_DIR="${SEARCHPO_RUN_DIR:-}"
 if [[ -z "$RUN_DIR" && -f runtime/latest_run.txt ]]; then
@@ -30,6 +36,13 @@ PROPS_FILE="${SEARCHPO_REMOTION_PROPS:-}"
 if [[ -z "$PROPS_FILE" && -n "$RUN_DIR" ]]; then
   PROPS_FILE="$RUN_DIR/remotion_input_props.json"
 fi
+RUN_ID="${SEARCHPO_RUN_ID:-$(basename "${RUN_DIR:-latest}")}"
+VIDEO_OUTPUT="${SEARCHPO_LAMBDA_RENDER_OUTPUT:-out/${RUN_ID}-searchpo-radar-lambda.mp4}"
+VIDEO_OUT_NAME="${SEARCHPO_LAMBDA_RENDER_OUT_NAME:-${RUN_ID}/searchpo-radar.mp4}"
+COVER_OUTPUT="${SEARCHPO_LAMBDA_COVER_OUTPUT:-out/${RUN_ID}-searchpo-cover-lambda.jpg}"
+COVER_OUT_NAME="${SEARCHPO_LAMBDA_COVER_OUT_NAME:-${RUN_ID}/searchpo-cover.jpg}"
+SAMPLE_RATE="${SEARCHPO_RENDER_SAMPLE_RATE:-}"
+X264_PRESET="${SEARCHPO_RENDER_X264_PRESET:-}"
 
 require() {
   local name="$1"
@@ -63,19 +76,59 @@ case "$ACTION" in
       echo "Run: python3 render/prepare_remotion_input.py \"${RUN_DIR:-<run_dir>}\"" >&2
       exit 1
     fi
-    npx remotion lambda render "$SITE_NAME" SearchpoRadar out/searchpo-radar-lambda.mp4 \
+    mkdir -p "$(dirname "$VIDEO_OUTPUT")"
+    RENDER_CMD=(
+      npx remotion lambda render "$SITE_NAME" SearchpoRadar "$VIDEO_OUTPUT"
+      --region "$REGION"
+      --function-name "$FUNCTION_NAME"
+      --force-bucket-name "$BUCKET_NAME"
+      --props "$PROPS_FILE"
+      --privacy "$PRIVACY"
+      --concurrency-per-lambda "$CONCURRENCY_PER_LAMBDA"
+      --out-name "$VIDEO_OUT_NAME"
+      --codec=h264
+      --pixel-format=yuv420p
+      --crf="$CRF"
+      --audio-bitrate="$AUDIO_BITRATE"
+      --image-format="$IMAGE_FORMAT"
+      --jpeg-quality="$JPEG_QUALITY"
+    )
+    if [[ -n "$FRAMES_PER_LAMBDA" ]]; then
+      RENDER_CMD+=(--frames-per-lambda "$FRAMES_PER_LAMBDA")
+    elif [[ -n "$CONCURRENCY" ]]; then
+      RENDER_CMD+=(--concurrency "$CONCURRENCY")
+    fi
+    if [[ -n "$SAMPLE_RATE" ]]; then
+      RENDER_CMD+=(--sample-rate="$SAMPLE_RATE")
+    fi
+    if [[ -n "$X264_PRESET" ]]; then
+      RENDER_CMD+=(--x264-preset="$X264_PRESET")
+    fi
+    RENDER_CMD+=(--log=verbose)
+    "${RENDER_CMD[@]}"
+    ;;
+  still|cover)
+    require FUNCTION_NAME
+    require BUCKET_NAME
+    if [[ -z "$PROPS_FILE" || ! -f "$PROPS_FILE" ]]; then
+      echo "Missing Remotion props file: ${PROPS_FILE:-<unset>}" >&2
+      echo "Run: python3 render/prepare_remotion_input.py \"${RUN_DIR:-<run_dir>}\"" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "$COVER_OUTPUT")"
+    npx remotion lambda still "$SITE_NAME" SearchpoCover "$COVER_OUTPUT" \
       --region "$REGION" \
       --function-name "$FUNCTION_NAME" \
       --force-bucket-name "$BUCKET_NAME" \
       --props "$PROPS_FILE" \
       --privacy "$PRIVACY" \
-      --concurrency "$CONCURRENCY" \
-      --codec=h264 \
-      --pixel-format=yuv420p \
+      --out-name "$COVER_OUT_NAME" \
+      --image-format=jpeg \
+      --jpeg-quality="$JPEG_QUALITY" \
       --log=verbose
     ;;
   *)
-    echo "Usage: $0 [check|site|render]" >&2
+    echo "Usage: $0 [check|site|render|still]" >&2
     exit 2
     ;;
 esac

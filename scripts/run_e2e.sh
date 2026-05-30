@@ -60,6 +60,7 @@ else
   python3 agent_harness/run_agent_loop.py "$RUN_DIR"
 fi
 python3 render/prepare_remotion_input.py "$RUN_DIR"
+RUN_ID="$(basename "$RUN_DIR")"
 python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --name remotion_input \
   --title "Prepare Remotion run props" \
@@ -70,13 +71,13 @@ python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
 REMOTION_MODE="${SEARCHPO_REMOTION_RENDER_MODE:-local}"
 case "$REMOTION_MODE" in
   lambda)
-    bash scripts/lambda_render.sh site
-    bash scripts/lambda_render.sh render
-    RENDERED_VIDEO="out/searchpo-radar-lambda.mp4"
+    RENDERED_VIDEO="out/${RUN_ID}-searchpo-radar-lambda.mp4"
+    SEARCHPO_RUN_DIR="$RUN_DIR" bash scripts/lambda_render.sh site
+    SEARCHPO_RUN_DIR="$RUN_DIR" SEARCHPO_LAMBDA_RENDER_OUTPUT="$RENDERED_VIDEO" bash scripts/lambda_render.sh render
     ;;
   local)
-    bash scripts/remotion_render.sh local
-    RENDERED_VIDEO="out/searchpo-radar.mp4"
+    RENDERED_VIDEO="out/${RUN_ID}-searchpo-radar.mp4"
+    SEARCHPO_RUN_DIR="$RUN_DIR" SEARCHPO_RENDER_OUTPUT="$RENDERED_VIDEO" bash scripts/remotion_render.sh local
     ;;
   *)
     echo "Unsupported SEARCHPO_REMOTION_RENDER_MODE: $REMOTION_MODE (expected lambda or local)" >&2
@@ -91,13 +92,29 @@ python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --artifact rendered_video="$ROOT/$RENDERED_VIDEO" \
   --gate remotion_rendered:pass:"Rendered MP4 exists"
 
-# Render the Douyin cover still. Non-fatal: a missing cover warns, never blocks the publish gate.
-COVER_OUTPUT="out/searchpo-cover.jpg"
-if SEARCHPO_RUN_DIR="$RUN_DIR" bash scripts/remotion_render.sh cover; then
+python3 scripts/check_render_metadata.py "$RUN_DIR" --video "$RENDERED_VIDEO"
+python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
+  --name render_metadata_check \
+  --title "Verify rendered MP4 metadata" \
+  --owner claude_impl_agent \
+  --artifact render_metadata_check="$RUN_DIR/render_metadata_check.json" \
+  --gate render_metadata_verified:pass:"Rendered MP4 matches Remotion props and Douyin codec requirements"
+
+# Render the Douyin cover still. In Lambda mode, keep this on AWS as well.
+if [[ "$REMOTION_MODE" == "lambda" ]]; then
+  COVER_OUTPUT="out/${RUN_ID}-searchpo-cover-lambda.jpg"
+  COVER_CMD=(bash scripts/lambda_render.sh still)
+  COVER_ENV=(SEARCHPO_RUN_DIR="$RUN_DIR" SEARCHPO_LAMBDA_COVER_OUTPUT="$COVER_OUTPUT")
+else
+  COVER_OUTPUT="out/${RUN_ID}-searchpo-cover.jpg"
+  COVER_CMD=(bash scripts/remotion_render.sh cover)
+  COVER_ENV=(SEARCHPO_RUN_DIR="$RUN_DIR" SEARCHPO_COVER_OUTPUT="$COVER_OUTPUT")
+fi
+if env "${COVER_ENV[@]}" "${COVER_CMD[@]}"; then
   COVER_STATUS="pass"
 else
-  COVER_STATUS="warn"
-  echo "Cover render failed; continuing without a cover." >&2
+  COVER_STATUS="fail"
+  echo "Cover render failed." >&2
 fi
 python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --name remotion_cover \
@@ -105,6 +122,9 @@ python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --owner claude_impl_agent \
   --artifact rendered_cover="$ROOT/$COVER_OUTPUT" \
   --gate "cover_rendered:${COVER_STATUS}:Cover still rendered for Douyin"
+if [[ "$COVER_STATUS" != "pass" ]]; then
+  exit 1
+fi
 
 if [[ "$SEARCHPO_AGENT_MODE" == "provider" ]]; then
   python3 scripts/gemini_visual_audit.py "$RUN_DIR" --video "$RENDERED_VIDEO"
@@ -114,36 +134,9 @@ if [[ "$SEARCHPO_AGENT_MODE" == "provider" ]]; then
     --owner claude_impl_agent \
     --artifact gemini_visual_audit="$RUN_DIR/gemini_visual_audit.json" \
     --gate visual_audit_passed:pass:"Gemini visual audit passed before publish"
-else
-  python3 - "$RUN_DIR" "$ROOT/$RENDERED_VIDEO" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-run_dir = Path(sys.argv[1])
-video = Path(sys.argv[2])
-payload = {
-    "schema_version": 1,
-    "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-    "status": "pass" if video.is_file() else "fail",
-    "mode": "contract_local",
-    "video_path": str(video),
-    "checks": {"rendered_video_exists": video.is_file()},
-    "note": "Provider visual audit skipped in contract profile.",
-}
-(run_dir / "contract_visual_audit.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-raise SystemExit(0 if video.is_file() else 1)
-PY
-  python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
-    --name contract_visual_audit \
-    --title "Contract render artifact audit" \
-    --owner claude_impl_agent \
-    --artifact contract_visual_audit="$RUN_DIR/contract_visual_audit.json" \
-    --gate contract_visual_audit_passed:pass:"Rendered MP4 exists; provider audit is skipped in contract profile"
 fi
 
-SEARCHPO_RENDERED_VIDEO="$RENDERED_VIDEO" bash scripts/douyin_upload_check.sh "$RUN_DIR"
+SEARCHPO_RENDERED_VIDEO="$RENDERED_VIDEO" SEARCHPO_RENDERED_COVER="$COVER_OUTPUT" bash scripts/douyin_upload_check.sh "$RUN_DIR"
 DOUYIN_CHECK_JSON="$RUN_DIR/post/douyin_upload_check.json"
 if [[ "${SEARCHPO_DOUYIN_LIVE:-0}" == "1" ]]; then
   if [[ -f "$DOUYIN_CHECK_JSON" ]] && python3 -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get('status')=='pass' else 1)" "$DOUYIN_CHECK_JSON" 2>/dev/null; then

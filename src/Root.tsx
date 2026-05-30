@@ -1,10 +1,23 @@
 import './styles.css';
 import {Composition, Still} from 'remotion';
-import samplePayload from '../public/searchpo-content.json';
 import {type Payload, SearchpoRadar} from './Composition';
 import {SearchpoCover} from './Cover';
 
-const sample = samplePayload as Payload;
+const requireFrameCount = (props: Partial<Payload>): number => {
+  const duration = props.durationInFrames;
+  if (!Number.isFinite(duration) || !duration || duration < 60) {
+    throw new Error('SearchpoRadar requires props.durationInFrames >= 60. Run render/prepare_remotion_input.py first.');
+  }
+  return Math.round(duration);
+};
+
+const requireFps = (props: Partial<Payload>): number => {
+  const fps = props.fps;
+  if (!Number.isFinite(fps) || !fps || fps < 1) {
+    throw new Error('SearchpoRadar requires props.fps. Run render/prepare_remotion_input.py first.');
+  }
+  return Math.round(fps);
+};
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -13,12 +26,9 @@ export const RemotionRoot: React.FC = () => {
         id="SearchpoRadar"
         component={SearchpoRadar}
         calculateMetadata={({props}) => {
-          const p = props as Payload;
           return {
-            // Duration follows the real audio length (set by the pipeline);
-            // falls back to 360 frames (12s) for no-audio / contract runs.
-            durationInFrames: Math.max(60, Math.round(p.durationInFrames || 360)),
-            fps: p.fps || 30,
+            durationInFrames: requireFrameCount(props as Partial<Payload>),
+            fps: requireFps(props as Partial<Payload>),
             width: 1080,
             height: 1920,
           };
@@ -27,14 +37,12 @@ export const RemotionRoot: React.FC = () => {
         fps={30}
         width={1080}
         height={1920}
-        defaultProps={sample}
       />
       <Still
         id="SearchpoCover"
         component={SearchpoCover}
         width={1080}
         height={1920}
-        defaultProps={sample}
       />
     </>
   );

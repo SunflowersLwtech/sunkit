@@ -42,6 +42,25 @@ function readText(filePath) {
   return fs.readFileSync(filePath, 'utf8');
 }
 
+function escapeRegex(input) {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function frontmatterFor(text, filePath) {
+  const match = /^---\n([\s\S]*?)\n---/.exec(text);
+  if (!match) {
+    fail(`Missing YAML frontmatter: ${path.relative(repoRoot, filePath)}`);
+  }
+  return match[1];
+}
+
+function assertFrontmatterField(frontmatter, filePath, field) {
+  const pattern = new RegExp(`(^|\\n)${escapeRegex(field)}:`);
+  if (!pattern.test(frontmatter)) {
+    fail(`Missing frontmatter ${field}: ${path.relative(repoRoot, filePath)}`);
+  }
+}
+
 function assertSkillSource(entry) {
   const source = skillPath(map.sourceRoot, entry.name);
   const skillFile = path.join(source, 'SKILL.md');
@@ -49,14 +68,12 @@ function assertSkillSource(entry) {
     fail(`Missing source skill file: ${path.relative(repoRoot, skillFile)}`);
   }
   const text = readText(skillFile);
-  if (!text.startsWith('---')) {
-    fail(`Missing YAML frontmatter: ${path.relative(repoRoot, skillFile)}`);
-  }
-  if (!text.includes(`name: ${entry.name}`)) {
+  const frontmatter = frontmatterFor(text, skillFile);
+  if (!new RegExp(`(^|\\n)name:\\s*${escapeRegex(entry.name)}\\s*(\\n|$)`).test(frontmatter)) {
     fail(`Frontmatter name does not match ${entry.name}: ${path.relative(repoRoot, skillFile)}`);
   }
-  if (!text.includes('description:')) {
-    fail(`Missing frontmatter description: ${path.relative(repoRoot, skillFile)}`);
+  for (const field of ['description', 'triggers', 'tools', 'mutating']) {
+    assertFrontmatterField(frontmatter, skillFile, field);
   }
   return source;
 }
@@ -88,6 +105,28 @@ function copySkill(source, destination, label) {
   removeDestination(destination);
   fs.cpSync(source, destination, {recursive: true});
   console.log(`synced ${label}: ${path.relative(repoRoot, destination)}`);
+}
+
+function copySharedDep(relativePath, root, label) {
+  const source = path.join(expandRoot(map.sourceRoot), relativePath);
+  const destination = path.join(expandRoot(root), relativePath);
+  if (!fs.existsSync(source)) {
+    fail(`Missing shared dependency: ${path.relative(repoRoot, source)}`);
+  }
+
+  if (checkOnly) {
+    if (!fs.existsSync(destination)) {
+      fail(`Missing ${label} shared dependency: ${destination}`);
+    }
+    if (readText(source) !== readText(destination)) {
+      fail(`Out-of-sync ${label} shared dependency: ${destination}`);
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destination), {recursive: true});
+  fs.cpSync(source, destination, {force: true});
+  console.log(`synced ${label} shared dependency: ${path.relative(repoRoot, destination)}`);
 }
 
 function ensureSymlink(source, destination) {
@@ -134,6 +173,12 @@ function syncCodex(entry, source) {
   }
 }
 
+function syncSharedDeps(root, label) {
+  for (const relativePath of map.sharedDeps ?? []) {
+    copySharedDep(relativePath, root, label);
+  }
+}
+
 for (const entry of map.skills) {
   const source = assertSkillSource(entry);
   if (command === 'all' || command === 'claude' || command === 'check') {
@@ -142,6 +187,13 @@ for (const entry of map.skills) {
   if (command === 'all' || command === 'codex' || command === 'check') {
     syncCodex(entry, source);
   }
+}
+
+if (command === 'all' || command === 'claude' || command === 'check') {
+  syncSharedDeps(map.claudeProjectRoot, 'claude project skill');
+}
+if (command === 'all' || command === 'codex' || command === 'check') {
+  syncSharedDeps(map.codexProjectRoot, 'codex project skill');
 }
 
 console.log(checkOnly ? 'skills bridge check passed' : 'skills bridge sync complete');

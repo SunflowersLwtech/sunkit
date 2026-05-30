@@ -60,14 +60,69 @@ def require_list(value: Any, key: str, max_items: int) -> list[str]:
     return rows
 
 
-def parse_deepseek_payload(content: str) -> dict[str, Any]:
+def candidate_entity_terms(candidate: dict[str, Any]) -> list[str]:
+    raw_values = [
+        str(candidate.get("title") or ""),
+        str(candidate.get("entity_key") or ""),
+        str(candidate.get("canonical_url") or "").rstrip("/").rsplit("/", 1)[-1],
+    ]
+    terms: list[str] = []
+    for raw in raw_values:
+        for part in re.split(r"[\s/_:.-]+", raw):
+            cleaned = part.strip()
+            if len(cleaned) >= 4 and cleaned.lower() not in {"github", "repo", "http", "https"}:
+                terms.append(cleaned)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(term)
+    return unique[:6]
+
+
+def validate_candidate_reference(candidate: dict[str, Any], polished: dict[str, Any]) -> None:
+    terms = candidate_entity_terms(candidate)
+    voiceover = str(polished.get("voiceover_text") or "").lower()
+    if terms and not any(term.lower() in voiceover for term in terms):
+        raise RuntimeError(f"DeepSeek voiceover_text must mention one of: {', '.join(terms)}")
+
+
+def rendered_polish_text(polished: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(polished.get("polished_title") or ""),
+            str(polished.get("voiceover_text") or ""),
+            str(polished.get("douyin_title") or ""),
+            str(polished.get("douyin_desc") or ""),
+            json.dumps(polished.get("cards") or [], ensure_ascii=False),
+        ]
+    )
+
+
+def unsafe_hits_for(polished: dict[str, Any]) -> list[str]:
+    return sorted(set(match.group(0) for match in UNSAFE_RE.finditer(rendered_polish_text(polished))))
+
+
+def validate_polish(candidate: dict[str, Any], polished: dict[str, Any]) -> None:
+    validate_candidate_reference(candidate, polished)
+    unsafe_hits = unsafe_hits_for(polished)
+    if unsafe_hits:
+        raise RuntimeError(f"DeepSeek candidate contains unsupported claim terms: {unsafe_hits}")
+
+
+def parse_json_object(content: str) -> dict[str, Any]:
     try:
-        data = json.loads(content)
+        return json.loads(content)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", content, re.S)
         if not match:
             raise
-        data = json.loads(match.group(0))
+        return json.loads(match.group(0))
+
+
+def normalize_polish_payload(data: dict[str, Any]) -> dict[str, Any]:
     required = policy_get("deepseek.required_keys", ["polished_title", "voiceover_text", "douyin_title", "douyin_desc", "tags", "cards"])
     missing = [key for key in required if not data.get(key)]
     if missing:
@@ -92,23 +147,124 @@ def parse_deepseek_payload(content: str) -> dict[str, Any]:
     return data
 
 
-def deepseek_chat(api_key: str, model: str, candidate: dict[str, Any], content_plan: dict[str, Any], timeout: float, temperature: float = 0.4, video_seconds: int = 12) -> dict[str, Any]:
+def parse_deepseek_payload(content: str) -> dict[str, Any]:
+    return normalize_polish_payload(parse_json_object(content))
+
+
+def parse_deepseek_variants(content: str, expected_count: int) -> list[dict[str, Any]]:
+    data = parse_json_object(content)
+    variants = data.get("variants")
+    if not isinstance(variants, list) or len(variants) != expected_count:
+        raise RuntimeError(f"DeepSeek response must include exactly {expected_count} variants")
+    clean: list[dict[str, Any]] = []
+    for index, variant in enumerate(variants, start=1):
+        if not isinstance(variant, dict):
+            raise RuntimeError(f"DeepSeek variant {index} is not an object")
+        clean.append(normalize_polish_payload(variant))
+    return clean
+
+
+def deepseek_constraints(video_seconds: int, *, variant_count: int = 1) -> list[str]:
     chars_per_second = int(policy_get("deepseek.chars_per_second", 7))
     lo = max(60, video_seconds * chars_per_second - 30)
     hi = video_seconds * chars_per_second + 20
     voiceover_chars_range = f"{lo}-{hi} Chinese characters"
-    system = policy_get("deepseek.system", "Return strict JSON only.")
     constraints = [
         policy_format(item, voiceover_chars_range=voiceover_chars_range, video_seconds=video_seconds)
         for item in policy_get("deepseek.constraints", [])
     ]
+    if variant_count > 1:
+        constraints = [item for item in constraints if "Return exactly these keys" not in item]
+        constraints.append(
+            f"Return one JSON object with exactly one key `variants`, containing exactly {variant_count} objects."
+        )
+        constraints.append(
+            "Each variants item must contain exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, caveats."
+        )
+    return constraints
+
+
+def request_deepseek(api_key: str, model: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
+    request = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    api_attempts = int(policy_get("deepseek.api_attempts", 2))
+    last_exc: Exception | None = None
+    for attempt in range(api_attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[-1000:]
+            retryable = exc.code in (429, 500, 502, 503, 504) and attempt < api_attempts - 1
+            if retryable:
+                delay = 3.0 * (2 ** attempt)
+                print(f"DeepSeek HTTP {exc.code}, retrying in {delay:.0f}s (attempt {attempt + 1}/{api_attempts})...", file=sys.stderr)
+                time.sleep(delay)
+                last_exc = RuntimeError(f"DeepSeek HTTP {exc.code}: {detail}")
+                continue
+            raise RuntimeError(f"DeepSeek HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt < api_attempts - 1:
+                delay = 3.0 * (2 ** attempt)
+                print(f"DeepSeek network error, retrying in {delay:.0f}s (attempt {attempt + 1}/{api_attempts})...", file=sys.stderr)
+                time.sleep(delay)
+                last_exc = RuntimeError(f"DeepSeek network error: {exc}")
+                continue
+            raise RuntimeError(f"DeepSeek network error: {exc}") from exc
+    raise last_exc or RuntimeError("DeepSeek call exhausted retries")
+
+
+def response_message_content(payload: dict[str, Any]) -> str:
+    choice = (payload.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        finish_reason = choice.get("finish_reason")
+        message_keys = sorted(str(key) for key in message.keys())
+        raise RuntimeError(f"DeepSeek returned empty message content; finish_reason={finish_reason}; message_keys={message_keys}")
+    return content.strip()
+
+
+def deepseek_body(
+    model: str,
+    candidate: dict[str, Any],
+    content_plan: dict[str, Any],
+    *,
+    temperature: float,
+    video_seconds: int,
+    variant_count: int = 1,
+) -> dict[str, Any]:
+    system = policy_get("deepseek.system", "Return strict JSON only.")
     user = {
-        "task": "Polish one short-form video package for Douyin and Remotion.",
-        "constraints": constraints,
+        "task": (
+            f"Polish {variant_count} distinct short-form video packages for Douyin and Remotion."
+            if variant_count > 1
+            else "Polish one short-form video package for Douyin and Remotion."
+        ),
+        "constraints": deepseek_constraints(video_seconds, variant_count=variant_count),
         "forbidden_claim_terms": unsupported_terms(),
+        "required_entity_terms": candidate_entity_terms(candidate),
         "selected_candidate": candidate,
         "content_plan": content_plan,
     }
+    if variant_count > 1:
+        user["output_schema"] = {
+            "variants": [
+                {
+                    "polished_title": "string",
+                    "voiceover_text": "string",
+                    "douyin_title": "string",
+                    "douyin_desc": "string",
+                    "tags": ["string"],
+                    "cards": [{"label": "string", "value": "string", "detail": "string"}],
+                    "caveats": ["string"],
+                }
+            ]
+        }
     body = {
         "model": model,
         "messages": [
@@ -116,43 +272,97 @@ def deepseek_chat(api_key: str, model: str, candidate: dict[str, Any], content_p
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
         ],
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
+        "max_tokens": int(policy_get("deepseek.max_tokens", 1800)),
     }
-    request = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    last_exc: Exception | None = None
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            break
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[-1000:]
-            if exc.code in (429, 500, 502, 503, 504) and attempt < 3:
-                delay = 3.0 * (2 ** attempt)
-                print(f"DeepSeek HTTP {exc.code}, retrying in {delay:.0f}s (attempt {attempt+1}/3)...", file=sys.stderr)
-                time.sleep(delay)
-                last_exc = RuntimeError(f"DeepSeek HTTP {exc.code}: {detail}")
-                continue
-            raise RuntimeError(f"DeepSeek HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            if attempt < 3:
-                delay = 3.0 * (2 ** attempt)
-                print(f"DeepSeek network error, retrying in {delay:.0f}s (attempt {attempt+1}/3)...", file=sys.stderr)
-                time.sleep(delay)
-                last_exc = RuntimeError(f"DeepSeek network error: {exc}")
-                continue
-            raise RuntimeError(f"DeepSeek network error: {exc}") from exc
-    else:
-        raise last_exc or RuntimeError("DeepSeek call exhausted retries")
-    content = payload["choices"][0]["message"]["content"]
+    thinking_type = str(policy_get("deepseek.thinking_type", "") or "").strip()
+    if thinking_type:
+        body["thinking"] = {"type": thinking_type}
+    if variant_count == 1:
+        body["response_format"] = {"type": "json_object"}
+    return body
+
+
+def deepseek_chat(api_key: str, model: str, candidate: dict[str, Any], content_plan: dict[str, Any], timeout: float, temperature: float = 0.4, video_seconds: int = 12) -> dict[str, Any]:
+    body = deepseek_body(model, candidate, content_plan, temperature=temperature, video_seconds=video_seconds)
+    payload = request_deepseek(api_key, model, body, timeout)
+    content = response_message_content(payload)
     parsed = parse_deepseek_payload(content)
-    parsed["_raw_usage"] = payload.get("usage")
-    return parsed
+    try:
+        validate_polish(candidate, parsed)
+        parsed["_raw_usage"] = payload.get("usage")
+        parsed["_correction_applied"] = False
+        return parsed
+    except RuntimeError as exc:
+        corrected = correct_deepseek_polish(
+            api_key,
+            model,
+            candidate,
+            content_plan,
+            parsed,
+            str(exc),
+            timeout,
+            video_seconds=video_seconds,
+        )
+        validate_polish(candidate, corrected)
+        corrected["_correction_applied"] = True
+        corrected["_initial_error"] = str(exc)
+        return corrected
+
+
+def correct_deepseek_polish(
+    api_key: str,
+    model: str,
+    candidate: dict[str, Any],
+    content_plan: dict[str, Any],
+    rejected: dict[str, Any],
+    validation_error: str,
+    timeout: float,
+    video_seconds: int = 12,
+) -> dict[str, Any]:
+    body = deepseek_body(model, candidate, content_plan, temperature=0.1, video_seconds=video_seconds)
+    user = json.loads(body["messages"][1]["content"])
+    user["task"] = "Correct the rejected short-form video JSON so it passes the validation error exactly."
+    user["validation_error"] = validation_error
+    user["rejected_json"] = rejected
+    user["correction_rules"] = [
+        "Return a complete replacement JSON object with the required keys only.",
+        "Remove every forbidden claim term named in validation_error.",
+        "Keep the selected candidate boundary and required_entity_terms reference.",
+    ]
+    body["messages"][1]["content"] = json.dumps(user, ensure_ascii=False)
+    payload = request_deepseek(api_key, model, body, timeout)
+    content = response_message_content(payload)
+    corrected = parse_deepseek_payload(content)
+    corrected["_raw_usage"] = payload.get("usage")
+    return corrected
+
+
+def deepseek_variant_chat(api_key: str, model: str, candidate: dict[str, Any], content_plan: dict[str, Any], timeout: float, video_seconds: int = 12) -> list[dict[str, Any]]:
+    variant_count = int(policy_get("deepseek.variant_count", 3))
+    body = deepseek_body(
+        model,
+        candidate,
+        content_plan,
+        temperature=float(policy_get("deepseek.variant_temperature", 0.5)),
+        video_seconds=video_seconds,
+        variant_count=variant_count,
+    )
+    payload = request_deepseek(api_key, model, body, timeout)
+    content = response_message_content(payload)
+    parsed_variants = parse_deepseek_variants(content, variant_count)
+    valid: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for index, parsed in enumerate(parsed_variants, start=1):
+        try:
+            validate_polish(candidate, parsed)
+        except RuntimeError as exc:
+            rejected.append(f"variant {index}: {exc}")
+            continue
+        parsed["_raw_usage"] = payload.get("usage")
+        valid.append(parsed)
+    if not valid:
+        raise RuntimeError("DeepSeek returned no valid variants: " + "; ".join(rejected))
+    return valid
 
 
 def _score_polish(polished: dict[str, Any]) -> float:
@@ -176,16 +386,9 @@ def _score_polish(polished: dict[str, Any]) -> float:
 
 
 def _multi_candidate_polish(api_key: str, model: str, candidate: dict[str, Any], content_plan: dict[str, Any], timeout: float, video_seconds: int = 12) -> dict[str, Any]:
-    """Generate 3 variants at different temperatures and pick the highest-scoring one."""
-    temperatures = policy_get("deepseek.temperatures", [0.3, 0.5, 0.7])
-    variants: list[tuple[float, dict[str, Any]]] = []
-    for temp in temperatures:
-        try:
-            polished = deepseek_chat(api_key, model, candidate, content_plan, timeout, temperature=temp, video_seconds=video_seconds)
-            score = _score_polish(polished)
-            variants.append((score, polished))
-        except RuntimeError:
-            continue
+    """Ask the provider for multiple variants in one structured response and pick the highest-scoring valid one."""
+    polished_variants = deepseek_variant_chat(api_key, model, candidate, content_plan, timeout, video_seconds=video_seconds)
+    variants: list[tuple[float, dict[str, Any]]] = [(_score_polish(polished), polished) for polished in polished_variants]
     if not variants:
         raise RuntimeError("All multi-candidate polish attempts failed")
     variants.sort(key=lambda x: x[0], reverse=True)
@@ -222,16 +425,7 @@ def main() -> int:
         polished = _multi_candidate_polish(api_key, model, candidate, content_plan, args.timeout, video_seconds=video_seconds)
     else:
         polished = deepseek_chat(api_key, model, candidate, content_plan, args.timeout, video_seconds=video_seconds)
-    rendered_text = " ".join(
-        [
-            str(polished.get("polished_title") or ""),
-            str(polished.get("voiceover_text") or ""),
-            str(polished.get("douyin_title") or ""),
-            str(polished.get("douyin_desc") or ""),
-            json.dumps(polished.get("cards") or [], ensure_ascii=False),
-        ]
-    )
-    unsafe_hits = sorted(set(match.group(0) for match in UNSAFE_RE.finditer(rendered_text)))
+    unsafe_hits = unsafe_hits_for(polished)
     result = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -247,6 +441,8 @@ def main() -> int:
         "cards": polished["cards"],
         "caveats": polished.get("caveats") or [],
         "unsafe_claim_hits": unsafe_hits,
+        "correction_applied": bool(polished.get("_correction_applied")),
+        "initial_error": polished.get("_initial_error"),
         "usage": polished.get("_raw_usage"),
         "input_files": [str(candidate_path), str(plan_path)],
     }
