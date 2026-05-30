@@ -15,6 +15,7 @@
     "dev": "remotion studio",
     "render": "remotion render SearchpoRadar out/searchpo-radar.mp4 --codec=h264 --pixel-format=yuv420p",
     "render:run": "bash scripts/remotion_render.sh local",
+    "render:cover": "bash scripts/remotion_render.sh cover",
     "build": "remotion bundle src/index.ts",
     "ci:static": "bash scripts/validate_static.sh",
     "lambda:check": "bash scripts/lambda_render.sh check",

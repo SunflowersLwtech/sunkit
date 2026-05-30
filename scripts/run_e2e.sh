@@ -91,6 +91,21 @@ python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --artifact rendered_video="$ROOT/$RENDERED_VIDEO" \
   --gate remotion_rendered:pass:"Rendered MP4 exists"
 
+# Render the Douyin cover still. Non-fatal: a missing cover warns, never blocks the publish gate.
+COVER_OUTPUT="out/searchpo-cover.jpg"
+if SEARCHPO_RUN_DIR="$RUN_DIR" bash scripts/remotion_render.sh cover; then
+  COVER_STATUS="pass"
+else
+  COVER_STATUS="warn"
+  echo "Cover render failed; continuing without a cover." >&2
+fi
+python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
+  --name remotion_cover \
+  --title "Render Douyin cover still" \
+  --owner claude_impl_agent \
+  --artifact rendered_cover="$ROOT/$COVER_OUTPUT" \
+  --gate "cover_rendered:${COVER_STATUS}:Cover still rendered for Douyin"
+
 if [[ "$SEARCHPO_AGENT_MODE" == "provider" ]]; then
   python3 scripts/gemini_visual_audit.py "$RUN_DIR" --video "$RENDERED_VIDEO"
   python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \

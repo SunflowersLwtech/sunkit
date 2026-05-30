@@ -27,6 +27,20 @@
     },
     "audioSrc": {"type": ["string", "null"]},
     "voiceoverText": {"type": ["string", "null"]},
+    "captions": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["text", "startFrame", "endFrame"],
+        "properties": {
+          "text": {"type": "string"},
+          "startFrame": {"type": "number"},
+          "endFrame": {"type": "number"}
+        }
+      }
+    },
+    "durationInFrames": {"type": "number", "minimum": 1},
+    "fps": {"type": "number", "minimum": 1},
     "cta": {"type": "string"},
     "footer": {"type": "string"}
   }

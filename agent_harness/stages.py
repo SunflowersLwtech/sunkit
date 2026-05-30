@@ -13,6 +13,12 @@ from agent_harness.core import Artifact, Gate, HarnessContext, StageResult, utc_
 from agent_harness.policy import content_profile, policy_format, policy_get, unsupported_terms
 from agent_harness.subjects import ensure_subject_pool, is_operator_topic
 
+# scripts/ holds the publishing/normalization helpers shared with the CLIs.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from douyin_tags import build_tag_bundle, extract_inline_hashtags  # noqa: E402
+
 
 PROVIDER_ENV_CONTRACT = {
     "openai": "OPENAI_API_KEY",
@@ -202,6 +208,7 @@ def build_video_payload(
     candidate: dict[str, Any],
     polish: dict[str, Any] | None = None,
     voiceover_manifest: dict[str, Any] | None = None,
+    captions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     operator_topic = is_operator_topic(candidate)
     profile = content_profile(candidate)
@@ -241,6 +248,15 @@ def build_video_payload(
         for card in profile.get("cards", [])
     ]
     cards = (polish or {}).get("cards") or fallback_cards
+    # Video length follows the real audio (set by gemini_tts) so captions and
+    # scenes stay in sync; falls back to the configured default for no-audio runs.
+    fps = int((voiceover_manifest or {}).get("fps") or os.environ.get("SEARCHPO_VIDEO_FPS") or 30)
+    audio_frames = (voiceover_manifest or {}).get("audio_frames")
+    if audio_frames:
+        tail = int(os.environ.get("SEARCHPO_VIDEO_TAIL_FRAMES") or round(fps * 0.4))
+        duration_frames = int(audio_frames) + tail
+    else:
+        duration_frames = int(os.environ.get("SEARCHPO_DURATION_FRAMES") or 360)
     return {
         "badge": profile.get("badge", "指定主题分析" if operator_topic else "今日 AI 工具热点"),
         "title": sanitize_post(title, 80),
@@ -252,6 +268,9 @@ def build_video_payload(
         "cards": cards,
         "audioSrc": "voiceover.wav" if voiceover_manifest else None,
         "voiceoverText": (voiceover_manifest or {}).get("voiceover_text") or (polish or {}).get("voiceover_text"),
+        "captions": captions or None,
+        "durationInFrames": duration_frames,
+        "fps": fps,
         "cta": profile.get("cta", ""),
         "footer": profile.get("footer", ""),
     }
@@ -304,11 +323,17 @@ def build_content_plan(candidate: dict[str, Any]) -> dict[str, Any]:
 def write_post_artifacts(root_dir: Path, run_dir: Path, candidate: dict[str, Any], douyin_copy: dict[str, Any]) -> Path:
     post_dir = run_dir / "post"
     post_dir.mkdir(parents=True, exist_ok=True)
-    tags = douyin_copy["tags"]
-    tags_csv = ",".join(tags)
     title = douyin_copy["title"]
-    desc = douyin_copy["desc"]
+    # Enforce Douyin's hashtag limit holistically: catch any #topics the model
+    # embedded in the description, merge them with the tags list, then sanitize,
+    # de-duplicate and cap (default 5). The previous pipeline shipped raw tags.
+    inline_tags, desc = extract_inline_hashtags(douyin_copy["desc"])
+    tag_bundle = build_tag_bundle(list(douyin_copy.get("tags") or []) + inline_tags, desc=desc)
+    tags = tag_bundle["tags"]
+    tags_csv = ",".join(tags)
+    hashtags_str = tag_bundle["hashtag_string"]
     expected_video_path = root_dir / "out" / "searchpo-radar.mp4"
+    cover_path = root_dir / "out" / "searchpo-cover.jpg"
     posting_policy = content_profile(candidate).get("posting", {})
     subject_label = posting_policy.get("subject_label", "Candidate")
     claim_source = posting_policy.get("claim_source", "candidate_shortlist.json")
@@ -369,16 +394,21 @@ The command above is documentation only. The default E2E path does not run a liv
     write_json(
         post_dir / "douyin_upload_manifest.json",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_at": utc_now(),
             "platform": "douyin",
             "adapter": "dreammis/social-auto-upload",
             "cli": "sau douyin upload-video",
             "account_env": ["DOUYIN_ACCOUNT_NAME", "SOCIAL_UPLOAD_ACCOUNT_NAME"],
             "expected_video_path": str(expected_video_path),
+            "cover_path": str(cover_path),
             "title": title,
             "desc": desc,
             "tags": tags,
+            "tags_raw": tag_bundle["tags_raw"],
+            "hashtag_string": hashtags_str,
+            "max_tags": tag_bundle["max_tags"],
+            "caption_preview": tag_bundle["caption"],
             "live_upload_default": False,
             "live_upload_gate": "SEARCHPO_DOUYIN_LIVE=1",
             "contract_path": "runtime/social-auto-upload/skills/douyin-upload/references/cli-contract.md",
@@ -419,7 +449,15 @@ The command above is documentation only. The default E2E path does not run a liv
             "unknown_or_unsafe": policy_get("claims.unknown_or_unsafe", []),
         },
     )
-    write_json(post_dir / "images_manifest.json", {"schema_version": 1, "created_at": utc_now(), "images": []})
+    write_json(
+        post_dir / "images_manifest.json",
+        {
+            "schema_version": 2,
+            "created_at": utc_now(),
+            "cover": {"role": "cover", "path": str(cover_path), "exists": cover_path.is_file()},
+            "images": [{"role": "cover", "path": str(cover_path)}],
+        },
+    )
     (post_dir / "cross_check_review.md").write_text(
         "# Cross-Check Review\n\nstatus: pass\n\nContract-check only. Live Douyin upload still requires manual review and explicit approval.\n",
         encoding="utf-8",
@@ -597,6 +635,40 @@ class GeminiTTSStage:
 
 
 @dataclass(frozen=True)
+class BuildCaptionsStage:
+    name: str = "build_captions"
+    title: str = "Build audio-synced caption timing"
+    owner: str = "claude_impl_agent"
+
+    def run(self, context: HarnessContext) -> StageResult:
+        script_result = run_repo_script(context, ["scripts/build_captions.py", str(context.run_dir)], timeout=60)
+        path = context.run_dir / "captions.json"
+        segment_count = 0
+        if path.exists():
+            data = read_json(path)
+            segments = data.get("segments") or []
+            segment_count = data.get("segment_count") or len(segments)
+            context.state["captions"] = [
+                {"text": s["text"], "startFrame": s["start_frame"], "endFrame": s["end_frame"]}
+                for s in segments
+            ]
+        return StageResult(
+            step="act",
+            status="completed",
+            details=f"Built {segment_count} caption segments locked to the voiceover length.",
+            artifacts=[Artifact("captions", path, {"segment_count": segment_count})] if path.exists() else [],
+            gates=[
+                Gate(
+                    "captions_built",
+                    "pass" if segment_count else "warn",
+                    f"{segment_count} caption segments timed to the real audio",
+                )
+            ],
+            metadata=script_result,
+        )
+
+
+@dataclass(frozen=True)
 class ContentScoringStage:
     name: str = "content_scoring"
     title: str = "Score content quality via Gemini"
@@ -632,10 +704,20 @@ class RenderPayloadStage:
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
+        captions = context.state.get("captions")
+        if captions is None:
+            captions_path = context.run_dir / "captions.json"
+            if captions_path.exists():
+                segments = read_json(captions_path).get("segments") or []
+                captions = [
+                    {"text": s["text"], "startFrame": s["start_frame"], "endFrame": s["end_frame"]}
+                    for s in segments
+                ]
         payload = build_video_payload(
             candidate,
             context.state.get("deepseek_polish"),
             context.state.get("voiceover_manifest"),
+            captions,
         )
         path = context.run_dir / "render_payload.json"
         write_json(path, payload)
@@ -776,6 +858,6 @@ def default_stages(include_providers: bool = False) -> list[Any]:
         PlanContentStage(include_providers=include_providers),
     ]
     if include_providers:
-        stages.extend([DeepSeekPolishStage(), ContentScoringStage(), GeminiTTSStage()])
+        stages.extend([DeepSeekPolishStage(), ContentScoringStage(), GeminiTTSStage(), BuildCaptionsStage()])
     stages.extend([RenderPayloadStage(), PublishPackageStage(), DeterministicReviewStage()])
     return stages
