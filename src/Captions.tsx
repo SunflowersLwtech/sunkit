@@ -1,56 +1,76 @@
 import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 
-type CaptionsProps = {
+export type CaptionSegment = {
   text: string;
-  startFrame?: number;
-  durationFrames?: number;
+  startFrame: number;
+  endFrame: number;
 };
 
-const CHARS_PER_GROUP = 8;
+type CaptionsProps = {
+  // Frame-accurate segments produced by scripts/build_captions.py from the real
+  // audio length. When present these are rendered verbatim (the correct path).
+  segments?: CaptionSegment[];
+  // Degraded fallback when timing is unavailable (e.g. no audio): even split.
+  text?: string;
+  startFrame?: number;
+};
 
-export const Captions: React.FC<CaptionsProps> = ({text, startFrame = 20, durationFrames}) => {
-  const frame = useCurrentFrame();
-  const {durationInFrames, fps} = useVideoConfig();
-  const totalDuration = durationFrames || durationInFrames - startFrame - 30;
-  const relativeFrame = frame - startFrame;
+const FALLBACK_CHARS_PER_GROUP = 9;
 
-  if (relativeFrame < 0 || !text) return null;
-
+// Build evenly-spaced segments only when real timing is missing. This keeps a
+// readable caption in contract/no-audio runs without pretending to be in sync.
+const fallbackSegments = (text: string, startFrame: number, total: number): CaptionSegment[] => {
   const groups: string[] = [];
-  for (let i = 0; i < text.length; i += CHARS_PER_GROUP) {
-    groups.push(text.slice(i, i + CHARS_PER_GROUP));
+  for (let i = 0; i < text.length; i += FALLBACK_CHARS_PER_GROUP) {
+    groups.push(text.slice(i, i + FALLBACK_CHARS_PER_GROUP));
   }
+  if (groups.length === 0) return [];
+  const span = Math.max(groups.length, total - startFrame);
+  const per = span / groups.length;
+  return groups.map((g, i) => ({
+    text: g,
+    startFrame: Math.round(startFrame + i * per),
+    endFrame: Math.round(startFrame + (i + 1) * per),
+  }));
+};
 
-  const framesPerGroup = totalDuration / groups.length;
-  const currentGroupIndex = Math.min(
-    Math.floor(relativeFrame / framesPerGroup),
-    groups.length - 1,
-  );
+export const Captions: React.FC<CaptionsProps> = ({segments, text, startFrame = 8}) => {
+  const frame = useCurrentFrame();
+  const {durationInFrames} = useVideoConfig();
 
-  const windowStart = Math.max(0, currentGroupIndex - 1);
-  const windowEnd = Math.min(groups.length, currentGroupIndex + 3);
-  const visibleGroups = groups.slice(windowStart, windowEnd);
+  const active: CaptionSegment[] =
+    segments && segments.length > 0
+      ? segments
+      : text
+      ? fallbackSegments(text, startFrame, durationInFrames - 24)
+      : [];
+
+  if (active.length === 0) return null;
+
+  const current = active.find((s) => frame >= s.startFrame && frame < s.endFrame);
+  if (!current) return null;
+
+  const span = Math.max(1, current.endFrame - current.startFrame);
+  const progress = Math.min(1, Math.max(0, (frame - current.startFrame) / span));
+  // Karaoke fill: characters light up as the segment plays, communicating sync.
+  const chars = Array.from(current.text);
+  const litUpTo = progress * chars.length;
+  const enter = interpolate(frame - current.startFrame, [0, 6], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
-    <div className="captions-container">
-      <div className="captions-track">
-        {visibleGroups.map((group, i) => {
-          const globalIndex = windowStart + i;
-          const isActive = globalIndex === currentGroupIndex;
-          const groupProgress = (relativeFrame - globalIndex * framesPerGroup) / framesPerGroup;
-          const opacity = isActive ? 1 : interpolate(
-            Math.abs(globalIndex - currentGroupIndex),
-            [0, 1, 2],
-            [1, 0.5, 0.25],
-          );
-
+    <div className="captions-container" style={{opacity: enter}}>
+      <div
+        className="captions-track"
+        style={{transform: `translateY(${interpolate(enter, [0, 1], [12, 0])}px)`}}
+      >
+        {chars.map((ch, i) => {
+          const lit = i < litUpTo;
           return (
-            <span
-              key={globalIndex}
-              className={`caption-word${isActive ? ' caption-active' : ''}`}
-              style={{opacity}}
-            >
-              {group}
+            <span key={i} className={`caption-char${lit ? ' caption-lit' : ''}`}>
+              {ch === ' ' ? ' ' : ch}
             </span>
           );
         })}

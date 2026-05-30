@@ -21,8 +21,18 @@ if str(ROOT / "scripts") not in sys.path:
 
 from env_utils import first_env, env_value
 from gemini_api import default_gemini_mode, generate_content_url
+from build_captions import probe_audio_seconds
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+
+# Gemini TTS can be steered with a natural-language delivery directive prepended
+# to the content (it reads this as a style cue, not as spoken text). The old
+# pipeline sent bare text, so the strongest TTS model spoke flat and lifeless.
+DEFAULT_TTS_STYLE = (
+    "用兴奋、有感染力的中文科技博主口吻朗读，像在跟朋友分享一个刚发现的好东西："
+    "语气热情自信、节奏明快，在关键名词和数字上自然加重，句末带一点上扬的好奇感，不要机械平淡"
+)
+DEFAULT_FPS = 30
 
 
 def utc_now() -> str:
@@ -82,10 +92,19 @@ def write_audio(path: Path, audio_bytes: bytes, mime_type: str) -> str:
     return mime_type
 
 
-def generate_tts(api_key: str, model: str, voice: str, text: str, timeout: float, env_file: Path) -> tuple[bytes, str, dict[str, Any]]:
+def build_tts_prompt(text: str, style: str) -> str:
+    """Prepend the delivery directive so the voice carries emotion."""
+    style = (style or "").strip()
+    if not style:
+        return text
+    return f"{style}：\n{text}"
+
+
+def generate_tts(api_key: str, model: str, voice: str, text: str, timeout: float, env_file: Path, style: str = "") -> tuple[bytes, str, dict[str, Any]]:
     url = generate_content_url(model, api_key, env_file)
+    prompt_text = build_tts_prompt(text, style)
     body = {
-        "contents": [{"role": "user", "parts": [{"text": text}]}],
+        "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": {
@@ -146,6 +165,11 @@ def main() -> int:
         raise SystemExit("GOOGLE_API_KEY or GOOGLE_AGENT_PLATFORM_API is required for scripts/gemini_tts.py")
     model = env_value("SEARCHPO_GEMINI_TTS_MODEL", env_file, "gemini-3.1-flash-tts-preview")
     voice = env_value("SEARCHPO_GEMINI_TTS_VOICE", env_file, "Kore")
+    style = env_value("SEARCHPO_GEMINI_TTS_STYLE", env_file, DEFAULT_TTS_STYLE)
+    try:
+        fps = int(env_value("SEARCHPO_VIDEO_FPS", env_file, str(DEFAULT_FPS)))
+    except ValueError:
+        fps = DEFAULT_FPS
     polish_path = run_dir / "deepseek_polish.json"
     if not polish_path.exists():
         raise SystemExit(f"DeepSeek polish artifact missing: {polish_path}")
@@ -154,23 +178,31 @@ def main() -> int:
     if not text:
         raise SystemExit("deepseek_polish.json has no voiceover_text")
 
-    audio_bytes, source_mime_type, response_meta = generate_tts(api_key, model, voice, text, args.timeout, env_file)
+    audio_bytes, source_mime_type, response_meta = generate_tts(api_key, model, voice, text, args.timeout, env_file, style=style)
     audio_path = run_dir / "voiceover.wav"
     output_mime_type = write_audio(audio_path, audio_bytes, source_mime_type)
     import subprocess as _sp
     _sp.run(["bash", str(ROOT / "scripts" / "normalize_audio.sh"), str(audio_path)],
             cwd=str(ROOT), capture_output=True, timeout=30)
+    # Probe the real (normalized) audio length so captions and video duration can
+    # be locked to it instead of a hard-coded frame count.
+    audio_duration_sec = probe_audio_seconds(audio_path)
+    audio_frames = round(audio_duration_sec * fps) if audio_duration_sec else None
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now(),
         "provider": "gemini",
         "model": model,
         "api_mode": default_gemini_mode(env_file),
         "voice": voice,
+        "tts_style": style,
         "status": "pass",
         "source_mime_type": source_mime_type,
         "output_mime_type": output_mime_type,
         "audio_path": str(audio_path),
+        "audio_duration_sec": audio_duration_sec,
+        "audio_frames": audio_frames,
+        "fps": fps,
         "voiceover_text": text,
         "response_meta": response_meta,
     }

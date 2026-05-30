@@ -193,6 +193,12 @@ if manifest_path.is_file():
         if not manifest.get(key):
             errors.append(f"douyin_upload_manifest.json missing `{key}`")
 
+# Cover is recommended but never blocks publishing (warning only).
+cover_path_value = (manifest.get("cover_path") if manifest else "") or str(root / "out" / "searchpo-cover.jpg")
+cover_present = Path(cover_path_value).is_file()
+if not cover_present:
+    warnings.append(f"Douyin cover image missing (upload will use the platform default): {cover_path_value}")
+
 cli_help: dict[str, Any] | None = None
 if check_level == "adapter" and cli_path.is_file():
     cli_help = run_sau(["douyin", "--help"])
@@ -236,6 +242,8 @@ result = {
     "check_level": check_level,
     "run_dir": str(run_dir),
     "rendered_video_path": str(video_path),
+    "cover_path": cover_path_value,
+    "cover_present": cover_present,
     "social_auto_upload_root": str(social_root),
     "social_auto_upload_python": social_python,
     "social_auto_upload_cli": social_cli,

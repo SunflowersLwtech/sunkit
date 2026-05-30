@@ -26,8 +26,14 @@ case "$ACTION" in
       --crf="$CRF" \
       --audio-bitrate="$AUDIO_BITRATE"
     ;;
+  cover)
+    COVER_OUT="${SEARCHPO_COVER_OUTPUT:-out/searchpo-cover.jpg}"
+    npx remotion still SearchpoCover "$COVER_OUT" \
+      --props "$PROPS_FILE" \
+      --image-format=jpeg
+    ;;
   *)
-    echo "Usage: $0 [local]" >&2
+    echo "Usage: $0 [local|cover]" >&2
     exit 2
     ;;
 esac
