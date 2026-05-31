@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo AnalyticsFeedback",
+  "type": "object",
+  "required": ["schema_version", "status", "required"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "analytics_feedback"},
+    "selected_candidate_id": {"type": ["string", "null"]},
+    "status": {"type": "string"},
+    "required": {"type": "boolean"},
+    "metrics": {"type": "object"},
+    "notes": {"type": "string"}
+  }
+}

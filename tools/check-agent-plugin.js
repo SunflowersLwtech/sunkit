@@ -5,12 +5,10 @@ import {fileURLToPath} from 'node:url';
 
 const toolDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(toolDir, '..');
-const pluginPath = path.join(repoRoot, 'openclaw.plugin.json');
-const packagePath = path.join(repoRoot, 'package.json');
 const bridgeMapPath = path.join(toolDir, 'skill-bridge-map.json');
 
 function fail(message) {
-  console.error(`agent plugin check: ${message}`);
+  console.error(`agent bridge check: ${message}`);
   process.exit(1);
 }
 
@@ -30,6 +28,14 @@ function escapeRegex(input) {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function normalizePath(input) {
+  return input.replace(/^\.?\//, '').replace(/\/$/, '');
+}
+
+function sourcePath(root, ...segments) {
+  return path.join(repoRoot, normalizePath(root), ...segments);
+}
+
 function frontmatterFor(text, filePath) {
   const match = /^---\n([\s\S]*?)\n---/.exec(text);
   if (!match) {
@@ -45,12 +51,32 @@ function assertFrontmatterField(frontmatter, filePath, field) {
   }
 }
 
-function normalizeSkillPath(skillPath) {
-  return skillPath.replace(/^\.?\//, '').replace(/\/$/, '');
+function assertFrontmatterName(frontmatter, filePath, name) {
+  const pattern = new RegExp(`(^|\\n)name:\\s*${escapeRegex(name)}\\s*(\\n|$)`);
+  if (!pattern.test(frontmatter)) {
+    fail(`Frontmatter name does not match ${name}: ${path.relative(repoRoot, filePath)}`);
+  }
 }
 
-function skillNameFromPath(skillPath) {
-  return path.basename(normalizeSkillPath(skillPath));
+function assertUniqueNames(label, entries) {
+  const names = entries.map((entry) => entry.name);
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const name of names) {
+    if (seen.has(name)) {
+      duplicates.add(name);
+    }
+    seen.add(name);
+  }
+  if (duplicates.size) {
+    fail(`${label} contains duplicate names: ${[...duplicates].join(', ')}`);
+  }
+}
+
+function assertValidEntryName(label, entry) {
+  if (!entry.name || !/^[a-z0-9][a-z0-9-]*$/.test(entry.name)) {
+    fail(`Invalid ${label} name: ${entry.name ?? '<missing>'}`);
+  }
 }
 
 function assertSameSet(label, actual, expected) {
@@ -63,57 +89,159 @@ function assertSameSet(label, actual, expected) {
   }
 }
 
-const plugin = readJson(pluginPath);
-const pkg = readJson(packagePath);
-const bridgeMap = readJson(bridgeMapPath);
-
-if (plugin.name !== pkg.name) {
-  fail(`Plugin name ${plugin.name} does not match package name ${pkg.name}`);
-}
-if (plugin.version !== pkg.version) {
-  fail(`Plugin version ${plugin.version} does not match package version ${pkg.version}`);
-}
-if (plugin.family !== 'bundle-plugin') {
-  fail('openclaw.plugin.json family must be bundle-plugin');
-}
-if (!Array.isArray(plugin.skills) || plugin.skills.length === 0) {
-  fail('openclaw.plugin.json must list at least one skill');
-}
-if (!Array.isArray(plugin.shared_deps)) {
-  fail('openclaw.plugin.json must include shared_deps');
-}
-
-const pluginSkillNames = plugin.skills.map(skillNameFromPath);
-const bridgeSkillNames = (bridgeMap.skills ?? []).map((entry) => entry.name);
-assertSameSet('plugin skills vs bridge map skills', pluginSkillNames, bridgeSkillNames);
-
-const normalizedMapSharedDeps = (bridgeMap.sharedDeps ?? []).map((item) => normalizeSkillPath(path.join('skills', item)));
-const normalizedPluginSharedDeps = plugin.shared_deps.map(normalizeSkillPath);
-assertSameSet('plugin shared_deps vs bridge map sharedDeps', normalizedPluginSharedDeps, normalizedMapSharedDeps);
-
-for (const skillPath of plugin.skills) {
-  const normalized = normalizeSkillPath(skillPath);
-  const absoluteSkillDir = path.join(repoRoot, normalized);
-  const skillFile = path.join(absoluteSkillDir, 'SKILL.md');
+function assertSkill(entry, map) {
+  assertValidEntryName('skill', entry);
+  const skillFile = sourcePath(map.sourceRoot, entry.name, 'SKILL.md');
   if (!fs.existsSync(skillFile)) {
-    fail(`Missing plugin skill file: ${path.relative(repoRoot, skillFile)}`);
+    fail(`Missing source skill file: ${path.relative(repoRoot, skillFile)}`);
   }
-
-  const name = skillNameFromPath(skillPath);
   const frontmatter = frontmatterFor(readText(skillFile), skillFile);
-  if (!new RegExp(`(^|\\n)name:\\s*${escapeRegex(name)}\\s*(\\n|$)`).test(frontmatter)) {
-    fail(`Frontmatter name does not match ${name}: ${path.relative(repoRoot, skillFile)}`);
-  }
+  assertFrontmatterName(frontmatter, skillFile, entry.name);
   for (const field of ['description', 'triggers', 'tools', 'mutating']) {
     assertFrontmatterField(frontmatter, skillFile, field);
   }
 }
 
-for (const sharedDep of plugin.shared_deps) {
-  const absolutePath = path.join(repoRoot, normalizeSkillPath(sharedDep));
-  if (!fs.existsSync(absolutePath)) {
-    fail(`Missing plugin shared dependency: ${path.relative(repoRoot, absolutePath)}`);
+function assertSharedDep(relativePath, map) {
+  const depPath = sourcePath(map.sourceRoot, relativePath);
+  if (!fs.existsSync(depPath)) {
+    fail(`Missing shared dependency: ${path.relative(repoRoot, depPath)}`);
   }
 }
 
-console.log(`agent plugin check passed: ${plugin.skills.length} skills, ${plugin.shared_deps.length} shared deps`);
+function assertCommand(entry, map) {
+  assertValidEntryName('command', entry);
+  const commandRoot = map.commandSourceRoot ?? 'commands';
+  const commandFile = sourcePath(commandRoot, `${entry.name}.md`);
+  if (!fs.existsSync(commandFile)) {
+    fail(`Missing source command file: ${path.relative(repoRoot, commandFile)}`);
+  }
+  const commandText = readText(commandFile);
+  if (!commandText.trim()) {
+    fail(`Empty source command file: ${path.relative(repoRoot, commandFile)}`);
+  }
+  const frontmatter = frontmatterFor(commandText, commandFile);
+  assertFrontmatterField(frontmatter, commandFile, 'description');
+  for (const heading of ['Preflight', 'Verification']) {
+    const pattern = new RegExp(`^#{2,3}\\s+${escapeRegex(heading)}\\s*$`, 'im');
+    if (!pattern.test(commandText)) {
+      fail(`Missing ${heading} section in source command file: ${path.relative(repoRoot, commandFile)}`);
+    }
+  }
+}
+
+function assertAgent(entry, map) {
+  assertValidEntryName('agent', entry);
+  const agentRoot = map.agentSourceRoot ?? 'agents';
+  const agentFile = sourcePath(agentRoot, `${entry.name}.md`);
+  if (!fs.existsSync(agentFile)) {
+    fail(`Missing source agent file: ${path.relative(repoRoot, agentFile)}`);
+  }
+  const text = readText(agentFile);
+  const frontmatter = frontmatterFor(text, agentFile);
+  assertFrontmatterName(frontmatter, agentFile, entry.name);
+  for (const field of ['description', 'tools']) {
+    assertFrontmatterField(frontmatter, agentFile, field);
+  }
+  if (!text.replace(/^---\n[\s\S]*?\n---/, '').trim()) {
+    fail(`Empty source agent body: ${path.relative(repoRoot, agentFile)}`);
+  }
+}
+
+function assertAgentTeam(map) {
+  const entries = map.agents ?? [];
+  const names = entries.map((entry) => entry.name);
+  const team = map.agentTeam;
+  if (!team) {
+    fail('tools/skill-bridge-map.json must include agentTeam');
+  }
+  if (!team.lead) {
+    fail('agentTeam.lead is required');
+  }
+  if (!Array.isArray(team.teammates)) {
+    fail('agentTeam.teammates must be an array');
+  }
+  assertSameSet('agentTeam members vs agents', [team.lead, ...team.teammates], names);
+  if (team.lead !== 'searchpo-main-agent') {
+    fail('agentTeam.lead must be searchpo-main-agent');
+  }
+  if (!team.teammates.includes('searchpo-impl-agent')) {
+    fail('agentTeam.teammates must include searchpo-impl-agent');
+  }
+  if (!team.teammates.includes('searchpo-research-agent')) {
+    fail('agentTeam.teammates must include searchpo-research-agent');
+  }
+  if (team.researchOwnership?.anysearch !== 'searchpo-research-agent') {
+    fail('agentTeam.researchOwnership.anysearch must be searchpo-research-agent');
+  }
+  if (team.researchOwnership?.evidence !== 'searchpo-research-agent') {
+    fail('agentTeam.researchOwnership.evidence must be searchpo-research-agent');
+  }
+  if (team.providerOwnership?.deepseek !== 'searchpo-impl-agent') {
+    fail('agentTeam.providerOwnership.deepseek must be searchpo-impl-agent');
+  }
+}
+
+function assertGeneratedCodexAgent(root, entry, agent) {
+  const destination = sourcePath(root, `${entry.name}.toml`);
+  if (!fs.existsSync(destination)) {
+    return;
+  }
+  const generatedText = readText(destination);
+  if (!new RegExp(`(^|\\n)name\\s*=\\s*"${escapeRegex(entry.name)}"(\\n|$)`).test(generatedText)) {
+    fail(`Generated Codex agent must include name: ${path.relative(repoRoot, destination)}`);
+  }
+  if (!generatedText.includes('developer_instructions = ')) {
+    fail(`Generated Codex agent must include developer_instructions: ${path.relative(repoRoot, destination)}`);
+  }
+  if (!generatedText.includes(agent.description)) {
+    fail(`Generated Codex agent description drifted from source: ${path.relative(repoRoot, destination)}`);
+  }
+}
+
+const bridgeMap = readJson(bridgeMapPath);
+
+if (!Array.isArray(bridgeMap.skills) || bridgeMap.skills.length === 0) {
+  fail('tools/skill-bridge-map.json must list skills');
+}
+if (!Array.isArray(bridgeMap.sharedDeps)) {
+  fail('tools/skill-bridge-map.json must list sharedDeps');
+}
+if (!Array.isArray(bridgeMap.commands)) {
+  fail('tools/skill-bridge-map.json must list commands');
+}
+if (!Array.isArray(bridgeMap.agents) || bridgeMap.agents.length !== 3) {
+  fail('tools/skill-bridge-map.json must list exactly three agents');
+}
+
+assertUniqueNames('skills', bridgeMap.skills);
+assertUniqueNames('commands', bridgeMap.commands);
+assertUniqueNames('agents', bridgeMap.agents);
+
+for (const entry of bridgeMap.skills) {
+  assertSkill(entry, bridgeMap);
+}
+for (const sharedDep of bridgeMap.sharedDeps) {
+  assertSharedDep(sharedDep, bridgeMap);
+}
+for (const entry of bridgeMap.commands) {
+  assertCommand(entry, bridgeMap);
+}
+for (const entry of bridgeMap.agents) {
+  assertAgent(entry, bridgeMap);
+}
+assertAgentTeam(bridgeMap);
+
+for (const entry of bridgeMap.agents) {
+  const agentRoot = bridgeMap.agentSourceRoot ?? 'agents';
+  const agentFile = sourcePath(agentRoot, `${entry.name}.md`);
+  const text = readText(agentFile);
+  const frontmatter = frontmatterFor(text, agentFile);
+  assertGeneratedCodexAgent(bridgeMap.codexProjectAgentRoot ?? '.codex/agents', entry, {
+    description: /^description:\s*(.*)$/m.exec(frontmatter)?.[1]?.trim() ?? '',
+  });
+}
+
+console.log(
+  `agent bridge check passed: ${bridgeMap.skills.length} skills, ${bridgeMap.sharedDeps.length} shared deps, ${bridgeMap.commands.length} commands, ${bridgeMap.agents.length} agents`
+);

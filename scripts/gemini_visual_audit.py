@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import mimetypes
 import re
@@ -40,6 +41,14 @@ def read_json(path: Path) -> Any:
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def latest_run_dir() -> Path:
@@ -109,6 +118,10 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
     polish = read_json(run_dir / "deepseek_polish.json")
     claims_path = run_dir / "post" / "claims_ledger.json"
     claims = read_json(claims_path) if claims_path.exists() else {}
+    evidence_path = run_dir / "evidence_bundle.json"
+    cross_check_path = run_dir / "cross_check_review.json"
+    evidence_bundle = read_json(evidence_path) if evidence_path.exists() else {}
+    cross_check_review = read_json(cross_check_path) if cross_check_path.exists() else {}
     return json.dumps(
         {
             "task": "Audit this rendered vertical searchpo video before Douyin publishing.",
@@ -121,7 +134,14 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
                     "candidate_matches_artifacts": "boolean",
                     "no_unsupported_claims": "boolean",
                     "voiceover_matches_copy": "boolean; true when voiceover and visible copy are consistent, exact wording is not required",
+                    "cover_text_safe": "boolean; true when cover title and metric are fully inside the frame and readable",
+                    "douyin_safe_area": "boolean; true when captions avoid the lower platform UI obstruction area",
+                    "no_internal_terms": "boolean; true when public copy does not expose pipeline terms",
+                    "no_hype_without_evidence": "boolean; true when unverified topics are not framed as industry-changing conclusions",
+                    "speech_pronunciation_safe": "boolean; true when the voiceover does not read raw slashes, URLs, or symbols",
+                    "audio_visual_alignment_safe": "boolean; true when caption/card timing follows the spoken beat",
                     "publish_ready": "boolean",
+                    "content_has_constructive_insight": "boolean; true when the video explains problem, mechanism, tradeoff, and verification path from evidence",
                 },
                 "issues": ["array of concrete issues; empty if pass"],
             },
@@ -131,6 +151,8 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
             "important": policy_get("gemini_visual_audit.important", ""),
             "selected_candidate": selected,
             "render_payload": render_payload,
+            "evidence_bundle": evidence_bundle,
+            "cross_check_review": cross_check_review,
             "deepseek_polish": {
                 "polished_title": polish.get("polished_title"),
                 "voiceover_text": polish.get("voiceover_text"),
@@ -144,12 +166,48 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
     )
 
 
+def classify_audit_result(audit: dict[str, Any], status: str) -> dict[str, Any]:
+    checks = audit.get("checks") if isinstance(audit.get("checks"), dict) else {}
+    failed_checks = [str(key) for key, value in checks.items() if not bool(value)]
+    repairable = set(str(item) for item in policy_get("video_optimization.repairable_checks", []))
+    semantic = set(str(item) for item in policy_get("video_optimization.semantic_checks", []))
+    hard_fail = set(str(item) for item in policy_get("video_optimization.hard_fail_checks", []))
+    issues = [str(item) for item in (audit.get("issues") or []) if str(item).strip()]
+    route = "hard_fail"
+    if status == "pass":
+        route = "none"
+    elif any(check in hard_fail for check in failed_checks):
+        route = "hard_fail"
+    elif any(check in semantic for check in failed_checks):
+        route = "content"
+    elif "cover_text_safe" in failed_checks:
+        route = "cover"
+    elif "douyin_safe_area" in failed_checks or "audio_visual_alignment_safe" in failed_checks:
+        route = "caption"
+    elif any(check in repairable for check in failed_checks):
+        route = "storyboard"
+    hint_map = policy_get("video_optimization.repair_actions", {})
+    hint_value = hint_map.get(route) if isinstance(hint_map, dict) else None
+    if isinstance(hint_value, list):
+        repair_hint = "; ".join(str(item) for item in hint_value if str(item).strip())
+    else:
+        repair_hint = str(hint_value or "")
+    return {
+        "failed_checks": failed_checks,
+        "severity": "none" if status == "pass" else "blocking",
+        "repair_route": route,
+        "repair_hint": repair_hint or "; ".join(issues),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
     parser.add_argument("--video", required=True, help="Rendered MP4 path.")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument("--output", help="Output JSON path. Defaults to run_dir/gemini_visual_audit.json.")
+    parser.add_argument("--prompt-output", help="Prompt artifact path. Defaults to run_dir/gemini_visual_audit_prompt.json.")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
@@ -172,6 +230,18 @@ def main() -> int:
         )
     mime_type = mimetypes.guess_type(video_path.name)[0] or "video/mp4"
     prompt = build_prompt(run_dir, video_path)
+    prompt_path = Path(args.prompt_output).resolve() if args.prompt_output else run_dir / "gemini_visual_audit_prompt.json"
+    write_json(
+        prompt_path,
+        {
+            "schema_version": 1,
+            "created_at": utc_now(),
+            "model": model,
+            "video_path": str(video_path),
+            "video_sha256": sha256_file(video_path),
+            "prompt": prompt,
+        },
+    )
     video_data = base64.b64encode(video_path.read_bytes()).decode("ascii")
     audit = generated_json(
         model,
@@ -186,6 +256,7 @@ def main() -> int:
     verdict = str(audit.get("verdict") or "").lower()
     checks = audit.get("checks") if isinstance(audit.get("checks"), dict) else {}
     status = "pass" if verdict == "pass" and all(bool(value) for value in checks.values()) else "fail"
+    classification = classify_audit_result(audit, status)
     result = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -194,11 +265,17 @@ def main() -> int:
         "api_mode": default_gemini_mode(env_file),
         "status": status,
         "video_path": str(video_path),
+        "video_sha256": sha256_file(video_path),
         "video_size_bytes": video_size,
+        "prompt_artifact": str(prompt_path),
+        "deterministic_visual_audit": str(run_dir / "visual_audit_deterministic.json")
+        if (run_dir / "visual_audit_deterministic.json").exists()
+        else None,
         "audit": audit,
+        **classification,
         "elapsed_reference": time.time(),
     }
-    output_path = run_dir / "gemini_visual_audit.json"
+    output_path = Path(args.output).resolve() if args.output else run_dir / "gemini_visual_audit.json"
     write_json(output_path, result)
     print(json.dumps({"gemini_visual_audit": str(output_path), "status": status}, ensure_ascii=False, indent=2))
     if status != "pass":

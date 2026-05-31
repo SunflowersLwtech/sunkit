@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo VideoSpec",
+  "type": "object",
+  "required": ["schema_version", "id", "title", "fps", "width", "height", "scenes", "assets"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "render"},
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "platform_target": {"type": "string"},
+    "aspect_ratio": {"type": "string"},
+    "width": {"type": "number"},
+    "height": {"type": "number"},
+    "fps": {"type": "number"},
+    "durationInFrames": {"type": "number"},
+    "renderer": {"type": "object"},
+    "storyboard": {"type": "object"},
+    "scenes": {"type": "array", "minItems": 1},
+    "assets": {"type": "array"}
+  }
+}

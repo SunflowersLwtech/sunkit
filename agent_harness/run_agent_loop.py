@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.core import HarnessContext, StageResult, SyncHarness, TaskBoard, utc_now, write_json
+from agent_harness.side_effect_tiers import side_effect_axes
 from agent_harness.stages import PROVIDER_ENV_CONTRACT, default_stages
 from agent_harness.subjects import write_operator_topic_run
 
@@ -35,14 +36,19 @@ def build_agent_state(
     selected_candidate: dict[str, Any],
     mode: str,
 ) -> dict[str, Any]:
+    env_profile = os.environ.get("SEARCHPO_EXECUTION_PROFILE") or os.environ.get("SEARCHPO_E2E_PROFILE")
+    default_profile = "provider" if mode.startswith("searchpo-provider") else "contract"
+    axes = side_effect_axes(env_profile or default_profile)
     return {
         "schema_version": 1,
         "created_at": utc_now(),
         "mode": mode,
+        **axes,
         "run_dir": str(run_dir),
         "board_db": str(board.db_path),
         "root_task_id": root_task_id,
         "main_agent": "claude_main_agent",
+        "research_agent": "searchpo-research-agent",
         "impl_agent": "claude_impl_agent",
         "loop": [
             {"step": result.step, "status": "pass" if result.status == "completed" else result.status, "details": result.details}
@@ -77,6 +83,8 @@ def main() -> int:
         help="Resume from stage index N (0-based). Stages before N are skipped if previously completed.",
     )
     args = parser.parse_args()
+    if not os.environ.get("SEARCHPO_EXECUTION_PROFILE") and not os.environ.get("SEARCHPO_E2E_PROFILE"):
+        os.environ["SEARCHPO_EXECUTION_PROFILE"] = "provider" if args.mode == "provider" else "contract"
 
     if args.topic:
         run_dir = write_operator_topic_run(
@@ -103,16 +111,39 @@ def main() -> int:
             f"searchpo-{args.mode}-script-flow",
         )
         write_json(run_dir / "agent_run.json", agent_state)
+        output = {
+            "run_dir": str(run_dir),
+            "selected_candidate_id": selected_candidate["candidate_id"],
+            "post_dir": str(context.state["post_dir"]),
+            "board_db": str(board.db_path),
+            "agent_run": str(run_dir / "agent_run.json"),
+        }
+        render_payload_path = run_dir / "render_payload.json"
+        if render_payload_path.exists():
+            output["render_payload"] = str(render_payload_path)
+        for key, filename in [
+            ("topic_brief", "topic_brief.json"),
+            ("fact_bank", "fact_bank.json"),
+            ("source_map", "source_map.json"),
+            ("script", "script.json"),
+            ("scene_plan", "scene_plan.json"),
+            ("video_spec", "video_spec.json"),
+            ("delivery_package", "delivery_package.json"),
+            ("analytics_feedback", "analytics_feedback.json"),
+            ("environment_manifest", "environment_manifest.json"),
+        ]:
+            artifact_path = run_dir / filename
+            if artifact_path.exists():
+                output[key] = str(artifact_path)
+        evidence_bundle_path = run_dir / "evidence_bundle.json"
+        cross_check_path = run_dir / "cross_check_review.json"
+        if evidence_bundle_path.exists():
+            output["evidence_bundle"] = str(evidence_bundle_path)
+        if cross_check_path.exists():
+            output["cross_check_review"] = str(cross_check_path)
         print(
             json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "selected_candidate_id": selected_candidate["candidate_id"],
-                    "post_dir": str(context.state["post_dir"]),
-                    "render_payload": str(run_dir / "render_payload.json"),
-                    "board_db": str(board.db_path),
-                    "agent_run": str(run_dir / "agent_run.json"),
-                },
+                output,
                 ensure_ascii=False,
                 indent=2,
             )

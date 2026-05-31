@@ -1,6 +1,6 @@
 # Searchpo Installation Guide for AI Agents
 
-Read `AGENTS.md` first. This file is the short install and verification path for an agent host that wants to load Searchpo as a plugin-style skill bundle.
+Read `AGENTS.md` first. This file is the short install and verification path for Claude Code and Codex agent hosts.
 
 ## Step 1: Install Dependencies
 
@@ -24,14 +24,30 @@ skills/
   searchpo-plugin-check/SKILL.md
 ```
 
-Generated host mirrors are derived from `skills/`:
+Searchpo slash commands are first-class files in this repo:
+
+```text
+commands/
+  searchpo-full-flow.md
+```
+
+Searchpo agent-team definitions are first-class files in this repo:
+
+```text
+agents/
+  searchpo-main-agent.md
+  searchpo-research-agent.md
+  searchpo-impl-agent.md
+```
+
+Generated host mirrors are derived from `skills/`, `commands/`, and `agents/`:
 
 ```bash
 npm run skills:sync
 npm run skills:check
 ```
 
-Do not edit `.claude/skills/*` or `.codex/skills/*` directly.
+Do not edit `.claude/skills/*`, `.codex/skills/*`, `.claude/commands/*`, `.codex/commands/*`, `.claude/agents/*`, `.codex/agents/*`, or `~/.codex/agents/searchpo-*.toml` directly.
 
 ## Step 3: Verify Plugin Health
 
@@ -40,7 +56,7 @@ npm run agent-plugin:check
 npm run ci:static
 ```
 
-`agent-plugin:check` validates `openclaw.plugin.json`, skill paths, shared deps, frontmatter routing metadata, and the bridge map. `ci:static` adds TypeScript, JSON, Python compile, shell syntax, and live-publish guard checks.
+`agent-plugin:check` validates skill paths, command paths, agent paths, shared deps, frontmatter routing metadata, and the bridge map. `ci:static` adds TypeScript, JSON, Python compile, shell syntax, and live-publish guard checks.
 
 ## Step 4: Run the Safe Flow
 

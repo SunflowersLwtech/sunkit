@@ -20,9 +20,10 @@ FUNCTION_NAME="${REMOTION_LAMBDA_FUNCTION_NAME:-}"
 BUCKET_NAME="${REMOTION_LAMBDA_BUCKET_NAME:-}"
 PRIVACY="${REMOTION_LAMBDA_PRIVACY:-private}"
 SITE_NAME="${REMOTION_LAMBDA_SITE_NAME:-searchpo-radar}"
-FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-60}"
-CONCURRENCY="${SEARCHPO_LAMBDA_CONCURRENCY:-${REMOTION_LAMBDA_CONCURRENCY:-}}"
+FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-}"
+CONCURRENCY="${SEARCHPO_LAMBDA_CONCURRENCY:-${REMOTION_LAMBDA_CONCURRENCY:-4}}"
 CONCURRENCY_PER_LAMBDA="${SEARCHPO_LAMBDA_CONCURRENCY_PER_LAMBDA:-1}"
+DELETE_AFTER="${REMOTION_LAMBDA_DELETE_AFTER:-}"
 CRF="${SEARCHPO_RENDER_CRF:-18}"
 AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
 IMAGE_FORMAT="${SEARCHPO_RENDER_IMAGE_FORMAT:-jpeg}"
@@ -44,6 +45,33 @@ COVER_OUT_NAME="${SEARCHPO_LAMBDA_COVER_OUT_NAME:-${RUN_ID}/searchpo-cover.jpg}"
 SAMPLE_RATE="${SEARCHPO_RENDER_SAMPLE_RATE:-}"
 X264_PRESET="${SEARCHPO_RENDER_X264_PRESET:-}"
 
+resolve_node_bin() {
+  local candidates=(
+    "${SEARCHPO_NODE_BIN:-}"
+    "${NODE_BIN:-}"
+    "/opt/homebrew/bin/node"
+    "/usr/local/bin/node"
+    "$(command -v node || true)"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      echo "$candidate"
+      return
+    fi
+  done
+}
+
+NODE_RUNTIME="$(resolve_node_bin)"
+if command -v npx >/dev/null 2>&1; then
+  REMOTION_CMD=(npx remotion)
+elif [[ -f node_modules/.bin/remotion && -n "$NODE_RUNTIME" ]]; then
+  REMOTION_CMD=("$NODE_RUNTIME" node_modules/.bin/remotion)
+else
+  echo "Missing Remotion CLI: install npm/npx or keep node_modules/.bin/remotion available." >&2
+  exit 1
+fi
+
 require() {
   local name="$1"
   if [[ -z "${!name:-}" ]]; then
@@ -58,11 +86,11 @@ require REGION
 
 case "$ACTION" in
   check)
-    npx remotion lambda functions ls --region "$REGION"
+    "${REMOTION_CMD[@]}" lambda functions ls --region "$REGION"
     ;;
   site)
     require BUCKET_NAME
-    npx remotion lambda sites create src/index.ts \
+    "${REMOTION_CMD[@]}" lambda sites create src/index.ts \
       --site-name "$SITE_NAME" \
       --region "$REGION" \
       --force-bucket-name "$BUCKET_NAME" \
@@ -78,7 +106,7 @@ case "$ACTION" in
     fi
     mkdir -p "$(dirname "$VIDEO_OUTPUT")"
     RENDER_CMD=(
-      npx remotion lambda render "$SITE_NAME" SearchpoRadar "$VIDEO_OUTPUT"
+      "${REMOTION_CMD[@]}" lambda render "$SITE_NAME" SearchpoRadar "$VIDEO_OUTPUT"
       --region "$REGION"
       --function-name "$FUNCTION_NAME"
       --force-bucket-name "$BUCKET_NAME"
@@ -98,6 +126,9 @@ case "$ACTION" in
     elif [[ -n "$CONCURRENCY" ]]; then
       RENDER_CMD+=(--concurrency "$CONCURRENCY")
     fi
+    if [[ -n "$DELETE_AFTER" ]]; then
+      RENDER_CMD+=(--delete-after "$DELETE_AFTER")
+    fi
     if [[ -n "$SAMPLE_RATE" ]]; then
       RENDER_CMD+=(--sample-rate="$SAMPLE_RATE")
     fi
@@ -116,16 +147,22 @@ case "$ACTION" in
       exit 1
     fi
     mkdir -p "$(dirname "$COVER_OUTPUT")"
-    npx remotion lambda still "$SITE_NAME" SearchpoCover "$COVER_OUTPUT" \
-      --region "$REGION" \
-      --function-name "$FUNCTION_NAME" \
-      --force-bucket-name "$BUCKET_NAME" \
-      --props "$PROPS_FILE" \
-      --privacy "$PRIVACY" \
-      --out-name "$COVER_OUT_NAME" \
-      --image-format=jpeg \
-      --jpeg-quality="$JPEG_QUALITY" \
-      --log=verbose
+    STILL_CMD=(
+      "${REMOTION_CMD[@]}" lambda still "$SITE_NAME" SearchpoCover "$COVER_OUTPUT"
+      --region "$REGION"
+      --function-name "$FUNCTION_NAME"
+      --force-bucket-name "$BUCKET_NAME"
+      --props "$PROPS_FILE"
+      --privacy "$PRIVACY"
+      --out-name "$COVER_OUT_NAME"
+      --image-format=jpeg
+      --jpeg-quality="$JPEG_QUALITY"
+    )
+    if [[ -n "$DELETE_AFTER" ]]; then
+      STILL_CMD+=(--delete-after "$DELETE_AFTER")
+    fi
+    STILL_CMD+=(--log=verbose)
+    "${STILL_CMD[@]}"
     ;;
   *)
     echo "Usage: $0 [check|site|render|still]" >&2

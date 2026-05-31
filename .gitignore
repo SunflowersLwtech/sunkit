@@ -14,5 +14,6 @@ dist/
 build/
 public/voiceover.wav
 public/generated/
+vendor/anysearch-skill/runtime.conf
 .idea/
 .vscode/

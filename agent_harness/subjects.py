@@ -55,6 +55,7 @@ def topic_candidate(
     boundary_uri = external_url or f"{manual_url_scheme}{candidate_id}"
     collected_at = utc_now()
     evidence_source = source or source_id
+    source_ids = [evidence_source] if external_url and evidence_source else [source_id]
     reliability = policy.get("reliability", {})
     evidence = [
         {
@@ -75,7 +76,7 @@ def topic_candidate(
         "summary": summary_text,
         "published_at": None,
         "collected_at": collected_at,
-        "source_ids": [source_id],
+        "source_ids": source_ids,
         "evidence": evidence,
         "metrics": {"operator_topic": "1"},
         "signals": {

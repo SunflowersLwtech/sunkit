@@ -1,4 +1,5 @@
 import './styles.css';
+import './fonts';
 import {Composition, Still} from 'remotion';
 import {type Payload, SearchpoRadar} from './Composition';
 import {SearchpoCover} from './Cover';

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Normalize voiceover audio to -16 LUFS for consistent Douyin playback loudness.
-# Requires ffmpeg. Skipped gracefully if ffmpeg is not installed.
+# Requires ffmpeg. Missing ffmpeg is a hard failure.
 
 INPUT="${1:-}"
 if [[ -z "$INPUT" || ! -f "$INPUT" ]]; then
@@ -11,17 +11,50 @@ if [[ -z "$INPUT" || ! -f "$INPUT" ]]; then
 fi
 
 if ! command -v ffmpeg &>/dev/null; then
-  echo "ffmpeg not found, skipping audio normalization" >&2
-  exit 0
+  echo "ffmpeg not found; audio normalization is required" >&2
+  exit 1
 fi
 
 TARGET_LUFS="${SEARCHPO_AUDIO_TARGET_LUFS:--16}"
+TARGET_SAMPLE_RATE="${SEARCHPO_GEMINI_TTS_SAMPLE_RATE_HZ:-22050}"
+TTS_AUDIO_ENCODING="${SEARCHPO_GEMINI_TTS_AUDIO_ENCODING:-LINEAR16}"
+TTS_SPEED="${SEARCHPO_GEMINI_TTS_SPEED:-1}"
+TTS_VOLUME_GAIN_DB="${SEARCHPO_GEMINI_TTS_VOLUME_GAIN_DB:-0}"
 OUTPUT="${INPUT%.wav}_normalized.wav"
 
+if [[ "$TTS_AUDIO_ENCODING" != "LINEAR16" ]]; then
+  echo "unsupported TTS audio encoding: $TTS_AUDIO_ENCODING" >&2
+  exit 1
+fi
+
+if [[ ! "$TARGET_SAMPLE_RATE" =~ ^[0-9]+$ ]]; then
+  echo "SEARCHPO_GEMINI_TTS_SAMPLE_RATE_HZ must be an integer" >&2
+  exit 1
+fi
+
+if [[ ! "$TTS_SPEED" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "SEARCHPO_GEMINI_TTS_SPEED must be numeric" >&2
+  exit 1
+fi
+
+if [[ ! "$TTS_VOLUME_GAIN_DB" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+  echo "SEARCHPO_GEMINI_TTS_VOLUME_GAIN_DB must be numeric" >&2
+  exit 1
+fi
+
+FILTERS=("loudnorm=I=${TARGET_LUFS}:TP=-1.5:LRA=11:print_format=json")
+if [[ "$TTS_SPEED" != "1" && "$TTS_SPEED" != "1.0" ]]; then
+  FILTERS+=("atempo=${TTS_SPEED}")
+fi
+if [[ "$TTS_VOLUME_GAIN_DB" != "0" && "$TTS_VOLUME_GAIN_DB" != "0.0" ]]; then
+  FILTERS+=("volume=${TTS_VOLUME_GAIN_DB}dB")
+fi
+FILTER_CHAIN="$(IFS=,; echo "${FILTERS[*]}")"
+
 ffmpeg -y -i "$INPUT" \
-  -af "loudnorm=I=${TARGET_LUFS}:TP=-1.5:LRA=11:print_format=json" \
-  -ar 24000 -ac 1 \
+  -af "$FILTER_CHAIN" \
+  -ar "$TARGET_SAMPLE_RATE" -ac 1 -c:a pcm_s16le \
   "$OUTPUT" 2>/dev/null
 
 mv "$OUTPUT" "$INPUT"
-echo "Audio normalized to ${TARGET_LUFS} LUFS: $INPUT"
+echo "Audio normalized to ${TARGET_LUFS} LUFS, ${TARGET_SAMPLE_RATE} Hz ${TTS_AUDIO_ENCODING}: $INPUT"

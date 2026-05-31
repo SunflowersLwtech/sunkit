@@ -1,26 +1,37 @@
 {
   "badge": "今日 AI 工具热点",
   "title": "Claude Code 终端编程助手",
+  "displayTitle": "Claude Code 终端编程助手",
+  "speechTitle": "Claude Code 终端编程助手",
   "summary": "今天 GitHub 热榜上出现了一个终端里的编程助手，叫 Claude Code。它能理解你的代码库，帮你执行日常任务、解释复杂代码、处理 Git 工作流，全程自然语言对话。",
   "source": "github_trending",
   "url": "https://github.com/anthropics/claude-code",
   "score": 5.9,
   "metricLine": "127,753 stars · +460 today",
+  "audienceMetricLine": "127,753 stars · +460 today",
+  "evidenceLevel": "source_observation_with_artifact_signal",
+  "qualityWarnings": [],
+  "verificationNextStep": "下一步应检查源码、安装路径和最小示例，再判断是否值得推荐。",
   "cards": [
     {
-      "label": "为什么火",
+      "label": "用户痛点",
       "value": "GitHub 热榜 12.7 万星",
       "detail": "今日新增 460 星，开发者关注度高。"
     },
     {
-      "label": "解决什么",
+      "label": "已知证据",
       "value": "终端内自然语言编程",
       "detail": "理解代码库，执行日常任务、解释复杂代码、处理 Git 工作流。"
     },
     {
-      "label": "先别吹",
+      "label": "未验证部分",
       "value": "仅基于 GitHub 页面信息",
       "detail": "实际体验和稳定性需自行验证。"
+    },
+    {
+      "label": "下一步验证",
+      "value": "跑通最小示例",
+      "detail": "先看安装、权限和实际代码修改路径，再决定是否推荐。"
     }
   ],
   "audioSrc": "voiceover.wav",

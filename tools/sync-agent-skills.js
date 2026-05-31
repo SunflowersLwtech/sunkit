@@ -38,6 +38,18 @@ function skillPath(root, skillName) {
   return path.join(expandRoot(root), skillName);
 }
 
+function commandPath(root, entry) {
+  return path.join(expandRoot(root), `${entry.name}.md`);
+}
+
+function agentMarkdownPath(root, entry) {
+  return path.join(expandRoot(root), `${entry.name}.md`);
+}
+
+function agentTomlPath(root, entry) {
+  return path.join(expandRoot(root), `${entry.name}.toml`);
+}
+
 function readText(filePath) {
   return fs.readFileSync(filePath, 'utf8');
 }
@@ -61,6 +73,15 @@ function assertFrontmatterField(frontmatter, filePath, field) {
   }
 }
 
+function frontmatterValue(frontmatter, field) {
+  const pattern = new RegExp(`(^|\\n)${escapeRegex(field)}:\\s*([^\\n]+)`);
+  const match = pattern.exec(frontmatter);
+  if (!match) {
+    return '';
+  }
+  return match[2].trim().replace(/^['"]|['"]$/g, '');
+}
+
 function assertSkillSource(entry) {
   const source = skillPath(map.sourceRoot, entry.name);
   const skillFile = path.join(source, 'SKILL.md');
@@ -76,6 +97,50 @@ function assertSkillSource(entry) {
     assertFrontmatterField(frontmatter, skillFile, field);
   }
   return source;
+}
+
+function assertCommandSource(entry) {
+  if (!entry.name || !/^[a-z0-9][a-z0-9-]*$/.test(entry.name)) {
+    fail(`Invalid command name: ${entry.name ?? '<missing>'}`);
+  }
+  const sourceRoot = map.commandSourceRoot ?? 'commands';
+  const source = path.join(expandRoot(sourceRoot), `${entry.name}.md`);
+  if (!fs.existsSync(source)) {
+    fail(`Missing source command file: ${path.relative(repoRoot, source)}`);
+  }
+  const text = readText(source);
+  if (!text.trim()) {
+    fail(`Empty source command file: ${path.relative(repoRoot, source)}`);
+  }
+  return source;
+}
+
+function assertAgentSource(entry) {
+  if (!entry.name || !/^[a-z0-9][a-z0-9-]*$/.test(entry.name)) {
+    fail(`Invalid agent name: ${entry.name ?? '<missing>'}`);
+  }
+  const sourceRoot = map.agentSourceRoot ?? 'agents';
+  const source = path.join(expandRoot(sourceRoot), `${entry.name}.md`);
+  if (!fs.existsSync(source)) {
+    fail(`Missing source agent file: ${path.relative(repoRoot, source)}`);
+  }
+  const text = readText(source);
+  const frontmatter = frontmatterFor(text, source);
+  if (!new RegExp(`(^|\\n)name:\\s*${escapeRegex(entry.name)}\\s*(\\n|$)`).test(frontmatter)) {
+    fail(`Frontmatter name does not match ${entry.name}: ${path.relative(repoRoot, source)}`);
+  }
+  for (const field of ['description', 'tools']) {
+    assertFrontmatterField(frontmatter, source, field);
+  }
+  const body = text.replace(/^---\n[\s\S]*?\n---/, '').trim();
+  if (!body) {
+    fail(`Empty source agent body: ${path.relative(repoRoot, source)}`);
+  }
+  return {
+    body,
+    description: frontmatterValue(frontmatter, 'description'),
+    source,
+  };
 }
 
 function removeDestination(destination) {
@@ -129,6 +194,76 @@ function copySharedDep(relativePath, root, label) {
   console.log(`synced ${label} shared dependency: ${path.relative(repoRoot, destination)}`);
 }
 
+function copyCommand(source, destination, label) {
+  if (checkOnly) {
+    if (!fs.existsSync(destination)) {
+      fail(`Missing ${label} bridge: ${destination}`);
+    }
+    if (readText(source) !== readText(destination)) {
+      fail(`Out-of-sync ${label} bridge: ${destination}`);
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destination), {recursive: true});
+  fs.cpSync(source, destination, {force: true});
+  console.log(`synced ${label}: ${path.relative(repoRoot, destination)}`);
+}
+
+function copyAgentMarkdown(source, destination, label) {
+  if (checkOnly) {
+    if (!fs.existsSync(destination)) {
+      fail(`Missing ${label} bridge: ${destination}`);
+    }
+    if (readText(source) !== readText(destination)) {
+      fail(`Out-of-sync ${label} bridge: ${destination}`);
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destination), {recursive: true});
+  fs.cpSync(source, destination, {force: true});
+  console.log(`synced ${label}: ${path.relative(repoRoot, destination)}`);
+}
+
+function codexAgentToml(entry, agent) {
+  if (agent.body.includes("'''")) {
+    fail(`Codex TOML generation cannot encode triple single quotes in ${entry.name}`);
+  }
+  const sourceRoot = map.agentSourceRoot ?? 'agents';
+  const sourceRelative = path.posix.join(sourceRoot, `${entry.name}.md`);
+  return [
+    `# Generated from Searchpo ${sourceRelative} by tools/sync-agent-skills.js. Do not edit directly.`,
+    `name = ${JSON.stringify(entry.name)}`,
+    `description = ${JSON.stringify(agent.description)}`,
+    "developer_instructions = '''",
+    agent.body,
+    "'''",
+    '',
+  ].join('\n');
+}
+
+function writeCodexAgent(entry, agent, destination, label) {
+  const generated = codexAgentToml(entry, agent);
+  if (checkOnly) {
+    if (!fs.existsSync(destination)) {
+      fail(`Missing ${label} bridge: ${destination}`);
+    }
+    if (readText(destination) !== generated) {
+      fail(`Out-of-sync ${label} bridge: ${destination}`);
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destination), {recursive: true});
+  const existing = fs.lstatSync(destination, {throwIfNoEntry: false});
+  if (existing && !readText(destination).startsWith('# Generated from Searchpo ')) {
+    fail(`Refusing to replace non-generated Codex agent: ${destination}`);
+  }
+  fs.writeFileSync(destination, generated);
+  console.log(`synced ${label}: ${path.relative(repoRoot, destination)}`);
+}
+
 function ensureSymlink(source, destination) {
   const parent = path.dirname(destination);
   if (checkOnly) {
@@ -179,6 +314,27 @@ function syncSharedDeps(root, label) {
   }
 }
 
+function syncCommands(root, label) {
+  for (const entry of map.commands ?? []) {
+    const source = assertCommandSource(entry);
+    copyCommand(source, commandPath(root, entry), label);
+  }
+}
+
+function syncClaudeAgents(root, label) {
+  for (const entry of map.agents ?? []) {
+    const agent = assertAgentSource(entry);
+    copyAgentMarkdown(agent.source, agentMarkdownPath(root, entry), label);
+  }
+}
+
+function syncCodexAgents(root, label) {
+  for (const entry of map.agents ?? []) {
+    const agent = assertAgentSource(entry);
+    writeCodexAgent(entry, agent, agentTomlPath(root, entry), label);
+  }
+}
+
 for (const entry of map.skills) {
   const source = assertSkillSource(entry);
   if (command === 'all' || command === 'claude' || command === 'check') {
@@ -196,4 +352,21 @@ if (command === 'all' || command === 'codex' || command === 'check') {
   syncSharedDeps(map.codexProjectRoot, 'codex project skill');
 }
 
-console.log(checkOnly ? 'skills bridge check passed' : 'skills bridge sync complete');
+if (command === 'all' || command === 'claude' || command === 'check') {
+  syncCommands(map.claudeCommandRoot, 'claude project command');
+}
+if (command === 'all' || command === 'codex' || command === 'check') {
+  syncCommands(map.codexCommandRoot, 'codex project command');
+}
+
+if (command === 'all' || command === 'claude' || command === 'check') {
+  syncClaudeAgents(map.claudeAgentRoot, 'claude project agent');
+}
+if (command === 'all' || command === 'codex' || command === 'check') {
+  syncCodexAgents(map.codexProjectAgentRoot, 'codex project agent');
+  if (!projectOnly) {
+    syncCodexAgents(map.codexUserAgentRoot, 'codex user agent');
+  }
+}
+
+console.log(checkOnly ? 'skills/commands/agents bridge check passed' : 'skills/commands/agents bridge sync complete');

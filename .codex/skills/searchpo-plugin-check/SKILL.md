@@ -1,13 +1,12 @@
 ---
 name: searchpo-plugin-check
-description: Validate the Searchpo agent plugin and skill bundle. Use when checking plugin health, bridge sync, skill frontmatter, resolver consistency, OpenClaw-style manifest readiness, or after editing AGENTS.md, openclaw.plugin.json, tools/skill-bridge-map.json, tools/sync-agent-skills.js, or any skills/*/SKILL.md file.
+description: Validate the Searchpo Claude/Codex agent bridges, slash commands, and skill bundle. Use when checking bridge health, skill frontmatter, command mirrors, agent mirrors, resolver consistency, or after editing AGENTS.md, tools/skill-bridge-map.json, tools/sync-agent-skills.js, commands/*.md, agents/*.md, or any skills/*/SKILL.md file.
 version: 1.0.0
 triggers:
-  - "plugin check"
-  - "agent plugin"
+  - "bridge check"
+  - "agent check"
   - "skills check"
   - "skill health"
-  - "OpenClaw plugin"
   - "gbrain style"
   - "bridge sync"
 tools:
@@ -15,9 +14,9 @@ tools:
 mutating: false
 ---
 
-# Searchpo Plugin Check
+# Searchpo Bridge Check
 
-Validate that Searchpo still behaves like a plugin-style agent skill bundle.
+Validate that Searchpo still exposes the same Claude/Codex skills, commands, and three-agent team.
 
 ## Workflow
 
@@ -36,10 +35,13 @@ npm run ci:static
 
 ## What Must Pass
 
-- `openclaw.plugin.json` lists every installable skill and shared dependency.
 - Every listed skill has `SKILL.md` with `name`, `description`, `triggers`, `tools`, and `mutating`.
-- `tools/skill-bridge-map.json` contains the same skill names as the plugin manifest.
+- `tools/skill-bridge-map.json` lists every source skill, slash command, shared dependency, and exactly three agents: `searchpo-main-agent`, `searchpo-research-agent`, and `searchpo-impl-agent`.
+- `agents/searchpo-main-agent.md`, `agents/searchpo-research-agent.md`, and `agents/searchpo-impl-agent.md` have `name`, `description`, `tools`, and non-empty instructions.
 - `.claude/skills/` and `.codex/skills/` match the `skills/` source after `npm run skills:sync`.
+- `.claude/commands/` and `.codex/commands/` match the `commands/` source after `npm run skills:sync`.
+- `.claude/agents/` matches the `agents/` source after `npm run skills:sync`.
+- `.codex/agents/` and `/Users/sunfl/.codex/agents/searchpo-*.toml` are generated from `agents/` after `npm run skills:sync`.
 - Codex user-level skill symlinks point back to this repo unless `--project-only` is used.
 
 ## Output

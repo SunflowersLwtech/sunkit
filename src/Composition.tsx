@@ -1,16 +1,34 @@
+import type {CSSProperties, ReactNode} from 'react';
+import {useMemo} from 'react';
+import {useAudioData, visualizeAudio} from '@remotion/media-utils';
+import {TransitionSeries, linearTiming} from '@remotion/transitions';
+import {fade} from '@remotion/transitions/fade';
 import {
   AbsoluteFill,
   Audio,
   interpolate,
   Series,
-  spring,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
 import {Captions, type CaptionSegment} from './Captions';
+import {useFontsReady} from './fonts';
+import {SceneBlock} from './scenes/SceneBlocks';
+import {
+  assertStoryboard,
+  canvasClassName,
+  chooseTransitionFrames,
+  computeSceneFrames,
+  defaultWeightFor,
+  deriveStoryboardFromCards,
+  normalizeStyle,
+  sceneStartBoundaries,
+  styleVars,
+  type Storyboard,
+} from './storyboard';
 
-type Card = {
+export type Card = {
   label: string;
   value: string;
   detail: string;
@@ -19,12 +37,19 @@ type Card = {
 export type Payload = {
   badge: string;
   title: string;
+  displayTitle: string;
+  speechTitle: string;
   summary: string;
   source: string;
   url: string;
   score: number | string | null;
   metricLine: string;
+  audienceMetricLine: string;
+  evidenceLevel: string;
+  qualityWarnings: string[];
+  verificationNextStep: string;
   cards: Card[];
+  storyboard: Storyboard;
   audioSrc: string;
   voiceoverText: string;
   captions: CaptionSegment[];
@@ -34,9 +59,7 @@ export type Payload = {
   footer: string;
 };
 
-const fitText = (text: string, max = 96) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
-
-const CARD_ACCENTS = ['#ffd60a', '#72e7ff', '#ff2d55'];
+const fitText = (text: string, max = 96) => (text.length > max ? `${text.slice(0, max - 1)}...` : text);
 
 const requireText = (value: string | null | undefined, field: string): string => {
   if (!value || !value.trim()) {
@@ -45,12 +68,17 @@ const requireText = (value: string | null | undefined, field: string): string =>
   return value;
 };
 
-const requireCards = (cards: Card[] | null | undefined): Card[] => {
-  if (!Array.isArray(cards) || cards.length === 0) {
-    throw new Error('SearchpoRadar requires at least one card from DeepSeek polish output.');
-  }
-  return cards;
-};
+const normalizeCards = (cards: Card[] | null | undefined): Card[] =>
+  Array.isArray(cards)
+    ? cards
+        .filter((card) => card && typeof card === 'object')
+        .map((card) => ({
+          label: String(card.label || '').trim(),
+          value: String(card.value || '').trim(),
+          detail: String(card.detail || '').trim(),
+        }))
+        .filter((card) => card.label || card.value || card.detail)
+    : [];
 
 const requireCaptions = (captions: CaptionSegment[] | null | undefined): CaptionSegment[] => {
   if (!Array.isArray(captions) || captions.length === 0) {
@@ -68,15 +96,27 @@ export const assertPayload = (props: Partial<Payload>): Payload => {
   if (!Number.isFinite(fps) || !fps || fps < 1) {
     throw new Error('SearchpoRadar requires props.fps.');
   }
-  return {
+
+  const cards = normalizeCards(props.cards);
+  if (!props.storyboard && cards.length === 0) {
+    throw new Error('SearchpoRadar requires either storyboard scenes or at least one legacy card.');
+  }
+
+  const base = {
     badge: requireText(props.badge, 'badge'),
     title: requireText(props.title, 'title'),
+    displayTitle: props.displayTitle?.trim() || requireText(props.title, 'title'),
+    speechTitle: props.speechTitle?.trim() || requireText(props.title, 'title'),
     summary: requireText(props.summary, 'summary'),
     source: requireText(props.source, 'source'),
     url: requireText(props.url, 'url'),
     score: props.score ?? null,
     metricLine: requireText(props.metricLine, 'metricLine'),
-    cards: requireCards(props.cards),
+    audienceMetricLine: props.audienceMetricLine?.trim() || requireText(props.metricLine, 'metricLine'),
+    evidenceLevel: props.evidenceLevel?.trim() || 'source_observation_unverified',
+    qualityWarnings: Array.isArray(props.qualityWarnings) ? props.qualityWarnings : [],
+    verificationNextStep: props.verificationNextStep?.trim() || '下一步补充证据后再判断。',
+    cards,
     audioSrc: requireText(props.audioSrc, 'audioSrc'),
     voiceoverText: requireText(props.voiceoverText, 'voiceoverText'),
     captions: requireCaptions(props.captions),
@@ -85,41 +125,39 @@ export const assertPayload = (props: Partial<Payload>): Payload => {
     cta: requireText(props.cta, 'cta'),
     footer: requireText(props.footer, 'footer'),
   };
+
+  const storyboard = props.storyboard
+    ? assertStoryboard(props.storyboard)
+    : deriveStoryboardFromCards({
+        displayTitle: base.displayTitle,
+        summary: base.summary,
+        audienceMetricLine: base.audienceMetricLine,
+        evidenceLevel: base.evidenceLevel,
+        url: base.url,
+        cards: base.cards,
+        cta: base.cta,
+        verificationNextStep: base.verificationNextStep,
+        footer: base.footer,
+      });
+
+  return {...base, storyboard};
 };
 
-// Allocate integer scene durations that sum exactly to the total, distributing
-// the rounding remainder to the largest fractional parts.
-const computeSceneFrames = (total: number, weights: number[]): number[] => {
-  const wsum = weights.reduce((a, b) => a + b, 0);
-  if (wsum <= 0) {
-    throw new Error('SearchpoRadar scene weights must sum to a positive value.');
-  }
-  const raw = weights.map((w) => (w / wsum) * total);
-  const floored = raw.map(Math.floor);
-  let remainder = total - floored.reduce((a, b) => a + b, 0);
-  const order = raw
-    .map((r, i) => ({i, frac: r - Math.floor(r)}))
-    .sort((a, b) => b.frac - a.frac);
-  for (let k = 0; remainder > 0 && order.length > 0; k++, remainder--) {
-    floored[order[k % order.length].i] += 1;
-  }
-  return floored.map((f) => Math.max(1, f));
-};
-
-// Spring entrance helper, relative to the current (Series) sequence frame.
-const useEnter = (delay = 0) => {
-  const frame = useCurrentFrame();
-  const {fps} = useVideoConfig();
-  return spring({frame: frame - delay, fps, config: {damping: 18, stiffness: 110}});
-};
-
-const Background: React.FC = () => {
+const Background: React.FC<{beam: boolean; audioPulse: number}> = ({beam, audioPulse}) => {
   const frame = useCurrentFrame();
   const sweep = interpolate(frame % 150, [0, 150], [-45, 125]);
   return (
     <>
       <div className="noise" />
-      <div className="beam" style={{transform: `translateX(${sweep}%) rotate(-14deg)`}} />
+      {beam ? (
+        <div
+          className="beam"
+          style={{
+            opacity: 0.7 + audioPulse * 0.25,
+            transform: `translateX(${sweep}%) rotate(-14deg)`,
+          }}
+        />
+      ) : null}
     </>
   );
 };
@@ -131,7 +169,23 @@ const TopBar: React.FC<{data: Payload}> = ({data}) => (
   </div>
 );
 
-// Segmented progress indicator showing which scene is playing.
+const AutoCoverPoster: React.FC<{data: Payload; opacity: number}> = ({data, opacity}) => {
+  const title = fitText(data.displayTitle || data.title, 54);
+  const metric = fitText(data.audienceMetricLine || data.metricLine, 30);
+  return (
+    <div className="video-poster-overlay" style={{opacity}}>
+      <div className="video-poster-top">
+        <span>{requireText(data.badge, 'badge')}</span>
+        <strong>searchpo radar</strong>
+      </div>
+      <div className="video-poster-kicker">今天为什么刷到它</div>
+      <div className="video-poster-title">{title}</div>
+      <div className="video-poster-metric">{metric}</div>
+      <div className="video-poster-source">{fitText(data.source, 40)}</div>
+    </div>
+  );
+};
+
 const SceneProgress: React.FC<{boundaries: number[]; total: number}> = ({boundaries, total}) => {
   const frame = useCurrentFrame();
   return (
@@ -152,93 +206,102 @@ const SceneProgress: React.FC<{boundaries: number[]; total: number}> = ({boundar
   );
 };
 
-const HookScene: React.FC<{data: Payload}> = ({data}) => {
-  const enter = useEnter(2);
-  return (
-    <AbsoluteFill className="scene scene-hook" style={{opacity: enter}}>
-      <div className="kicker">今天为什么刷到它</div>
-      <h1 style={{transform: `translateY(${interpolate(enter, [0, 1], [48, 0])}px)`}}>
-        {fitText(data.title, 60)}
-      </h1>
-      <p className="hook-sub">{fitText(requireText(data.voiceoverText, 'voiceoverText'), 80)}</p>
-    </AbsoluteFill>
-  );
-};
+const renderPlainSeries = (
+  data: Payload,
+  sceneFrames: number[],
+  style: ReturnType<typeof normalizeStyle>,
+  audioPulse: number,
+): ReactNode => (
+  <Series>
+    {data.storyboard.scenes.map((scene, index) => (
+      <Series.Sequence durationInFrames={sceneFrames[index]} key={`${scene.type}-${index}`}>
+        <SceneBlock
+          audioPulse={audioPulse}
+          count={data.storyboard.scenes.length}
+          data={data}
+          index={index}
+          scene={scene}
+          style={style}
+        />
+      </Series.Sequence>
+    ))}
+  </Series>
+);
 
-const OverviewScene: React.FC<{data: Payload}> = ({data}) => {
-  const enter = useEnter(2);
-  const frame = useCurrentFrame();
-  const pulse = interpolate(Math.sin(frame / 9), [-1, 1], [0.45, 1]);
-  return (
-    <AbsoluteFill className="scene scene-overview" style={{opacity: enter}}>
-      <div className="kicker kicker-cyan">一句话看懂</div>
-      <p className="overview-text" style={{transform: `translateY(${interpolate(enter, [0, 1], [36, 0])}px)`}}>
-        {fitText(data.summary, 110)}
-      </p>
-      <div className="signal-row">
-        <div
-          className="signal-pill"
-          style={{boxShadow: `0 0 ${18 + pulse * 28}px rgba(255, 214, 10, 0.28)`}}
-        >
-          <span>{fitText(requireText(data.metricLine, 'metricLine'), 26)}</span>
-          <small>实时信号</small>
-        </div>
-        <div className="source-line">
-          <span>来源边界</span>
-          <strong>{fitText(data.url, 64)}</strong>
-        </div>
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const CardScene: React.FC<{card: Card; index: number; count: number}> = ({card, index, count}) => {
-  const enter = useEnter(2);
-  const accent = CARD_ACCENTS[index % CARD_ACCENTS.length];
-  return (
-    <AbsoluteFill className="scene scene-card" style={{opacity: enter}}>
-      <div className="card-index" style={{color: accent}}>
-        {String(index + 1).padStart(2, '0')} / {String(count).padStart(2, '0')}
-      </div>
-      <div className="big-card" style={{borderLeftColor: accent, transform: `translateX(${interpolate(enter, [0, 1], [40, 0])}px)`}}>
-        <div className="big-card-label" style={{color: accent}}>{fitText(card.label, 18)}</div>
-        <div className="big-card-value">{fitText(card.value, 40)}</div>
-        <div className="big-card-detail">{fitText(card.detail, 110)}</div>
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const CtaScene: React.FC<{data: Payload}> = ({data}) => {
-  const enter = useEnter(2);
-  return (
-    <AbsoluteFill className="scene scene-cta" style={{opacity: enter}}>
-      <div className="kicker kicker-red">先别急着下结论</div>
-      <div className="cta-text" style={{transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`}}>
-        {fitText(requireText(data.cta, 'cta'), 42)}
-      </div>
-      <div className="cta-footer">{fitText(data.footer, 56)}</div>
-    </AbsoluteFill>
-  );
+const renderTransitionSeries = (
+  data: Payload,
+  sceneFrames: number[],
+  transitionFrames: number,
+  style: ReturnType<typeof normalizeStyle>,
+  audioPulse: number,
+): ReactNode => {
+  const children: ReactNode[] = [];
+  data.storyboard.scenes.forEach((scene, index) => {
+    children.push(
+      <TransitionSeries.Sequence durationInFrames={sceneFrames[index]} key={`${scene.type}-${index}`}>
+        <SceneBlock
+          audioPulse={audioPulse}
+          count={data.storyboard.scenes.length}
+          data={data}
+          index={index}
+          scene={scene}
+          style={style}
+        />
+      </TransitionSeries.Sequence>,
+    );
+    if (index < data.storyboard.scenes.length - 1) {
+      children.push(
+        <TransitionSeries.Transition
+          key={`transition-${index}`}
+          presentation={fade({shouldFadeOutExitingScene: true})}
+          timing={linearTiming({durationInFrames: transitionFrames})}
+        />,
+      );
+    }
+  });
+  return <TransitionSeries>{children}</TransitionSeries>;
 };
 
 export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
+  useFontsReady();
   const data = assertPayload(props);
   const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
+  const {durationInFrames, fps} = useVideoConfig();
+  const audioSrc = staticFile(data.audioSrc);
+  const audioData = useAudioData(audioSrc);
 
-  const captions = data.captions;
-  const cards = data.cards.slice(0, 3);
-  // hook, overview, one weight per card, cta
-  const weights = [0.2, 0.18, ...cards.map(() => 0.15), 0.17];
-  const sceneFrames = computeSceneFrames(durationInFrames, weights);
-  const boundaries: number[] = [];
-  sceneFrames.reduce((acc, f) => {
-    boundaries.push(acc);
-    return acc + f;
-  }, 0);
+  const style = normalizeStyle(data.storyboard.style);
+  const weights = useMemo(
+    () => data.storyboard.scenes.map((scene) => scene.weight ?? defaultWeightFor(scene.type)),
+    [data.storyboard.scenes],
+  );
+  const transitionFrames = chooseTransitionFrames(durationInFrames, weights, fps);
+  const sceneFrames = useMemo(
+    () => computeSceneFrames(durationInFrames + (data.storyboard.scenes.length - 1) * transitionFrames, weights),
+    [data.storyboard.scenes.length, durationInFrames, transitionFrames, weights],
+  );
+  const boundaries = useMemo(
+    () => sceneStartBoundaries(sceneFrames, transitionFrames),
+    [sceneFrames, transitionFrames],
+  );
 
-  const introOpacity = interpolate(frame, [0, 14], [0, 1], {extrapolateRight: 'clamp'});
+  const audioPulse =
+    style.motion === 'punchy' && audioData
+      ? Math.min(
+          1,
+          Math.max(
+            0,
+            ...visualizeAudio({
+              audioData,
+              frame,
+              fps,
+              numberOfSamples: 16,
+            }),
+          ),
+        )
+      : interpolate(Math.sin(frame / 9), [-1, 1], [0.35, 1]);
+
+  const introOpacity = interpolate(frame, [0, 8], [0.94, 1], {extrapolateRight: 'clamp'});
   const outroOpacity = interpolate(
     frame,
     [durationInFrames - 24, durationInFrames - 6],
@@ -246,32 +309,29 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
     {extrapolateLeft: 'clamp'},
   );
   const masterOpacity = Math.min(introOpacity, outroOpacity);
+  const canvasStyle = {
+    ...styleVars(style),
+    '--audio-pulse': audioPulse,
+    opacity: masterOpacity,
+  } as CSSProperties;
+  const posterOpacity = interpolate(frame, [0, Math.round(fps * 0.45), Math.round(fps * 0.95)], [1, 1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
-    <AbsoluteFill className="canvas" style={{opacity: masterOpacity}}>
-      <Audio src={staticFile(data.audioSrc)} />
-      <Background />
-      <TopBar data={data} />
-      <SceneProgress boundaries={boundaries} total={durationInFrames} />
+    <AbsoluteFill className={canvasClassName(style)} style={canvasStyle}>
+      <Audio src={audioSrc} />
+      <Background audioPulse={audioPulse} beam={style.chrome.beam} />
+      {style.chrome.topbar ? <TopBar data={data} /> : null}
+      {style.chrome.progress ? <SceneProgress boundaries={boundaries} total={durationInFrames} /> : null}
 
-      <Series>
-        <Series.Sequence durationInFrames={sceneFrames[0]}>
-          <HookScene data={data} />
-        </Series.Sequence>
-        <Series.Sequence durationInFrames={sceneFrames[1]}>
-          <OverviewScene data={data} />
-        </Series.Sequence>
-        {cards.map((card, index) => (
-          <Series.Sequence durationInFrames={sceneFrames[2 + index]} key={card.label || index}>
-            <CardScene card={card} index={index} count={cards.length} />
-          </Series.Sequence>
-        ))}
-        <Series.Sequence durationInFrames={sceneFrames[sceneFrames.length - 1]}>
-          <CtaScene data={data} />
-        </Series.Sequence>
-      </Series>
+      {transitionFrames > 0
+        ? renderTransitionSeries(data, sceneFrames, transitionFrames, style, audioPulse)
+        : renderPlainSeries(data, sceneFrames, style, audioPulse)}
 
-      <Captions segments={captions} />
+      <Captions segments={data.captions} />
+      {posterOpacity > 0 ? <AutoCoverPoster data={data} opacity={posterOpacity} /> : null}
     </AbsoluteFill>
   );
 };

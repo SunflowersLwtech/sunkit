@@ -8,11 +8,16 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from agent_harness.storyboard import derive_default_storyboard, validate_storyboard  # noqa: E402
+
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 PUBLIC_GENERATED_DIR = ROOT / "public" / "generated"
 
@@ -93,6 +98,35 @@ def main() -> int:
     if not source.exists():
         raise SystemExit(f"render payload missing: {source}")
     payload = read_json(source)
+    video_spec_path = run_dir / "video_spec.json"
+    video_spec: dict[str, Any] = {}
+    if video_spec_path.exists():
+        video_spec = read_json(video_spec_path)
+        payload["videoSpec"] = {
+            "path": str(video_spec_path),
+            "sha256": hashlib.sha256(video_spec_path.read_bytes()).hexdigest(),
+            "id": video_spec.get("id"),
+            "schema_version": video_spec.get("schema_version"),
+        }
+    try:
+        if payload.get("storyboard"):
+            payload["storyboard"] = validate_storyboard(payload["storyboard"])
+        elif payload.get("cards"):
+            payload["storyboard"] = derive_default_storyboard(
+                display_title=str(payload.get("displayTitle") or payload.get("title") or ""),
+                summary=str(payload.get("summary") or ""),
+                audience_metric=str(payload.get("audienceMetricLine") or payload.get("metricLine") or ""),
+                evidence_level=str(payload.get("evidenceLevel") or ""),
+                url=str(payload.get("url") or ""),
+                cards=payload.get("cards") or [],
+                cta=str(payload.get("cta") or ""),
+                verification_next_step=str(payload.get("verificationNextStep") or ""),
+                footer=str(payload.get("footer") or ""),
+            )
+        else:
+            raise ValueError("render payload requires storyboard or legacy cards")
+    except ValueError as exc:
+        raise SystemExit(f"render payload storyboard validation failed: {exc}") from exc
     voiceover_source = run_dir / "voiceover.wav"
     if not payload.get("audioSrc"):
         raise SystemExit("render payload missing audioSrc")
@@ -128,6 +162,8 @@ def main() -> int:
                 "audio_duration_sec": manifest.get("audio_duration_sec"),
                 "audio_frames": manifest.get("audio_frames"),
                 "title": payload.get("title"),
+                "video_spec": str(video_spec_path) if video_spec else None,
+                "video_spec_sha256": hashlib.sha256(video_spec_path.read_bytes()).hexdigest() if video_spec else None,
             },
             ensure_ascii=False,
             indent=2,

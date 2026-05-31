@@ -11,7 +11,7 @@ skills/
   <skill>/SKILL.md            # skill workflow and metadata
 ```
 
-Each `SKILL.md` keeps Codex-compatible `name` and `description` fields, plus Searchpo routing metadata (`triggers`, `tools`, `mutating`) for local plugin checks.
+Each `SKILL.md` keeps Codex-compatible `name` and `description` fields, plus Searchpo routing metadata (`triggers`, `tools`, `mutating`) for local bridge checks.
 
 ## Routing
 
@@ -21,7 +21,7 @@ Do not treat `.claude/skills/` or `.codex/skills/` as source. They are generated
 
 ## Updating
 
-After editing a skill, resolver, or plugin manifest:
+After editing a skill, resolver, command, or agent definition:
 
 ```bash
 npm run skills:sync

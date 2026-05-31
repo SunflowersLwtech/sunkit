@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
 import time
 import traceback
@@ -281,6 +282,39 @@ def _load_state(context: HarnessContext) -> list[str]:
     return data.get("completed_stages") or []
 
 
+def _quarantine_partial_artifacts(run_dir: Path, stage_name: str) -> Path | None:
+    stage_files = {
+        "deepseek_polish": ["deepseek_polish.json"],
+        "content_scoring": ["content_score.json"],
+        "gemini_tts": ["voiceover.wav", "voiceover_manifest.json"],
+        "build_captions": ["captions.json"],
+        "content_improvement_loop": ["script.json", "scene_plan.json"],
+        "render_payload": ["video_spec.json", "render_payload.json"],
+        "publish_package": ["post_manifest.json"],
+    }
+    files = stage_files.get(stage_name, [])
+    existing = [run_dir / name for name in files if (run_dir / name).exists()]
+    if not existing:
+        return None
+    quarantine_dir = run_dir / "quarantine" / stage_name / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    moved: list[dict[str, str]] = []
+    for path in existing:
+        target = quarantine_dir / path.name
+        shutil.move(str(path), str(target))
+        moved.append({"from": str(path), "to": str(target)})
+    write_json(
+        quarantine_dir / "quarantine_manifest.json",
+        {
+            "created_at": utc_now(),
+            "stage": stage_name,
+            "reason": "stage failed before producing a trustworthy artifact chain",
+            "moved": moved,
+        },
+    )
+    return quarantine_dir
+
+
 class SyncHarness:
     def __init__(self, stages: list[Stage]) -> None:
         self.stages = stages
@@ -322,6 +356,7 @@ class SyncHarness:
                 if result.status != "completed":
                     raise RuntimeError(f"Stage {stage.name} ended with status {result.status}: {result.details}")
         except Exception as exc:
+            quarantine_dir = _quarantine_partial_artifacts(context.run_dir, stage.name)
             failure_path = context.run_dir / "failure.json"
             failure_payload = {
                 "created_at": utc_now(),
@@ -330,6 +365,7 @@ class SyncHarness:
                 "traceback": traceback.format_exc(limit=20),
                 "failed_stage_index": idx,
                 "failed_stage_name": stage.name,
+                "quarantine_dir": str(quarantine_dir) if quarantine_dir else None,
             }
             write_json(failure_path, failure_payload)
             board.artifact(root_task, Artifact("failure", failure_path))

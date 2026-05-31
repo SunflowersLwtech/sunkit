@@ -15,9 +15,13 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+from agent_harness.policy import policy_get
+from agent_harness.service_artifacts import RENDER_TO_PLANNING_TYPE, bounded_text
 from env_utils import first_env, env_value
 from gemini_api import default_gemini_mode, generate_content_url
 
@@ -43,22 +47,50 @@ def latest_run_dir() -> Path:
     return Path(LATEST_RUN_PATH.read_text(encoding="utf-8").strip()).resolve()
 
 
-def score_content(api_key: str, model: str, polish: dict[str, Any], candidate: dict[str, Any], timeout: float, env_file: Path) -> dict[str, Any]:
+def score_content(
+    api_key: str,
+    model: str,
+    polish: dict[str, Any],
+    candidate: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+    cross_check_review: dict[str, Any],
+    timeout: float,
+    env_file: Path,
+    topic_brief: dict[str, Any] | None = None,
+    fact_bank: dict[str, Any] | None = None,
+    scene_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     url = generate_content_url(model, api_key, env_file)
+    target_overall = float(policy_get("content_optimization.target_overall", 8.0))
+    min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
     prompt = json.dumps({
         "task": "Score this short-video content package for Douyin quality. Return JSON only.",
         "scoring_dimensions": {
             "hook_strength": "1-10: Does the title/opening grab attention in first 2 seconds?",
+            "retention_structure": "1-10: Does it quickly move from problem to mechanism, tradeoff, and verification path so viewers have a reason to keep watching?",
             "information_density": "1-10: Is the voiceover packed with useful info, no filler?",
             "emotional_tension": "1-10: Does it create curiosity, surprise, or urgency?",
             "claim_safety": "1-10: Are claims properly bounded? No hype without evidence?",
-            "douyin_algorithm_fit": "1-10: Title/tags optimized for Douyin recommendation engine?",
+            "douyin_algorithm_fit": "1-10: Are title, captions, description, and tags content-relevant without keyword stuffing or folklore about secret thresholds?",
+            "constructive_interaction_fit": "1-10: Does the copy invite useful comments, saves, or follow-up evaluation without engagement bait?",
+            "recommendation_eligibility_safety": "1-10: Does it avoid spam, duplicate-content framing, fake engagement, automation-growth tactics, and unsupported shadowban/限流 claims?",
+            "constructive_interpretation": "1-10: Does it provide a useful, source-grounded explanation instead of generic hype?",
         },
         "required_output": {
-            "scores": {"hook_strength": "int", "information_density": "int", "emotional_tension": "int", "claim_safety": "int", "douyin_algorithm_fit": "int"},
-            "overall": "float (weighted average, hook=0.3, density=0.25, emotion=0.2, safety=0.15, algo=0.1)",
+            "scores": {
+                "hook_strength": "int",
+                "retention_structure": "int",
+                "information_density": "int",
+                "emotional_tension": "int",
+                "claim_safety": "int",
+                "douyin_algorithm_fit": "int",
+                "constructive_interaction_fit": "int",
+                "recommendation_eligibility_safety": "int",
+                "constructive_interpretation": "int",
+            },
+            "overall": "float weighted average; constructive interpretation and information density must materially affect it",
             "suggestions": ["1-3 specific improvement suggestions"],
-            "verdict": "pass (overall >= 6.0) or improve (overall < 6.0)",
+            "verdict": f"pass only if overall >= {target_overall} and every dimension >= {min_dimension}; otherwise improve",
         },
         "content": {
             "polished_title": polish.get("polished_title"),
@@ -67,12 +99,38 @@ def score_content(api_key: str, model: str, polish: dict[str, Any], candidate: d
             "douyin_desc": polish.get("douyin_desc"),
             "tags": polish.get("tags"),
             "cards": polish.get("cards"),
+            "storyboard": polish.get("storyboard"),
+            "scene_plan": scene_plan or {},
         },
         "candidate_context": {
             "title": candidate.get("title"),
             "source_ids": candidate.get("source_ids"),
             "candidate_score": candidate.get("candidate_score"),
         },
+        "service_artifacts": {
+            "topic_brief": topic_brief or {},
+            "fact_bank": fact_bank or {},
+            "scene_plan": scene_plan or {},
+        },
+        "evidence_bundle": {
+            "source_kind": evidence_bundle.get("source_kind"),
+            "source_facts": (evidence_bundle.get("evidence_summary") or {}).get("source_facts") or [],
+            "constructive_angles": (evidence_bundle.get("evidence_summary") or {}).get("constructive_angles") or [],
+            "combined_excerpt": (evidence_bundle.get("evidence_summary") or {}).get("combined_excerpt") or "",
+            "research_brief": (evidence_bundle.get("evidence_summary") or {}).get("research_brief") or {},
+            "fact_bank_risk_notes": (evidence_bundle.get("evidence_summary") or {}).get("fact_bank_risk_notes") or [],
+        },
+        "cross_check_review": cross_check_review,
+        "fail_if": [
+            "The content could have been written without reading the source.",
+            "It makes project capability, ranking, benchmark, or adoption claims not supported by evidence_bundle.",
+            "It does not explain the problem/mechanism/tradeoff/evaluation path for an open-source project or tool.",
+            "It presents private Douyin thresholds, fixed traffic-pool sizes, completion-rate cutoffs, or a definitive shadowban/限流 diagnosis as fact without official platform-rule evidence.",
+            "It asks viewers for fake likes, follows, shares, comment spam, or other engagement bait.",
+            "It contains raw URLs, GitHub links, website links, or source paths in public copy.",
+            "It asks viewers to try, download, install, use, open, visit, or go to a third-party tool, site, repository, app, plugin, or framework.",
+            "The selected subject is platform automation, account automation, multi-platform auto-posting, batch upload, auto-login, test-account, or platform-risk-control tooling.",
+        ],
     }, ensure_ascii=False)
 
     body = {
@@ -125,11 +183,155 @@ def score_content(api_key: str, model: str, polish: dict[str, Any], candidate: d
         return json.loads(match.group(0))
 
 
+def candidate_entity_terms(candidate: dict[str, Any]) -> list[str]:
+    raw_values = [
+        str(candidate.get("title") or ""),
+        str(candidate.get("entity_key") or ""),
+        str(candidate.get("canonical_url") or "").rstrip("/").rsplit("/", 1)[-1],
+    ]
+    terms: list[str] = []
+    for raw in raw_values:
+        for part in re.split(r"[\s/_:.-]+", raw):
+            cleaned = part.strip()
+            if len(cleaned) >= 4 and cleaned.lower() not in {"github", "repo", "http", "https"}:
+                terms.append(cleaned)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            unique.append(term)
+            seen.add(key)
+    return unique[:6]
+
+
+def deterministic_blocking_checks(
+    polish: dict[str, Any],
+    candidate: dict[str, Any],
+    evidence_bundle: dict[str, Any] | None = None,
+    cross_check_review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    title = str(polish.get("polished_title") or polish.get("douyin_title") or "")
+    voiceover = str(polish.get("voiceover_text") or "")
+    combined = f"{title} {voiceover}".lower()
+    terms = candidate_entity_terms(candidate)
+    candidate_referenced = not terms or any(term.lower() in combined for term in terms)
+    generic_hook_patterns = [
+        r"^最近\s*(arxiv|有一篇|出现一篇|一篇论文)",
+        r"^今天\s*我们\s*(来|聊)",
+        r"^这是一篇",
+    ]
+    opening = re.split(r"[。！？!?\n]", voiceover.strip(), maxsplit=1)[0]
+    hook_specific = not any(re.search(pattern, opening, re.I) for pattern in generic_hook_patterns)
+    blockers: list[str] = []
+    evidence_bundle = evidence_bundle or {}
+    cross_check_review = cross_check_review or {}
+    if not candidate_referenced:
+        blockers.append(f"voiceover/title does not reference selected candidate terms: {terms}")
+    if not hook_specific:
+        blockers.append(f"opening hook is too generic for short video: {opening}")
+    if not evidence_bundle.get("sources"):
+        blockers.append("evidence_bundle.json is missing fetched source details")
+    if cross_check_review.get("status") != "pass":
+        blockers.append(f"cross_check_review.json did not pass: {cross_check_review.get('errors')}")
+    return {
+        "candidate_terms": terms,
+        "candidate_referenced": candidate_referenced,
+        "hook_specific": hook_specific,
+        "evidence_sources_present": bool(evidence_bundle.get("sources")),
+        "cross_check_status": cross_check_review.get("status") or "missing",
+        "blocking_issues": blockers,
+    }
+
+
+def dimension_scores(result: dict[str, Any]) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    raw_scores = result.get("scores") if isinstance(result.get("scores"), dict) else {}
+    for key, value in raw_scores.items():
+        try:
+            scores[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return scores
+
+
+def scene_plan_from_polish(polish: dict[str, Any]) -> dict[str, Any]:
+    scenes = []
+    storyboard = polish.get("storyboard") if isinstance(polish.get("storyboard"), dict) else {}
+    for index, scene in enumerate(storyboard.get("scenes") or [], start=1):
+        if not isinstance(scene, dict):
+            continue
+        props = scene.get("props") if isinstance(scene.get("props"), dict) else {}
+        text_values = []
+        for value in props.values():
+            if isinstance(value, list):
+                text_values.extend(str(item) for item in value if str(item).strip())
+            elif str(value or "").strip():
+                text_values.append(str(value))
+        render_type = str(scene.get("type") or "card")
+        scenes.append(
+            {
+                "id": f"s{index}",
+                "planning_type": RENDER_TO_PLANNING_TYPE.get(render_type, "summary"),
+                "render_type": render_type,
+                "on_screen_text": {
+                    "headline": bounded_text(text_values[0] if text_values else render_type, 80),
+                    "body": bounded_text(" ".join(text_values[1:]), 180),
+                },
+            }
+        )
+    return {"schema_version": 1, "scenes": scenes}
+
+
+def score_target_report(result: dict[str, Any], blocking_checks: dict[str, Any]) -> dict[str, Any]:
+    target_overall = float(policy_get("content_optimization.target_overall", 8.0))
+    min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
+    scores = dimension_scores(result)
+    overall = float(result.get("overall") or 0)
+    failed_dimensions = {
+        key: value
+        for key, value in sorted(scores.items())
+        if value < min_dimension
+    }
+    blocking_issues = blocking_checks.get("blocking_issues") or []
+    target_met = not blocking_issues and overall >= target_overall and not failed_dimensions
+    eligible_for_revision = not blocking_issues and not target_met
+    suggestions = [str(item) for item in (result.get("suggestions") or []) if str(item).strip()]
+    focus = [
+        str(item)
+        for item in policy_get("content_optimization.revision_focus", [])
+        if str(item).strip()
+    ]
+    revision_brief = {
+        "target_overall": target_overall,
+        "min_dimension": min_dimension,
+        "current_overall": overall,
+        "failed_dimensions": failed_dimensions,
+        "suggestions": suggestions,
+        "focus": focus,
+        "instruction": (
+            "Revise the full public content package until it reaches the target, "
+            "without adding claims beyond evidence_bundle or weakening caveats."
+        ),
+    }
+    return {
+        "target_overall": target_overall,
+        "min_dimension": min_dimension,
+        "failed_dimensions": failed_dimensions,
+        "target_met": target_met,
+        "eligible_for_revision": eligible_for_revision,
+        "revision_brief": revision_brief,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=float, default=60)
+    parser.add_argument("--polish", help="Polish JSON to score. Defaults to run_dir/deepseek_polish.json.")
+    parser.add_argument("--output", help="Output JSON path. Defaults to run_dir/content_score.json.")
+    parser.add_argument("--attempt", type=int, default=1, help="Optimization attempt number for artifact metadata.")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
@@ -139,29 +341,73 @@ def main() -> int:
         raise SystemExit("GOOGLE_API_KEY or GOOGLE_AGENT_PLATFORM_API is required")
     model = env_value("SEARCHPO_GEMINI_SCORER_MODEL", env_file, "gemini-3.5-flash")
 
-    polish_path = run_dir / "deepseek_polish.json"
+    polish_path = Path(args.polish).resolve() if args.polish else run_dir / "deepseek_polish.json"
     candidate_path = run_dir / "selected_candidate.json"
-    if not polish_path.exists() or not candidate_path.exists():
-        raise SystemExit("deepseek_polish.json and selected_candidate.json required")
+    evidence_path = run_dir / "evidence_bundle.json"
+    cross_check_path = run_dir / "cross_check_review.json"
+    if not polish_path.exists() or not candidate_path.exists() or not evidence_path.exists() or not cross_check_path.exists():
+        raise SystemExit("deepseek_polish.json, selected_candidate.json, evidence_bundle.json, and cross_check_review.json required")
 
     polish = read_json(polish_path)
     candidate = read_json(candidate_path)
-    result = score_content(api_key, model, polish, candidate, args.timeout, env_file)
+    evidence_bundle = read_json(evidence_path)
+    cross_check_review = read_json(cross_check_path)
+    topic_brief_path = run_dir / "topic_brief.json"
+    fact_bank_path = run_dir / "fact_bank.json"
+    scene_plan_path = run_dir / "scene_plan.json"
+    topic_brief = read_json(topic_brief_path) if topic_brief_path.exists() else {}
+    fact_bank = read_json(fact_bank_path) if fact_bank_path.exists() else {}
+    scene_plan = read_json(scene_plan_path) if scene_plan_path.exists() else scene_plan_from_polish(polish)
+    result = score_content(
+        api_key,
+        model,
+        polish,
+        candidate,
+        evidence_bundle,
+        cross_check_review,
+        args.timeout,
+        env_file,
+        topic_brief=topic_brief,
+        fact_bank=fact_bank,
+        scene_plan=scene_plan,
+    )
+    blocking_checks = deterministic_blocking_checks(polish, candidate, evidence_bundle, cross_check_review)
+    target_report = score_target_report(result, blocking_checks)
+    model_verdict = str(result.get("verdict") or "improve").lower()
+    if blocking_checks["blocking_issues"] or model_verdict == "fail":
+        verdict = "fail"
+    elif target_report["target_met"]:
+        verdict = "pass"
+    else:
+        verdict = "improve"
 
     output = {
         "schema_version": 1,
         "created_at": utc_now(),
         "provider": "gemini",
         "model": model,
+        "attempt": args.attempt,
+        "polish_path": str(polish_path),
+        "input_files": [
+            str(path)
+            for path in [polish_path, candidate_path, topic_brief_path, fact_bank_path, scene_plan_path, evidence_path, cross_check_path]
+            if path.exists()
+        ],
+        "topic_brief_present": bool(topic_brief),
+        "fact_bank_present": bool(fact_bank),
+        "scene_plan_scene_count": len(scene_plan.get("scenes") or []),
         "scores": result.get("scores") or {},
         "overall": result.get("overall") or 0,
         "suggestions": result.get("suggestions") or [],
-        "verdict": result.get("verdict") or "improve",
+        "model_verdict": model_verdict,
+        "verdict": verdict,
+        "blocking_checks": blocking_checks,
+        **target_report,
     }
-    output_path = run_dir / "content_score.json"
+    output_path = Path(args.output).resolve() if args.output else run_dir / "content_score.json"
     write_json(output_path, output)
     print(json.dumps({"content_score": str(output_path), "overall": output["overall"], "verdict": output["verdict"]}, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if verdict != "fail" else 1
 
 
 if __name__ == "__main__":

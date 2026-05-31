@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from fractions import Fraction
@@ -23,10 +25,21 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def probe(video: Path) -> dict[str, Any]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobe is required for render metadata verification")
     proc = subprocess.run(
         [
-            "ffprobe",
+            ffprobe,
             "-v",
             "error",
             "-show_streams",
@@ -69,12 +82,12 @@ def main() -> int:
     props = read_json(run_dir / "remotion_input_props.json")
 
     errors: list[str] = []
+    warnings: list[str] = []
     if not video.is_file():
         errors.append(f"Rendered video missing: {video}")
         metadata: dict[str, Any] = {}
     else:
         metadata = probe(video)
-
     streams = metadata.get("streams") or []
     video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
@@ -89,6 +102,8 @@ def main() -> int:
 
     checks = {
         "exists": video.is_file(),
+        "video_sha256": sha256_file(video) if video.is_file() else None,
+        "video_bytes": video.stat().st_size if video.is_file() else None,
         "width": video_stream.get("width"),
         "height": video_stream.get("height"),
         "video_codec": video_stream.get("codec_name"),
@@ -132,11 +147,18 @@ def main() -> int:
             "pixel_format": sorted(compatible_pixel_formats),
             "audio_codec": "aac" if props.get("audioSrc") else None,
         },
+        "policy": {
+            "render_policy": "douyin_h264_1080x1920_aac_420p",
+            "searchpo_policy_sha256": sha256_file(ROOT / "config" / "searchpo_policy.json")
+            if (ROOT / "config" / "searchpo_policy.json").is_file()
+            else None,
+        },
         "checks": checks,
         "errors": errors,
+        "warnings": warnings,
     }
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"render_metadata_check": str(output), "status": result["status"], "errors": errors}, ensure_ascii=False, indent=2))
+    print(json.dumps({"render_metadata_check": str(output), "status": result["status"], "errors": errors, "warnings": warnings}, ensure_ascii=False, indent=2))
     return 0 if not errors else 1
 
 

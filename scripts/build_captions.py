@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import wave
@@ -32,7 +33,12 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+
+from agent_harness.policy import policy_get
+from agent_harness.speech_quality import normalize_voiceover_text
 
 # Punctuation that ends a phrase. Terminal marks imply a longer spoken pause.
 _TERMINAL = "。！？!?…"
@@ -45,6 +51,8 @@ DEFAULT_TAIL_SEC = 0.18
 # A vertical caption bar wraps to ~2 lines; keep a phrase under this spoken
 # weight before we sub-split a long, punctuation-free run.
 DEFAULT_MAX_SEG_CHARS = 24.0
+DEFAULT_MAX_DISPLAY_CHARS = 36
+_LATIN_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'/-]*")
 
 
 def utc_now() -> str:
@@ -63,6 +71,28 @@ def _is_cjk(ch: str) -> bool:
 
 def _is_latin_alnum(ch: str) -> bool:
     return ch.isascii() and ch.isalnum()
+
+
+def _cjk_count(text: str) -> int:
+    return sum(1 for ch in text if _is_cjk(ch))
+
+
+def orphan_caption_texts(segments: list[dict[str, Any]], punch_words: set[str]) -> list[str]:
+    """Return caption snippets that are too isolated to be readable."""
+    orphan_segments: list[str] = []
+    for segment in segments:
+        text = str(segment.get("text") or "").strip()
+        if not text or text in punch_words:
+            continue
+        compact = re.sub(r"\s+", "", text)
+        cjk_chars = _cjk_count(compact)
+        if 0 < cjk_chars <= 2 and len(compact) <= 2:
+            orphan_segments.append(text)
+            continue
+        latin_words = _LATIN_WORD_RE.findall(text)
+        if cjk_chars == 0 and latin_words and len(latin_words) <= 2 and len(compact) <= 24:
+            orphan_segments.append(text)
+    return orphan_segments
 
 
 def char_weight(ch: str) -> float:
@@ -90,17 +120,45 @@ def _text_weight(text: str) -> float:
     return sum(char_weight(c) for c in text)
 
 
-def _chunk_overlong(text: str, max_seg_chars: float) -> list[str]:
+def _safe_display_cut(text: str, max_display_chars: int) -> int:
+    """Find a readable cut point that respects latin words when possible."""
+    limit = min(len(text), max_display_chars)
+    safe = 0
+    for index in range(1, limit + 1):
+        prev = text[index - 1]
+        nxt = text[index] if index < len(text) else ""
+        if not (_is_latin_alnum(prev) and _is_latin_alnum(nxt)):
+            safe = index
+    return safe or limit
+
+
+def _enforce_display_limit(chunks: list[str], max_display_chars: int) -> list[str]:
+    bounded: list[str] = []
+    for chunk in chunks:
+        remaining = chunk.strip()
+        while len(remaining) > max_display_chars:
+            cut = _safe_display_cut(remaining, max_display_chars)
+            head = remaining[:cut].strip()
+            if head:
+                bounded.append(head)
+            remaining = remaining[cut:].strip()
+        if remaining:
+            bounded.append(remaining)
+    return bounded
+
+
+def _chunk_overlong(text: str, max_seg_chars: float, max_display_chars: int = DEFAULT_MAX_DISPLAY_CHARS) -> list[str]:
     """Split one long, punctuation-free run into near-equal chunks (no orphans).
 
     Breaks only at safe boundaries (never inside a latin word) so we avoid
     awkward single-character tails.
     """
     total = _text_weight(text)
-    if total <= max_seg_chars:
+    if total <= max_seg_chars and len(text) <= max_display_chars:
         return [text]
-    parts = max(2, round(total / max_seg_chars + 0.4999))
+    parts = max(2, round(max(total / max_seg_chars, len(text) / max_display_chars) + 0.4999))
     target = total / parts
+    target_chars = max(1, len(text) / parts)
     chunks: list[str] = []
     buf: list[str] = []
     weight = 0.0
@@ -110,17 +168,22 @@ def _chunk_overlong(text: str, max_seg_chars: float) -> list[str]:
         weight += char_weight(ch)
         nxt = chars[i + 1] if i + 1 < len(chars) else ""
         safe_boundary = not (_is_latin_alnum(ch) and _is_latin_alnum(nxt))
-        if weight >= target and safe_boundary and len(chunks) < parts - 1:
+        display_len = len("".join(buf).strip())
+        if (weight >= target or display_len >= target_chars) and safe_boundary and len(chunks) < parts - 1:
             chunks.append("".join(buf).strip())
             buf = []
             weight = 0.0
     tail = "".join(buf).strip()
     if tail:
         chunks.append(tail)
-    return [c for c in chunks if c]
+    return _enforce_display_limit([c for c in chunks if c], max_display_chars)
 
 
-def split_phrases(text: str, max_seg_chars: float = DEFAULT_MAX_SEG_CHARS) -> list[dict[str, Any]]:
+def split_phrases(
+    text: str,
+    max_seg_chars: float = DEFAULT_MAX_SEG_CHARS,
+    max_display_chars: int = DEFAULT_MAX_DISPLAY_CHARS,
+) -> list[dict[str, Any]]:
     """Split text into display phrases, recording the trailing punctuation.
 
     Phrases break first at natural punctuation pauses (so caption changes land on
@@ -146,7 +209,7 @@ def split_phrases(text: str, max_seg_chars: float = DEFAULT_MAX_SEG_CHARS) -> li
 
     phrases: list[dict[str, Any]] = []
     for phrase in raw:
-        chunks = _chunk_overlong(phrase["text"], max_seg_chars)
+        chunks = _chunk_overlong(phrase["text"], max_seg_chars, max_display_chars=max_display_chars)
         for j, chunk in enumerate(chunks):
             # Only the final chunk carries the natural trailing punctuation pause.
             phrases.append({"text": chunk, "punct": phrase["punct"] if j == len(chunks) - 1 else ""})
@@ -165,8 +228,9 @@ def build_caption_segments(
     lead_sec: float = DEFAULT_LEAD_SEC,
     tail_sec: float = DEFAULT_TAIL_SEC,
     max_seg_chars: float = DEFAULT_MAX_SEG_CHARS,
+    max_display_chars: int = DEFAULT_MAX_DISPLAY_CHARS,
 ) -> list[dict[str, Any]]:
-    phrases = split_phrases(text, max_seg_chars=max_seg_chars)
+    phrases = split_phrases(text, max_seg_chars=max_seg_chars, max_display_chars=max_display_chars)
     if not phrases:
         return []
     if not audio_sec or audio_sec <= 0:
@@ -245,30 +309,56 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
-    parser.add_argument("--text", help="Override voiceover text (debug); skips reading deepseek_polish.json.")
+    parser.add_argument("--text", help="Override voiceover text for local debugging.")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
-    if args.text is not None:
-        text = args.text
-    else:
-        polish_path = run_dir / "deepseek_polish.json"
-        if not polish_path.exists():
-            raise SystemExit(f"deepseek_polish.json missing: {polish_path}")
-        text = str(json.loads(polish_path.read_text(encoding="utf-8")).get("voiceover_text") or "").strip()
-    if not text:
-        raise SystemExit("no voiceover_text available to build captions")
-
     manifest_path = run_dir / "voiceover_manifest.json"
+    manifest: dict[str, Any] = {}
     audio_sec: float | None = None
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         audio_sec = manifest.get("audio_duration_sec")
     if not audio_sec:
         raise SystemExit("voiceover_manifest.json missing audio_duration_sec")
+    if args.text is not None:
+        text = args.text
+    else:
+        text = str(
+            manifest.get("normalized_voiceover_text")
+            or manifest.get("voiceover_text")
+            or ""
+        ).strip()
+        if not text:
+            polish_path = run_dir / "deepseek_polish.json"
+            if not polish_path.exists():
+                raise SystemExit(f"deepseek_polish.json missing: {polish_path}")
+            text = str(json.loads(polish_path.read_text(encoding="utf-8")).get("voiceover_text") or "").strip()
+    text = normalize_voiceover_text(text)
+    if not text:
+        raise SystemExit("no voiceover_text available to build captions")
 
-    segments = build_caption_segments(text, audio_sec, fps=args.fps)
+    max_display_chars = int(policy_get("quality_gate.max_caption_chars", DEFAULT_MAX_DISPLAY_CHARS))
+    segments = build_caption_segments(text, audio_sec, fps=args.fps, max_display_chars=max_display_chars)
     end_frame = segments[-1]["end_frame"] if segments else 0
+    punch_words = {str(item).strip() for item in policy_get("visual_audit.punch_words", [])}
+    orphan_segments = orphan_caption_texts(segments, punch_words)
+    invalid_ranges = [
+        segment
+        for segment in segments
+        if segment["start_frame"] < 0 or segment["end_frame"] <= segment["start_frame"]
+    ]
+    audit = {
+        "schema_version": 1,
+        "created_at": utc_now(),
+        "status": "pass" if not orphan_segments and not invalid_ranges else "fail",
+        "segment_count": len(segments),
+        "audio_duration_sec": audio_sec,
+        "fps": args.fps,
+        "orphan_segments": orphan_segments,
+        "invalid_ranges": invalid_ranges,
+        "max_segment_chars": max([len(segment["text"]) for segment in segments] or [0]),
+    }
     payload = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -281,8 +371,10 @@ def main() -> int:
     }
     out_path = run_dir / "captions.json"
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"captions": str(out_path), "segment_count": len(segments), "end_frame": end_frame, "audio_duration_sec": audio_sec}, ensure_ascii=False, indent=2))
-    return 0
+    audit_path = run_dir / "caption_audit.json"
+    audit_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"captions": str(out_path), "caption_audit": str(audit_path), "segment_count": len(segments), "end_frame": end_frame, "audio_duration_sec": audio_sec}, ensure_ascii=False, indent=2))
+    return 0 if audit["status"] == "pass" else 1
 
 
 if __name__ == "__main__":

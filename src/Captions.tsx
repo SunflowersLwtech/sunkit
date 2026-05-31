@@ -37,6 +37,18 @@ export const Captions: React.FC<CaptionsProps> = ({segments}) => {
 
   return (
     <div className="captions-container" style={{opacity: enter}}>
+      <svg className="caption-svg-defs" aria-hidden="true" focusable="false">
+        <filter id="caption-stroke" colorInterpolationFilters="sRGB">
+          <feMorphology in="SourceAlpha" operator="dilate" radius="2.8" result="stroke" />
+          <feGaussianBlur in="stroke" stdDeviation="0.65" result="softStroke" />
+          <feFlood floodColor="rgba(0, 0, 0, 0.92)" result="strokeColor" />
+          <feComposite in="strokeColor" in2="softStroke" operator="in" result="coloredStroke" />
+          <feMerge>
+            <feMergeNode in="coloredStroke" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </svg>
       <div
         className="captions-track"
         style={{transform: `translateY(${interpolate(enter, [0, 1], [12, 0])}px)`}}

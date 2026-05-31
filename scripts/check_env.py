@@ -6,11 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_harness.side_effect_tiers import resolve_side_effect_tier  # noqa: E402
 
 
 REQUIRED_GROUPS = {
     "data_optional": ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "HUGGINGFACE_TOKEN"],
+    "research_optional": ["ANYSEARCH_API_KEY"],
     "agent_llm_optional": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY"],
     "script_agents_required": ["DEEPSEEK_API_KEY", "GOOGLE_AGENT_PLATFORM_API", "GOOGLE_API_KEY"],
     "remotion_lambda_required": [
@@ -63,6 +71,7 @@ def main() -> int:
         help="Command tier to validate.",
     )
     args = parser.parse_args()
+    side_effect_tier = resolve_side_effect_tier(args.profile)
 
     env_path = Path(args.env_file).expanduser().resolve()
     values = effective_values(env_path)
@@ -102,6 +111,7 @@ def main() -> int:
         "env_file": str(env_path),
         "exists": env_path.exists(),
         "profile": args.profile,
+        "side_effect_tier": side_effect_tier.to_dict(),
         "groups": groups,
         "social_auto_upload": social_auto_upload,
         "publish_safety": {

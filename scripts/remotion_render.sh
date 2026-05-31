@@ -19,10 +19,37 @@ AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
 IMAGE_FORMAT="${SEARCHPO_RENDER_IMAGE_FORMAT:-jpeg}"
 JPEG_QUALITY="${SEARCHPO_RENDER_JPEG_QUALITY:-95}"
 
+resolve_node_bin() {
+  local candidates=(
+    "${SEARCHPO_NODE_BIN:-}"
+    "${NODE_BIN:-}"
+    "/opt/homebrew/bin/node"
+    "/usr/local/bin/node"
+    "$(command -v node || true)"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      echo "$candidate"
+      return
+    fi
+  done
+}
+
+NODE_RUNTIME="$(resolve_node_bin)"
+if command -v npx >/dev/null 2>&1; then
+  REMOTION_CMD=(npx remotion)
+elif [[ -f node_modules/.bin/remotion && -n "$NODE_RUNTIME" ]]; then
+  REMOTION_CMD=("$NODE_RUNTIME" node_modules/.bin/remotion)
+else
+  echo "Missing Remotion CLI: install npm/npx or keep node_modules/.bin/remotion available." >&2
+  exit 1
+fi
+
 case "$ACTION" in
   local)
     RENDER_OUT="${SEARCHPO_RENDER_OUTPUT:-out/searchpo-radar.mp4}"
-    npx remotion render SearchpoRadar "$RENDER_OUT" \
+    "${REMOTION_CMD[@]}" render SearchpoRadar "$RENDER_OUT" \
       --props "$PROPS_FILE" \
       --codec=h264 \
       --pixel-format=yuv420p \
@@ -33,7 +60,7 @@ case "$ACTION" in
     ;;
   cover)
     COVER_OUT="${SEARCHPO_COVER_OUTPUT:-out/searchpo-cover.jpg}"
-    npx remotion still SearchpoCover "$COVER_OUT" \
+    "${REMOTION_CMD[@]}" still SearchpoCover "$COVER_OUT" \
       --props "$PROPS_FILE" \
       --image-format=jpeg \
       --jpeg-quality="$JPEG_QUALITY"

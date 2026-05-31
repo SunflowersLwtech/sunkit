@@ -2,19 +2,42 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Searchpo Remotion Render Payload",
   "type": "object",
-  "required": ["title", "summary", "source", "url", "cards", "footer"],
+  "required": ["title", "displayTitle", "summary", "source", "url", "audioSrc", "voiceoverText", "captions", "durationInFrames", "fps", "footer"],
   "additionalProperties": true,
   "properties": {
     "badge": {"type": "string"},
     "title": {"type": "string", "minLength": 1},
+    "displayTitle": {"type": "string", "minLength": 1},
+    "speechTitle": {"type": "string"},
     "summary": {"type": "string", "minLength": 1},
     "source": {"type": "string"},
     "url": {"type": "string"},
     "score": {"type": ["number", "string", "null"]},
     "metricLine": {"type": "string"},
+    "audienceMetricLine": {"type": "string"},
+    "evidenceLevel": {"type": "string"},
+    "qualityWarnings": {"type": "array", "items": {"type": "string"}},
+    "verificationNextStep": {"type": "string"},
+    "videoSpec": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": ["string", "null"]},
+        "id": {"type": ["string", "null"]},
+        "schema_version": {"type": ["number", "null"]}
+      }
+    },
+    "sourceMap": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": ["string", "null"]},
+        "source_count": {"type": "number"}
+      }
+    },
     "cards": {
       "type": "array",
-      "minItems": 3,
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": ["label", "value", "detail"],
@@ -22,6 +45,45 @@
           "label": {"type": "string"},
           "value": {"type": "string"},
           "detail": {"type": "string"}
+        }
+      }
+    },
+    "storyboard": {
+      "type": "object",
+      "required": ["version", "scenes"],
+      "properties": {
+        "version": {"type": "number"},
+        "style": {
+          "type": "object",
+          "properties": {
+            "theme": {"enum": ["radar", "minimal", "editorial"]},
+            "density": {"enum": ["minimal", "standard", "rich"]},
+            "motion": {"enum": ["calm", "standard", "punchy"]},
+            "accent": {"type": "string", "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"},
+            "chrome": {
+              "type": "object",
+              "properties": {
+                "topbar": {"type": "boolean"},
+                "progress": {"type": "boolean"},
+                "beam": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "required": ["type", "props"],
+            "properties": {
+              "type": {"enum": ["statement", "context", "stat", "bullets", "card", "compare", "quote", "cta"]},
+              "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+              "emphasis": {"enum": ["low", "normal", "high"]},
+              "props": {"type": "object"}
+            }
+          }
         }
       }
     },

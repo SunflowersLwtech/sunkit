@@ -4,7 +4,7 @@
 
 | Priority | Source | What It Finds | Method | Endpoint |
 | --- | --- | --- | --- | --- |
-| P0 | GitHub Trending | fresh OSS repos and repo metrics | HTML + optional Search API fallback | `https://github.com/trending` |
+| P0 | GitHub Trending | fresh OSS repos and repo metrics | HTML + optional Search API secondary source | `https://github.com/trending` |
 | P0 | Hacker News Algolia | developer discussion, objections, early adoption | JSON API | `https://hn.algolia.com/api/v1/search_by_date` |
 | P0 | Product Hunt | new AI/SaaS/tool launches | Atom feed | `https://www.producthunt.com/feed` |
 | P0 | Hugging Face | models, datasets, Spaces | JSON API | `https://huggingface.co/api/models` |
@@ -35,17 +35,23 @@ The target candidate has:
 - `data_prep/scripts/probe_sources.py`: endpoint reachability probe.
 - `data_prep/scripts/run_pipeline.py`: live source fetch, raw JSONL, normalize, dedupe, and shortlist.
 - `agent_harness/core.py`: tracked harness core with SQLite tasks, events, artifacts, and gates.
-- `agent_harness/stages.py`: main/impl agent flow over shortlist loading, candidate selection, task planning, optional provider stages, render payloads, publishing package, and release gates.
+- `agent_harness/stages.py`: main/research/impl agent flow over shortlist loading, candidate selection, research enrichment, task planning, optional provider stages, render payloads, publishing package, and release gates.
+- `agent_harness/research.py`: AnySearch enrichment, FactBank, TopicBrief, and enriched cross-check generation.
+- `agent_harness/service_artifacts.py`: local service artifact contracts for TopicBrief, FactBank, Script, ScenePlan, VideoSpec, DeliveryPackage, source maps, environment manifests, and optional analytics feedback.
 - `agent_harness/run_agent_loop.py`: CLI entrypoint for the tracked local harness over the shortlist; emits render, post, board, and review artifacts.
-- `scripts/deepseek_polish.py`: DeepSeek copy-polish adapter. Fails fast on missing key/provider error; no placeholder output.
+- `scripts/deepseek_polish.py`: DeepSeek copy-polish and adaptive-storyboard adapter. Fails fast on missing key/provider error; no placeholder output.
+- `scripts/content_scorer.py`: Gemini content evaluator. `improve` now feeds revision attempts instead of being a publish warning.
 - `scripts/gemini_tts.py`: Gemini TTS adapter that writes `voiceover.wav` plus a manifest.
+- `scripts/video_quality_loop.py`: render/audit/improve loop that retries repairable video issues and only binds a passing attempt.
 - `scripts/gemini_visual_audit.py`: Gemini MP4 visual-audit adapter. Its `pass` verdict is required before publish.
-- `openclaw.plugin.json`: plugin-style bundle manifest for agent hosts.
 - `INSTALL_FOR_AGENTS.md`: concise install and verification protocol for agent hosts.
 - `skills/`: project-level agent skills that are the source of truth for both Claude Code and Codex.
-- `.claude/skills/`, `.claude/agents/`, and `.codex/skills/`: generated/project bridge surfaces for the main/impl runtime split.
-- `src/`: Remotion vertical video composition using tracked fixture defaults plus run-scoped props.
-- `render/prepare_remotion_input.py`: writes `runtime/.../remotion_input_props.json` and ignored `public/generated/` assets; it does not mutate tracked fixtures.
+- `agents/`: source definitions for the three-agent Claude/Codex team.
+- `docs/agent-team-alignment.md`: Claude/Codex agent-team mechanism mapping and Searchpo alignment rules.
+- `.claude/skills/`, `.claude/agents/`, `.codex/skills/`, and `.codex/agents/`: generated/project bridge surfaces for the main/research/impl runtime split.
+- `agent_harness/storyboard.py` and `src/storyboard.ts`: shared storyboard contract/timing rules for adaptive scene graphs.
+- `src/`: Remotion vertical video composition using validated storyboard scenes plus run-scoped props.
+- `render/prepare_remotion_input.py`: writes `runtime/.../remotion_input_props.json`, validates/synthesizes `storyboard`, and writes ignored `public/generated/` assets; it does not mutate tracked fixtures.
 - `scripts/run_e2e.sh`: profile-driven E2E from source probes through render and Douyin checks.
 - `docs/`: production structure, claim governance, runbooks, and env ownership.
 - `contracts/schemas/`: JSON contracts for generated payloads and post manifests.
@@ -60,46 +66,73 @@ Probe current source availability:
 ./data_prep/scripts/probe_sources.py
 ```
 
-Run the safe local E2E. This is the default production contract check: no DeepSeek/Gemini provider calls, no AWS/S3/Lambda, and no live Douyin upload.
+Run the no-provider contract path. This is safe for local wiring checks, but it is not publishable and must not fabricate audio, captions, visual evidence, or publish success.
 
 ```bash
 npm install
 npm run e2e
 ```
 
-This does:
+For a publishable local render, use the provider tier:
+
+```bash
+npm run e2e:provider
+```
+
+The full provider/local path does:
 
 1. `.env` coverage audit without printing secret values.
 2. live source probe and source fetch.
 3. raw/normalized/dedupe/filter/shortlist artifacts under `runtime/artifacts/YYYY-MM-DD/<run_id>/`.
-4. local contract-mode harness with explicit task board and gates.
-5. run-scoped Remotion props under the run directory.
-6. local Remotion render to `out/searchpo-radar.mp4`.
-7. manifest-level Douyin contract check with `SEARCHPO_DOUYIN_LIVE=0`.
+4. detailed canonical URL evidence fetch plus cross-check under `evidence_bundle.json` and `cross_check_review.json`.
+5. provider-mode harness with explicit task board and gates.
+6. content improvement loop: DeepSeek draft/revision plus Gemini content score until the policy target is met.
+7. full-service planning artifacts: `topic_brief.json`, `fact_bank.json`, `source_map.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `environment_manifest.json`, and optional `analytics_feedback.json`.
+8. run-scoped Remotion props under the run directory, including a validated `storyboard` compiled from `video_spec.json` into `render_payload.json`.
+9. video quality loop: render, metadata check, deterministic audit, Gemini visual audit, repair/backtrack when allowed.
+10. final artifact binding to `runtime/artifacts/<date>/<run_id>/video/final.mp4` and `cover/final.jpg` only after a passing video attempt.
+11. manifest-level Douyin contract check with `SEARCHPO_DOUYIN_LIVE=0`.
+12. `delivery_package.json` is written before final truth; `run_final.json` is written last.
 
 Explicit higher-side-effect tiers:
 
 ```bash
-npm run e2e:provider  # DeepSeek + Gemini provider calls, local render, adapter preflight
+npm run e2e:provider  # DeepSeek + Gemini provider calls, local render, deterministic/model audit, adapter preflight
 npm run e2e:lambda    # provider calls plus S3/Lambda render
 npm run e2e:live      # provider calls plus S3/Lambda render plus live Douyin upload
 ```
+
+Side-effect matrix:
+
+| Command | execution_profile | render_mode | publish_mode | Allowed effects | Forbidden effects | Success truth |
+| --- | --- | --- | --- | --- | --- | --- |
+| `npm run e2e` | `contract` | `none` | `none` | Public-source fetch, ignored `runtime/artifacts/...`, evidence/copy preflight | Provider APIs, media render, AWS/S3, Douyin upload | Cross-check and content preflight pass; no final media, `artifact_manifest.json`, publish check, or `run_final.json` |
+| `npm run e2e:provider` | `provider` | `local` | `contract-check` | DeepSeek/Gemini, local Remotion MP4/cover, visual audits, Douyin adapter preflight | AWS/S3 render, live Douyin upload | `artifact_manifest.json`, `run_final.json`, final MP4/cover, audits, and Douyin contract gate pass |
+| `npm run e2e:lambda` | `lambda` | `lambda` | `contract-check` | Provider APIs plus Remotion Lambda/S3 render with private output and lifecycle cleanup | Live Douyin upload | Same as provider, with `render_mode=lambda` and fresh Lambda site/render evidence |
+| `npm run e2e:live` | `live` | `lambda` | `live` | Provider APIs, Lambda/S3 render, live Douyin upload | Unverified final success labels | Remote identity verification passes; `submitted` alone is failure |
 
 Run individual stages:
 
 ```bash
 python3 data_prep/scripts/run_pipeline.py
-SEARCHPO_AGENT_MODE=contract python3 agent_harness/run_agent_loop.py
-python3 render/prepare_remotion_input.py
-npm run render:run
-python3 scripts/gemini_visual_audit.py "$(cat runtime/latest_run.txt)" --video out/searchpo-radar.mp4
+SEARCHPO_AGENT_MODE=provider python3 agent_harness/run_agent_loop.py
+python3 scripts/video_quality_loop.py "$(cat runtime/latest_run.txt)" --execution-profile provider --render-mode local --publish-mode contract-check
 npm run douyin:check
+python3 scripts/finalize_run.py "$(cat runtime/latest_run.txt)" --publish-mode contract-check
 ```
 
 Run with an operator-specified topic instead of the daily source radar selecting a candidate:
 
 ```bash
-SEARCHPO_TOPIC="Claude Code 多代理工作流怎么拆分职责" npm run e2e:topic
+SEARCHPO_TOPIC="Claude Code 多代理工作流怎么拆分职责" \
+SEARCHPO_TOPIC_URL="https://example.com/source-or-brief" \
+npm run e2e:topic
+```
+
+Run directly from a link. This still pulls detailed source evidence and cross-checks it before copy generation:
+
+```bash
+SEARCHPO_LINK="https://github.com/owner/repo" npm run e2e:provider
 ```
 
 Optional boundaries:
@@ -111,17 +144,24 @@ SEARCHPO_TOPIC_URL="https://example.com/source-or-brief" \
 npm run e2e:topic
 ```
 
-Topic mode skips source probing and shortlist generation, writes `subject_request.json`, then reuses the same harness, Remotion, visual-audit, and Douyin gate path. Without `SEARCHPO_TOPIC_URL`, the claim ledger marks the run as an operator-topic analysis and keeps factual claims conditional.
+Topic contract mode skips source probing and shortlist generation, writes `subject_request.json`, then fetches the canonical URL, runs cross-check, and runs the no-provider text preflight/post-package structure checks only. Use `SEARCHPO_TOPIC="..." SEARCHPO_TOPIC_URL="..." npm run e2e:provider` for a publishable topic render. Without `SEARCHPO_TOPIC_URL` or `SEARCHPO_LINK`, the run fails before copy generation because content quality requires source evidence.
 
 The tracked harness writes these per-run files under `runtime/artifacts/YYYY-MM-DD/<run_id>/`:
 
 - `harness_board.sqlite3`: task board with stage tasks, events, artifacts, and gates.
-- `agent_run.json`: run summary plus board snapshot, including `subject_input_mode`.
-- `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `render_payload.json`, `agent_review.json`.
-- Provider profiles also write `deepseek_polish.json`, `voiceover_manifest.json`, and `gemini_visual_audit.json`.
+- `agent_run.json`: harness loop summary plus board snapshot, including `subject_input_mode`.
+- `evidence_bundle.json`: fetched source details from the canonical URL plus AnySearch supplemental extracts; GitHub repo runs require repo API and README evidence.
+- `anysearch_research.json`, `topic_brief.json`, `fact_bank.json`, `source_map.json`, and `research_brief.json`: research enrichment outputs required before content planning; `research_brief.json` is a compatibility view of `topic_brief.json`.
+- `cross_check_review.json`: structured source-bound content review, source facts, caveats, constructive angles, and research sufficiency.
+- Contract mode writes `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `agent_review.json`, `evidence_bundle.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, and `post/claims_ledger.json`; it does not write final media, `artifact_manifest.json`, or `run_final.json`.
+- Provider/live modes write `artifact_manifest.json`: final MP4/cover/render/caption/audio hashes.
+- Provider/live modes write `run_final.json`: final source of truth written after render, audit, and publish checks.
+- Provider/live modes also write `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json`, and `delivery_package.json`; `video_spec.json` is the renderer-neutral contract, `render_payload.json` is the Remotion adapter output, and `cards` remains a compatibility field.
+- Provider profiles also write `content_optimization_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `caption_audit.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, and `gemini_visual_audit.json`.
+- `video/final.mp4` and `cover/final.jpg`: the only publishable media paths. `out/` files are previews only.
 - `post/`: Douyin contract-check package, claim ledger, and cross-check review.
 
-This is still a synchronous local harness, but the ownership model is explicit: the main agent owns task-plan state and release gates, while the implementation agent runs scripts, Remotion, audit, and publish adapters. Project skills under `skills/` encode that split for Claude Code and Codex agent-team runs.
+This is still a synchronous local harness, but the ownership model is explicit: the main agent owns task-plan state and release gates, the research agent owns source enrichment and cross-check evidence, and the implementation agent runs scripts, Remotion, audit, and publish adapters. Project skills under `skills/` encode that split for Claude Code and Codex agent-team runs.
 
 Validate static contracts and safe command wiring:
 
@@ -134,11 +174,12 @@ npm run ci:static
 The intended agent-team shape is:
 
 - `searchpo-main-agent`: assigns tasks, owns `main_task_plan.json`, validates gates, and decides whether publish may proceed.
-- `searchpo-impl-agent`: runs `scripts/deepseek_polish.py`, `scripts/gemini_tts.py`, Remotion render commands, `scripts/gemini_visual_audit.py`, and `scripts/douyin_upload_check.sh`.
-- `remotion-best-practices`: governs Remotion composition, captions, cover output, render metadata, and video-quality edits.
-- `searchpo-plugin-check`: validates the plugin manifest, resolver shared deps, skill metadata, and bridge sync.
+- `searchpo-research-agent`: runs AnySearch enrichment, writes `fact_bank.json` and `research_brief.json`, and strengthens `cross_check_review.json`.
+- `searchpo-impl-agent`: runs the content improve loop, `scripts/gemini_tts.py`, `scripts/video_quality_loop.py`, and `scripts/douyin_upload_check.sh`. DeepSeek belongs to this implementation agent.
+- `remotion-best-practices`: governs storyboard scene blocks, captions, cover output, render metadata, and video-quality edits.
+- `searchpo-plugin-check`: validates the Claude/Codex bridge map, resolver shared deps, skill/command/agent metadata, and bridge sync.
 
-Project instructions live in `AGENTS.md`, `CLAUDE.md`, `openclaw.plugin.json`, `INSTALL_FOR_AGENTS.md`, `skills/`, `.claude/skills/`, `.codex/skills/`, and `.claude/agents/searchpo-impl-agent.md`. The durable skill source is `skills/`; regenerate host bridges with:
+Project instructions live in `AGENTS.md`, `CLAUDE.md`, `INSTALL_FOR_AGENTS.md`, `skills/`, `commands/`, `agents/`, `.claude/skills/`, `.claude/commands/`, `.claude/agents/`, `.codex/skills/`, `.codex/commands/`, and `.codex/agents/`. The durable skill source is `skills/`; the durable slash-command source is `commands/`; the durable agent-team source is `agents/`. Regenerate host bridges with:
 
 ```bash
 npm run skills:sync
@@ -148,15 +189,15 @@ npm run skills:check
 
 `skills/RESOLVER.md` is the short dispatcher. `skills/_AGENT_README.md` is the skill-directory contract. Both are copied into the Claude and Codex project bridge directories by `npm run skills:sync`.
 
-From Claude Code, run:
+From Claude Code or Codex, run:
 
 ```text
 /searchpo-full-flow
 ```
 
-From Codex, ask for the `searchpo-main-agent` flow or open `skills/searchpo-main-agent/SKILL.md` if the active session has not loaded the project skill registry yet. `npm run skills:sync:codex` installs user-level Codex symlinks under `~/.codex/skills/searchpo-*` for future sessions.
+`npm run skills:sync:codex` installs user-level Codex skill symlinks under `~/.codex/skills/searchpo-*`, writes `~/.codex/agents/searchpo-*.toml`, and refreshes `.codex/commands/searchpo-full-flow.md` plus `.codex/agents/searchpo-*.toml` inside this project.
 
-If the user says `发抖音`, `发布`, `live`, or `post --live`, the Claude Code flow should run `npm run e2e:live`; otherwise it stays in contract-check mode.
+If the user says `发抖音`, `发布`, `live`, or `post --live`, `/searchpo-full-flow` runs `npm run e2e:live`; otherwise it runs `npm run e2e:provider` for a publishable local render. Use `npm run e2e` only for no-provider contract wiring checks.
 
 ## API Keys
 
@@ -214,7 +255,7 @@ npm run lambda:render  # invoke Lambda render and download out/searchpo-radar-la
 ```
 
 The Lambda path maps local `REMOTION_AWS_*` keys to the AWS SDK env names before invoking the official Remotion CLI. The site name defaults to `REMOTION_LAMBDA_SITE_NAME` or `searchpo-radar`, and render commands use the run-scoped props recorded by `render/prepare_remotion_input.py`.
-`REMOTION_LAMBDA_CONCURRENCY` defaults to `4` to avoid account-level Lambda rate limits during small E2E renders.
+`REMOTION_LAMBDA_CONCURRENCY` defaults to `4` to avoid account-level Lambda rate limits during small E2E renders. Set `SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA` only when you intentionally want frame-count based partitioning; otherwise the Lambda wrapper passes concurrency. `REMOTION_LAMBDA_DELETE_AFTER` is forwarded to both video and cover still renders, and requires folder expiry to be enabled on the bucket.
 
 ## Publishing Boundaries
 
@@ -228,7 +269,7 @@ Safe default checks:
 npm run douyin:check
 ```
 
-This verifies the local checkout, Douyin CLI contract, rendered MP4, upload manifest, and optionally runs `sau douyin check --account <name>` through `SOCIAL_AUTO_UPLOAD_CLI` when `DOUYIN_ACCOUNT_NAME` or `SOCIAL_UPLOAD_ACCOUNT_NAME` is set.
+This verifies the local checkout, Douyin CLI contract, run-scoped final MP4/cover hashes, upload manifest, and optionally runs `sau douyin check --account <name>` through `SOCIAL_AUTO_UPLOAD_CLI` when `DOUYIN_ACCOUNT_NAME` or `SOCIAL_UPLOAD_ACCOUNT_NAME` is set.
 
 Install or refresh the uploader runtime:
 
@@ -262,5 +303,7 @@ DOUYIN_ACCOUNT_NAME=<account_name> npm run e2e:live
 ```
 
 Live Douyin upload defaults to headed browser mode so password or risk-control prompts can be handled during submit. Set `SOCIAL_UPLOAD_HEADED=0` only when you know headless publishing works for the account.
+
+`submitted` is only an intermediate adapter result. A live run does not pass until `post/post_publish_verification.json` records remote item identity, status, title, duration, cover evidence, and the local video/cover hashes.
 
 X/Twitter keys remain optional read-source inputs only. They are not the default publishing path.

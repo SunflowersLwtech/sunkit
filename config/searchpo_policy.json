@@ -3,6 +3,15 @@
   "content": {
     "default_summary": "Fresh signal detected from the daily source sweep.",
     "source_registry_label": "source registry",
+    "source_labels": {
+      "github_trending": "GitHub Trending",
+      "hacker_news_algolia": "Hacker News",
+      "product_hunt_feed": "Product Hunt",
+      "huggingface_models": "Hugging Face Models",
+      "arxiv_ai_ml_cl": "arXiv AI/ML",
+      "v2ex_hot": "V2EX Hot",
+      "kr36_feed": "36Kr"
+    },
     "profiles": {
       "daily_radar": {
         "badge": "今日 AI 工具热点",
@@ -32,8 +41,7 @@
           "desc_lines": [
             "今天的 searchpo 雷达先看这个信号：{title}。",
             "来源边界：{source}；候选分数 {score}。",
-            "它现在只是进入候选池，不是验证后的爆款结论。",
-            "原始来源：{url}"
+            "它现在只是进入候选池，不是验证后的爆款结论。"
           ],
           "tags": ["AI工具", "开源项目", "产品观察", "searchpo"]
         },
@@ -62,35 +70,42 @@
       },
       "operator_topic": {
         "badge": "指定主题分析",
-        "source": "operator topic",
-        "metric_template": "operator supplied topic",
-        "cta": "先把判断边界讲清楚，再决定是否发布。",
-        "footer": "来源: operator topic · 发布前保留证据边界",
+        "source": "指定主题",
+        "metric_template": "指定主题 · 待验证",
+        "audience_metric_template": "指定主题 · 待验证",
+        "cta": "没有实测证据时，只按观察稿处理。",
+        "footer": "来源: 指定主题 · 未实测内容不做结论",
         "manual_source_label": "指定主题",
+        "evidence_level": "operator_topic_unverified",
+        "verification_next_step": "下一步应补充 demo、源码细节或真实使用记录，再判断是否值得发布。",
         "cards": [
           {
-            "label": "要回答的问题",
+            "label": "用户痛点",
             "value": "{title}",
-            "detail": "{summary}"
+            "detail": "这只是指定主题观察，先说明用户想解决什么。"
           },
           {
-            "label": "证据边界",
+            "label": "已知证据",
             "value": "{evidence_value}",
-            "detail": "未附外部来源时，只输出分析框架，不做事实定论。"
+            "detail": "{evidence_detail}"
           },
           {
-            "label": "发布前检查",
-            "value": "保留审核和 live gate",
-            "detail": "视频、文案、发布包仍走同一套 gate。"
+            "label": "未验证部分",
+            "value": "无实测，不包装成结论",
+            "detail": "没有 demo、代码运行或真实使用记录时，只能描述观察点，不能下强结论。"
+          },
+          {
+            "label": "下一步验证",
+            "value": "跑通 demo 再下判断",
+            "detail": "{verification_next_step}"
           }
         ],
         "douyin": {
           "title_template": "主题分析：{title}",
           "desc_lines": [
             "这期按指定主题做一版分析：{title}。",
-            "当前输入来自 operator topic，不等同于 searchpo 自动选出的热点结论。",
-            "涉及事实判断仍需要在发布前补充来源或人工确认。",
-            "参考来源：{url}"
+            "当前输入来自指定主题，不等同于 searchpo 自动选出的热点结论。",
+            "涉及事实判断仍需要在发布前补充来源、demo 或人工确认。"
           ],
           "tags": ["AI工具", "产品观察", "主题分析", "searchpo"]
         },
@@ -150,7 +165,7 @@
       "selection_source": "operator_topic",
       "source_id": "operator_topic",
       "manual_url_scheme": "manual-topic://",
-      "summary_template": "Operator-specified topic for searchpo analysis: {topic}",
+      "summary_template": "指定主题观察：{topic}。当前没有外部来源或实测记录时，只能做待验证分析。",
       "risk_flag_without_url": "operator_topic_requires_source_review",
       "default_score": 8.0,
       "reliability": {
@@ -158,6 +173,29 @@
         "without_url": 0.45
       }
     }
+  },
+  "research": {
+    "enabled": true,
+    "anysearch_skill_dir": "vendor/anysearch-skill",
+    "timeout_seconds": 30,
+    "max_search_queries": 3,
+    "max_results_per_query": 5,
+    "max_extracts": 4,
+    "min_supplemental_sources": 2,
+    "min_extract_chars": 180,
+    "require_independent_hosts": true,
+    "exclude_primary_host": true,
+    "fail_on_unavailable": true,
+    "raw_output_max_chars": 100000,
+    "ignored_hosts": [
+      "api.anysearch.com",
+      "anysearch.com"
+    ],
+    "search_query_templates": [
+      "{title} {host} official documentation source",
+      "{title} review limitations evidence",
+      "{title} examples adoption risks"
+    ]
   },
   "data_prep": {
     "regex": {
@@ -204,21 +242,212 @@
     "variant_count": 3,
     "variant_temperature": 0.5,
     "temperatures": [0.3, 0.5, 0.7],
-    "required_keys": ["polished_title", "voiceover_text", "douyin_title", "douyin_desc", "tags", "cards"],
+    "required_keys": ["polished_title", "voiceover_text", "douyin_title", "douyin_desc", "tags", "cards", "storyboard"],
     "hook_terms": ["为什么", "怎么", "竟然", "原来", "居然", "到底"],
     "system": "You polish source-bounded Chinese short-video copy for a Douyin tech-hotspot video. Do not invent facts. Do not claim unsupported superiority, market leadership, funding, benchmarks, or production maturity. Respect the forbidden claim terms from the user payload. Write like a sharp Chinese tech creator, not a dashboard report. Return strict JSON only.",
     "constraints": [
       "Use only the selected_candidate and content_plan facts.",
       "Return the JSON object immediately; do not include prose, markdown, analysis, or reasoning text.",
       "Voiceover must be Mandarin Chinese, {voiceover_chars_range}, suitable for a {video_seconds} second vertical video.",
+      "If selected_candidate has no demo, source code detail, benchmark, or real usage evidence, write it as a verified-boundary observation draft; do not package it as an industry conclusion.",
       "voiceover_text must explicitly mention at least one required_entity_terms value from the user payload.",
       "Lead with a human hook: why this matters today, not a repo summary.",
+      "Optimize for watch completion with a concrete problem, mechanism, tradeoff, and next verification step; do not pad filler or recite source metadata.",
+      "Invite at most one constructive interaction when natural, such as asking how the viewer would verify the tool; never ask for fake likes, follows, shares, or comment spam.",
+      "Use 2-5 clean Douyin tags tied to the topic or source category; do not stuff broad, repeated, or punctuation-heavy tags.",
+      "Do not put raw URLs, GitHub links, website links, or source paths into public titles, descriptions, captions, cards, or storyboard text.",
+      "Do not use call-to-action wording that asks viewers to try, download, install, use, open, visit, or go to a third-party tool, site, repository, app, plugin, or framework.",
+      "Do not package platform automation, account automation, multi-platform auto-posting, batch upload, auto-login, test-account, or platform-risk-control tooling as a publishable Douyin topic.",
+      "Do not claim secret Douyin ranking thresholds, fixed traffic-pool sizes, fixed completion-rate cutoffs, or a definitive shadowban/限流 diagnosis unless the selected evidence is an official platform-rule source.",
+      "Avoid spam, duplicate, 搬运, 洗稿, 刷量, 批量矩阵, or automation-growth tactics in public copy.",
+      "Do not use hype such as 给AI装超能力, 救世解药, 独家黑科技, 改变行业, 改写协作方式, 颠覆, or 革命性 unless selected_candidate evidence directly proves it.",
       "Mention GitHub Trending only when selected_candidate.source_ids includes github_trending or canonical_url is a github.com/trending URL; otherwise do not use GitHub Trending wording.",
-      "Cards should be Chinese short-video beats: 为什么火, 解决什么, 先别吹.",
+      "Author a storyboard scene graph for the Remotion video instead of forcing every topic into the same card template.",
+      "Allowed storyboard scene types: statement, context, stat, bullets, card, compare, quote, cta.",
+      "Choose 3-6 scenes that fit the content; always include a strong statement opening and a cta closing; use card scenes only when evidence beats need card treatment.",
+      "Allowed style tokens: theme=radar|minimal|editorial, density=minimal|standard|rich, motion=calm|standard|punchy, accent from #ffd60a #72e7ff #ff2d55, chrome topbar/progress/beam booleans.",
+      "On-screen text should track the voiceover beats and evidence boundary, but it does not need to repeat the voiceover word-for-word.",
       "Keep claims conditional and source-bounded.",
-      "Return exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, caveats.",
-      "cards must be 3 objects with label, value, detail."
+      "Return exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, caveats.",
+      "cards is a compatibility summary array with 1-4 objects with label, value, detail; derive it from the key evidence/storyboard beats."
     ]
+  },
+  "content_optimization": {
+    "target_overall": 8.0,
+    "min_dimension": 7.0,
+    "max_content_attempts": 3,
+    "improve_requires_revision": true,
+    "revision_focus": [
+      "Rewrite weak openings into a concrete human problem, not a source summary.",
+      "Increase information density with problem, mechanism, tradeoff, and next verification step.",
+      "Keep every claim traceable to evidence_bundle and preserve source-bounded caveats.",
+      "Use storyboard scenes that match the revised voiceover beats."
+    ]
+  },
+  "video_optimization": {
+    "max_video_attempts": 3,
+    "max_semantic_backtracks": 1,
+    "repairable_checks": [
+      "text_not_overlapping",
+      "cover_text_safe",
+      "douyin_safe_area",
+      "audio_visual_alignment_safe"
+    ],
+    "semantic_checks": [
+      "candidate_matches_artifacts",
+      "voiceover_matches_copy",
+      "no_hype_without_evidence",
+      "content_has_constructive_insight"
+    ],
+    "hard_fail_checks": [
+      "video_readable",
+      "no_unsupported_claims",
+      "no_internal_terms",
+      "speech_pronunciation_safe",
+      "publish_ready"
+    ],
+    "repair_actions": {
+      "storyboard": [
+        "Reduce storyboard density and weights for crowded scenes.",
+        "Prefer minimal chrome and calm motion when text overlap or safe-area issues appear.",
+        "Shorten visible scene text to preserve phone-readable layout."
+      ],
+      "caption": [
+        "Rebuild captions from the final voiceover and policy max_caption_chars.",
+        "Keep captions above the lower Douyin obstruction band."
+      ],
+      "cover": [
+        "Shorten cover title and use the same safe text bounds as render_payload.displayTitle."
+      ],
+      "content": [
+        "Backtrack to content revision when the rendered video lacks constructive insight or contradicts source artifacts."
+      ]
+    }
+  },
+  "quality_gate": {
+    "min_voiceover_chinese_ratio": 0.22,
+    "max_voiceover_disclaimer_hits": 2,
+    "max_caption_chars": 36,
+    "internal_terms": [
+      "operator supplied topic",
+      "operator topic",
+      "live gate",
+      "source registry",
+      "contract-check",
+      "main_agent",
+      "claude_impl_agent"
+    ],
+    "hype_phrases": [
+      "救世解药",
+      "独家黑科技",
+      "改变行业",
+      "改变协作方式",
+      "改写协作方式",
+      "给AI装超能力",
+      "给 AI 装超能力",
+      "超能力",
+      "颠覆",
+      "革命性",
+      "唯一解",
+      "躺赢"
+    ],
+    "disclaimer_phrases": [
+      "先别吹",
+      "效果待验证",
+      "未大规模生产验证",
+      "实际效果依赖",
+      "判断边界",
+      "待验证"
+    ],
+    "unverified_markers": [
+      "待验证",
+      "未实测",
+      "观察稿",
+      "没有实测",
+      "不能做结论"
+    ]
+  },
+  "douyin_distribution": {
+    "max_tags": 5,
+    "max_tag_len": 20,
+    "max_title_len": 55,
+    "max_desc_len": 600,
+    "private_threshold_patterns": [
+      "首轮\\s*\\d+\\s*[~\\-–—]?\\s*\\d*\\s*播放",
+      "流量池\\s*\\d+",
+      "\\d+\\s*秒完播率\\s*(必须|达到|超过)",
+      "推荐流量占比\\s*\\d+%?",
+      "限流\\s*(恢复|解除).*\\d+\\s*(天|小时)",
+      "(权重|阈值)\\s*(固定|官方)"
+    ],
+    "distribution_risk_terms": [
+      "刷量",
+      "刷播放",
+      "买播放",
+      "互赞",
+      "互粉",
+      "搬运",
+      "洗稿",
+      "伪原创",
+      "批量注册",
+      "脚本养号",
+      "自动化养号",
+      "异常设备矩阵"
+    ],
+    "platform_abuse_subject_patterns": [
+      "social-auto-upload",
+      "多平台.{0,8}(自动)?(发布|上传)",
+      "(自动|批量).{0,8}(发布|上传|发视频|发作品)",
+      "(自动化|脚本).{0,8}(登录|发稿|发帖|发布|上传)",
+      "(测试号|账号|账户).{0,8}(风控|登录|批量|自动化)",
+      "(平台|账号).{0,8}风控",
+      "(代发|代上传|代运营|代充|代认证|解封)",
+      "(批量|自动).{0,8}(小红书|抖音|视频号|TikTok|Bilibili|YouTube)"
+    ],
+    "external_redirect_patterns": [
+      "https?://",
+      "github\\.com",
+      "(试试|尝试一下|尝试这个|尝试这款|去看|去试|快用|上手|安装|下载|部署|接入|打开|访问|前往|使用).{0,16}(开源|框架|工具|项目|软件|GitHub|官网|网站|仓库|插件|第三方)",
+      "(GitHub|官网|网站|仓库|链接|地址|第三方).{0,16}(试试|下载|安装|使用|打开|访问|前往|获取|查看)",
+      "(下载|安装|使用|前往|跳转|打开|访问|点击).{0,16}(GitHub|官网|网站|仓库|项目|工具|软件|插件|第三方)",
+      "(链接|地址|主页|官网|仓库).{0,8}(在|见|看|搜|打开|访问)"
+    ],
+    "engagement_bait_phrases": [
+      "点赞收藏转发",
+      "点关注不迷路",
+      "求点赞",
+      "求关注",
+      "评论区扣",
+      "三连",
+      "不看后悔",
+      "转疯了"
+    ],
+    "constructive_interaction_markers": [
+      "你会",
+      "你觉得",
+      "怎么判断",
+      "留言",
+      "评论",
+      "实测",
+      "下一步",
+      "对比"
+    ],
+    "retention_structure_markers": [
+      "为什么",
+      "问题",
+      "机制",
+      "取舍",
+      "代价",
+      "风险",
+      "证据",
+      "验证",
+      "实测",
+      "下一步",
+      "怎么"
+    ]
+  },
+  "visual_audit": {
+    "punch_words": ["抖音", "B站", "小红书", "视频号", "TikTok", "YouTube", "Bilibili", "social-auto-upload"]
   },
   "gemini_visual_audit": {
     "fail_if": [
@@ -227,14 +456,31 @@
       "the rendered candidate differs from selected_candidate",
       "the video contains forbidden claim terms without evidence",
       "audio or visible copy contradicts the run artifacts",
+      "cover title or metric leaks internal pipeline terms such as operator topic or live gate",
+      "voiceover reads raw repository slashes, URLs, or symbols instead of natural Mandarin",
+      "unverified topics are packaged as industry-changing conclusions",
+      "captions sit in Douyin bottom UI obstruction area or drift from the spoken beat",
       "caption text is unreadable due to low contrast against background",
-      "any frame is fully black or has rendering artifacts"
+      "any frame is fully black or has rendering artifacts",
+      "public copy presents private Douyin thresholds, fixed traffic-pool sizes, fixed completion-rate cutoffs, or definitive shadowban/限流 diagnosis as fact without official platform-rule evidence",
+      "public copy asks for fake likes, follows, shares, comment spam, or other engagement bait",
+      "public copy contains raw URLs, GitHub links, website links, or source paths",
+      "public copy tells viewers to try, download, install, use, open, visit, or go to a third-party tool, site, repository, app, plugin, or framework",
+      "the selected subject is platform automation, account automation, multi-platform auto-posting, batch upload, auto-login, test-account, or platform-risk-control tooling"
     ],
     "enhanced_checks": [
       "Verify text contrast: all text should be clearly readable on its background (WCAG AA equivalent).",
       "Check caption overlay: if subtitle bar is visible, text must not be clipped or overflow.",
+      "Check cover safety: title must fit inside the frame, and no key word may be cropped by the viewport edge.",
+      "Check Douyin safe area: captions should sit above bottom platform UI, not in the lower 300px obstruction zone.",
+      "Check audio pronunciation: repository names should be spoken naturally, not as raw slash/URL strings.",
+      "Check evidence tone: if demo/source/benchmark evidence is absent, the copy must remain a verified-boundary observation.",
       "Verify intro: video should fade in smoothly, no jump cut on first frame.",
-      "Verify outro: video should fade out, no abrupt end."
+      "Verify outro: video should fade out, no abrupt end.",
+      "Verify adaptive layout: the selected scene structure should suit the content and should not show empty or overcrowded scenes.",
+      "Verify Douyin metadata: title, description, and tags should be content-relevant and not broad repeated keyword stuffing.",
+      "Verify recommendation-fit without folklore: the video should improve retention through clear problem/mechanism/tradeoff, not by claiming secret platform thresholds.",
+      "Verify no off-platform guidance: titles, descriptions, captions, and cards must not invite viewers to try, download, install, use, open, visit, or go to a third-party site, repository, app, plugin, framework, or tool."
     ],
     "important": "Do not fail only because the voiceover and screen text are not word-for-word identical. Fail only if they contradict each other or describe different candidate facts."
   }

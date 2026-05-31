@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo EnvironmentManifest",
+  "type": "object",
+  "required": ["schema_version", "service_boundaries", "python", "platform", "command"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "runtime_reproducibility"},
+    "service_boundaries": {"type": "array", "items": {"type": "string"}},
+    "root_dir": {"type": "string"},
+    "run_dir": {"type": "string"},
+    "git": {"type": "object"},
+    "python": {"type": "object"},
+    "platform": {"type": "object"},
+    "command": {"type": "array", "items": {"type": "string"}},
+    "env_presence": {"type": "object"}
+  }
+}

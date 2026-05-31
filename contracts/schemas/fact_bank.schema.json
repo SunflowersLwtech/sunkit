@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo FactBank",
+  "type": "object",
+  "required": ["schema_version", "facts", "source_backed_facts", "source_map", "risk_notes"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "research"},
+    "selected_candidate_id": {"type": ["string", "null"]},
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "claim", "source_refs", "confidence", "risk_flags", "publishable"],
+        "properties": {
+          "id": {"type": "string"},
+          "claim": {"type": "string"},
+          "source_refs": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "number"},
+          "risk_flags": {"type": "array", "items": {"type": "string"}},
+          "publishable": {"type": "boolean"}
+        }
+      }
+    },
+    "source_backed_facts": {"type": "array", "items": {"type": "string"}},
+    "conflicts": {"type": "array"},
+    "risk_notes": {"type": "array", "items": {"type": "string"}},
+    "source_map": {"type": "array"}
+  }
+}

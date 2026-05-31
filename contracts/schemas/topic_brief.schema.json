@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo TopicBrief",
+  "type": "object",
+  "required": ["schema_version", "topic", "core_question", "angle", "key_points", "risk_notes"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "topic_intake"},
+    "selected_candidate_id": {"type": ["string", "null"]},
+    "topic": {"type": "string", "minLength": 1},
+    "audience": {"type": "string"},
+    "audience_hint": {"type": "string"},
+    "core_question": {"type": "string", "minLength": 1},
+    "angle": {"type": "string", "minLength": 1},
+    "key_points": {"type": "array", "items": {"type": "string"}},
+    "visual_opportunities": {"type": "array", "items": {"type": "string"}},
+    "risk_notes": {"type": "array", "items": {"type": "string"}},
+    "publish_risks": {"type": "array", "items": {"type": "string"}}
+  }
+}
