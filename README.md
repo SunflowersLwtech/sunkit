@@ -1,6 +1,38 @@
 # github-repo-to-x-threads
 
-Agent Skills plugin for turning GitHub repositories and other technical inputs into responsible X/Twitter posting packs.
+Agent Skills plugin for turning technical inputs into responsible
+Agent-engineering-positioned X/Twitter content systems: posting packs, paper-to-system
+threads, build-in-public notes, professional bug-report rewrites, profile
+positioning, image assets, and optional official X API publishing.
+
+## Agent/Plugin/Skills Shape
+
+This project is organized as an agent-first skillpack, similar in spirit to
+`garrytan/gbrain`: agents start from root protocol files, route through
+`skills/RESOLVER.md`, and execute the canonical skill under `skills/`.
+
+```text
+AGENTS.md                      # repo operating rules for coding agents
+llms.txt                       # compact documentation map for LLMs
+INSTALL_FOR_AGENTS.md          # install + verification protocol
+CLAUDE.md                      # Claude Code entrypoint
+skillpack.json                 # agent skillpack manifest
+openclaw.plugin.json           # OpenClaw/Hermes-style bundle manifest
+skills/
+  _AGENT_README.md             # cold-start contract for scaffolded skills
+  RESOLVER.md                  # routing table
+  manifest.json                # machine-readable skill index
+  github-repo-to-x-threads/    # canonical reusable skill
+.codex-plugin/plugin.json      # Codex adapter manifest
+.claude-plugin/plugin.json     # Claude plugin adapter manifest
+commands/                      # Claude slash-command adapter
+runbooks/bootstrap.md          # post-scaffold runbook
+plugins/github-repo-to-x-threads/ # generated local Codex plugin adapter, ignored
+```
+
+The important boundary: `skills/github-repo-to-x-threads/` is the canonical
+implementation. Everything else is a manifest, router, runbook, or generated
+install surface.
 
 The canonical skill is agent-neutral:
 
@@ -16,7 +48,10 @@ Adapter metadata is thin and separate:
 ```text
 .codex-plugin/plugin.json      # Codex plugin manifest
 .claude-plugin/plugin.json     # Claude Code plugin manifest
-commands/                      # Claude plugin slash command fallback
+commands/                      # Claude plugin slash-command adapter
+.claude/                       # generated local Claude adapter, ignored
+.agents/                       # generated local Codex adapter, ignored
+plugins/                       # generated local Codex marketplace plugin root, ignored
 ```
 
 Do not install this project by copying the whole repository into `.claude/skills`. The reusable skill lives under `skills/`; installers and plugin manifests adapt that folder for each agent surface.
@@ -25,20 +60,51 @@ Do not install this project by copying the whole repository into `.claude/skills
 
 Coding agents should treat `AGENTS.md` plus `skills/github-repo-to-x-threads/SKILL.md` as the source of truth, keep generated runs/images/env files out of git, and use `scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X` only to sync local install surfaces.
 
+For a cold start, read:
+
+1. `AGENTS.md`
+2. `INSTALL_FOR_AGENTS.md`
+3. `skills/_AGENT_README.md`
+4. `skills/RESOLVER.md`
+5. `skills/github-repo-to-x-threads/SKILL.md`
+
 ## What It Does
 
-Given one or more GitHub repos, owner/repo strings, local paths, arXiv/alphaXiv papers, web URLs, PDFs/notes, existing posting packs, or raw ideas, the skill guides an agent to:
+Given one or more GitHub repos, owner/repo strings, local paths, arXiv/alphaXiv papers, web URLs, PDFs/notes, existing posting packs, profile prompts, KYC/support complaints, or raw ideas, the skill guides an agent to:
 
-1. classify the input and choose a posting strategy,
+1. classify the input through the Agent engineering brand gate,
 2. clone/read repos or collect source-specific evidence for papers, pages, files, and ideas,
 3. cross-check evidence against live metadata when available,
 4. separate verified facts, reasonable inference, and user vision,
-5. draft a paste-ready X thread/article with attribution, caveats, source-material richness, hook independence, and anti-template voice checks,
-6. create a final-mile posting pack with image placement and alt text,
-7. generate and govern GPT Image 2-style assets through a local image registry by default,
-8. optionally publish the approved pack through the official X API from the CLI,
-9. record outcomes into local strategy memory so later posts can improve,
-10. synthesize eval/publish/experiment signals into an auditable skill-evolution report and patch plan.
+5. route KYC/support/life/media noise into bug-report, off-main-account, or Agent failure-mode drafts,
+6. draft paste-ready X content with attribution, caveats, source-material richness, hook independence, reusable assets, concrete discussion questions, and anti-template voice checks,
+7. expose the model quality chain: source grounding, brand lane, angle tournament, asset design, draft synthesis, adversarial review, and final gate,
+8. create a final-mile posting pack with Brand Fit, image placement, and alt text,
+9. generate and govern GPT Image 2-style assets through a local image registry by default,
+10. optionally publish the approved pack through the official X API from the CLI,
+11. record outcomes into local strategy memory so later posts can improve,
+12. synthesize eval/publish/experiment signals into an auditable skill-evolution report and patch plan.
+
+## Agent Engineering Brand Contract
+
+Default positioning:
+
+```text
+Agent 工程实战派
+Core question: Agent 工程如何从 demo 变成可靠系统？
+```
+
+Main-account content must map to one of:
+
+- `agent_reliability`
+- `build_in_public`
+- `paper_to_system`
+- `embodied_ai_watch`
+
+Every thread should include one reusable asset and one concrete discussion
+question. KYC/support/platform complaints are rewritten as cold PRD-style bug
+reports by default; life/media/mood notes move off the main account unless they
+become concrete Agent engineering failure-mode notes.
 
 ## Install For Local Use
 
@@ -52,10 +118,22 @@ It writes:
 
 ```text
 /Users/sunfl/Documents/media/X/
+  AGENTS.md
+  INSTALL_FOR_AGENTS.md
+  CLAUDE.md
+  llms.txt
+  skillpack.json
+  openclaw.plugin.json
+  runbooks/bootstrap.md
+  skills/_AGENT_README.md
+  skills/RESOLVER.md
+  skills/manifest.json
   skills/github-repo-to-x-threads/      # canonical plugin skill
   .codex-plugin/plugin.json             # Codex plugin manifest
   .claude-plugin/plugin.json            # Claude plugin manifest
   commands/github-repo-to-x-threads.md  # Claude plugin command
+  .agents/plugins/marketplace.json      # Codex project marketplace
+  plugins/github-repo-to-x-threads/     # Codex project plugin adapter
   .claude/skills/github-repo-to-x-threads/  # Claude project adapter
 ```
 
@@ -92,7 +170,38 @@ mkdir -p ~/.claude/commands
 cp commands/github-repo-to-x-threads.md ~/.claude/commands/
 ```
 
-For plugin distribution, use the repository root as the plugin folder. Codex reads `.codex-plugin/plugin.json`; Claude Code reads `.claude-plugin/plugin.json` and the root `skills/` directory.
+For Codex plugin distribution, use the project marketplace adapter generated by
+the installer. Codex requires a real plugin root under
+`plugins/github-repo-to-x-threads/`; a symlink-only adapter installs as an empty
+cache.
+
+```bash
+codex plugin marketplace list
+codex plugin marketplace add /Volumes/T7/media/X   # only if media-x-local is absent
+codex plugin add github-repo-to-x-threads@media-x-local
+scripts/verify_codex_project_plugin.sh .
+```
+
+After editing the plugin manifest or skill, refresh the cachebuster, sync the
+adapter, and reinstall:
+
+```bash
+python3 /Users/chenyu/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py .
+scripts/install_skill_bundle.sh /Volumes/T7/media/X
+codex plugin add github-repo-to-x-threads@media-x-local
+scripts/verify_codex_project_plugin.sh .
+```
+
+Claude Code reads `.claude-plugin/plugin.json` and the root `skills/` directory.
+
+For agent-first installation, point the agent at:
+
+```text
+https://raw.githubusercontent.com/SunflowersLwtech/github-repo-to-x-threads/main/INSTALL_FOR_AGENTS.md
+```
+
+The agent should read the install protocol, scaffold the bundle, then route
+tasks through `skills/RESOLVER.md`.
 
 ## Governed Multi-Repo Runs
 
@@ -145,7 +254,7 @@ For a governed workspace:
 python -B skills/github-repo-to-x-threads/scripts/run_any_to_x_pack.py \
   "https://www.alphaxiv.org/abs/2605.22817" \
   --prompt "帮我决定策略并发成中文 X thread" \
-  --run-id vpo-paper-share
+  --run-id vpo-paper-to-system
 ```
 
 This creates:
@@ -175,7 +284,11 @@ When a draft is safe but feels generic, use:
 skills/github-repo-to-x-threads/references/content-quality-gates.md
 ```
 
-The quality gate checks whether the source has enough material to justify a hook, whether post 1 works without a link card, whether the psychological trigger fits the evidence, whether high-level concepts are translated into concrete mechanisms, and whether the copy is too smooth or template-like.
+The quality gate checks whether the source has enough material to justify a hook, whether post 1 works without a link card, whether the psychological trigger fits the evidence, whether high-level concepts are translated into concrete mechanisms, whether the copy is too smooth or template-like, and whether the draft fits the Agent engineering account instead of becoming generic AI/life/support noise.
+
+`references/model-intelligence-quality-chain.md` defines the model-side quality
+chain. Generated packs should show the chain status; missing stages are treated
+as a quality failure rather than hidden reasoning.
 
 ## Self-Evolving Strategy Memory
 
@@ -258,8 +371,13 @@ The evaluator is intentionally strict on editorial quality. It now scores:
 - `angle_freshness`
 - `specificity_density`
 - `voice_authenticity`
+- `brand_clarity`
+- `cta_specificity`
+- `asset_value`
+- `emotion_control`
+- `account_fit`
 
-A safe summary can still be marked `revise` if it feels rigid or generic.
+A safe summary can still be marked `revise` if it feels rigid, generic, off-brand, assetless, or emotionally noisy.
 
 When a draft feels weak, run a Grok draft tournament:
 
@@ -320,7 +438,7 @@ The evaluator is not a real X ranking oracle. It combines local posting-pack gat
 
 ## Image Governance
 
-Final posting packs should generate actual images by default. Use text-only, no-images, prompts-only, or manual-image mode only when the user explicitly asks for it or the image tool is unavailable.
+Technical final posting packs should generate actual images by default. Use text-only, no-images, prompts-only, or manual-image mode only when the user explicitly asks for that output mode. If actual images are required and the image tool cannot produce a governable file, block the image gate. Professional bug reports are the exception: prefer real evidence screenshots supplied by the user or text-only copy, and never generate fake KYC/support evidence.
 
 Generated image files must be copied into the repo run directory and registered:
 
@@ -349,7 +467,10 @@ The registry writes `images_manifest.json` with:
 - disclosure,
 - review status.
 
-If the generation tool cannot expose a file path, register a prompt-only entry with `--prompt-only` and do not claim an actual governed image file exists.
+Prompt-only entries are not a fallback for failed image generation. Register
+`--prompt-only` only when the user explicitly asked for prompts as the
+deliverable, and include a prompt-only reason. If an actual-image pack is
+required and no governable image file exists, the image gate is blocked.
 
 When an agent is asked for actual images, it should use its native image generation capability first, such as Codex `imagegen` / built-in image generation. Script-drawn cards, SVG placeholders, browser screenshots, or canvas diagrams are not substitutes for GPT Image-style assets unless the user explicitly asked for deterministic code-native graphics.
 
@@ -360,7 +481,8 @@ python -B skills/github-repo-to-x-threads/scripts/check_image_assets.py \
   repo-to-x-workspace/runs/<run-id>/repos/<repo-id>
 ```
 
-Only pass `--allow-prompt-only` when the user opted out of actual images or the image generation tool could not provide a governable local file.
+Only pass `--allow-prompt-only` when the user explicitly requested prompt-only,
+text-only, or manual-image mode. Do not pass it because image generation failed.
 
 ## Adaptive Threads
 
@@ -448,10 +570,41 @@ For Grok-based pre-publish evaluation, set:
 Tracked:
 
 - `skills/github-repo-to-x-threads/`
+- `skills/RESOLVER.md`
+- `skills/_AGENT_README.md`
+- `skills/manifest.json`
 - `.codex-plugin/plugin.json`
 - `.claude-plugin/plugin.json`
+- `skillpack.json`
+- `openclaw.plugin.json`
+- `INSTALL_FOR_AGENTS.md`
+- `CLAUDE.md`
+- `llms.txt`
+- `runbooks/`
 - `commands/`
 - root installer scripts
+
+## Project-Level Codex Registration
+
+The project-level Codex plugin registration is:
+
+```text
+.agents/plugins/marketplace.json
+.codex-plugin/plugin.json
+plugins/github-repo-to-x-threads/.codex-plugin/plugin.json
+plugins/github-repo-to-x-threads/skills/github-repo-to-x-threads/SKILL.md
+skills/github-repo-to-x-threads/SKILL.md
+```
+
+Verify it with:
+
+```bash
+scripts/verify_codex_project_plugin.sh .
+```
+
+This check requires the real project files to exist and does not use temporary
+registration targets. It also checks `codex plugin list` and the installed
+Codex cache when the Codex CLI is available.
 - `README.md`
 - `AGENTS.md`
 - `evals/`
@@ -461,6 +614,7 @@ Ignored:
 - `.env`
 - `.claude/` generated local adapters
 - `.agents/` duplicate local adapters
+- `plugins/` generated local Codex marketplace adapter
 - `repo-to-x-workspace/`
 - cloned third-party repos
 - generated images

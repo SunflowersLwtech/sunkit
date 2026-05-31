@@ -53,15 +53,7 @@ def collect(ids: list[str], token: str, include_private: bool) -> tuple[dict[str
     query = urllib.parse.urlencode({"ids": ",".join(ids), "tweet.fields": ",".join(fields)})
     url = f"{API_BASE}/2/tweets?{query}"
     mode = "private_plus_public" if include_private else "public_only"
-    try:
-        return api_get(url, token), mode
-    except RuntimeError:
-        if not include_private:
-            raise
-        fields = ["created_at", "public_metrics", "text"]
-        query = urllib.parse.urlencode({"ids": ",".join(ids), "tweet.fields": ",".join(fields)})
-        url = f"{API_BASE}/2/tweets?{query}"
-        return api_get(url, token), "public_only_fallback"
+    return api_get(url, token), mode
 
 
 def aggregate(snapshot: dict[str, Any]) -> dict[str, float]:

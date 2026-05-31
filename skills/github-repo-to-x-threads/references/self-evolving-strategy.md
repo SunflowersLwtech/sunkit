@@ -39,7 +39,10 @@ The router classifies inputs into:
 
 - `independent_technical_share`: default for repos/projects the user does not own.
 - `launch_thread`: when the user owns the project or explicitly says they built/released it.
-- `paper_share`: for arXiv/alphaXiv/research-paper inputs.
+- `paper_to_system`: for arXiv/alphaXiv/research-paper inputs translated into engineering patterns.
+- `professional_bug_report`: for KYC/support/platform complaint rewrites.
+- `off_main_filter`: for life/media/mood inputs that should not enter the main account unless rewritten around Agent engineering.
+- `profile_positioning`: for bio, profile, and pinned-post positioning.
 - `comparison_or_roundup`: for multiple sources, comparisons, or candidate pools.
 - `builder_notes`: when the user tested/built/demoed something and wants practical notes.
 - `x_article`: when the target is a native X Article or long-form post.
@@ -67,7 +70,7 @@ After a review or live post, record the outcome:
 ```bash
 python -B <skill-dir>/scripts/record_post_outcome.py <repo-run-dir> \
   --manual-quality 0.8 \
-  --lesson "Shorter hooks with an explicit caveat performed better for paper-share posts."
+  --lesson "Paper-to-system posts work better when the hook states the engineering caveat directly."
 ```
 
 When X metrics are available, prefer actual metrics:

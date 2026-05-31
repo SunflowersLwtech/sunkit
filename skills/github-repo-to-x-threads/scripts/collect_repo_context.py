@@ -78,10 +78,10 @@ def load_dotenv(paths: list[Path]) -> dict[str, Any]:
                 loaded_keys.append(key)
 
     if "GH_TOKEN" not in os.environ:
-        for fallback_key in ("GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"):
-            fallback = os.environ.get(fallback_key)
-            if fallback:
-                os.environ["GH_TOKEN"] = fallback
+        for alias_key in ("GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"):
+            alias_value = os.environ.get(alias_key)
+            if alias_value:
+                os.environ["GH_TOKEN"] = alias_value
                 loaded_keys.append("GH_TOKEN")
                 break
 
@@ -234,7 +234,11 @@ def detect_key_files(files: list[str]) -> dict[str, list[str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", help="GitHub URL, owner/repo, or local path")
-    parser.add_argument("--out", default="/tmp/repo-to-x-context", help="Output directory")
+    parser.add_argument(
+        "--out",
+        default="repo-to-x-workspace/context/collect-repo-context",
+        help="Governed output directory under the local workspace",
+    )
     parser.add_argument("--refresh", action="store_true", help="Refresh cloned repo under output directory")
     args = parser.parse_args()
 

@@ -9,6 +9,7 @@ repo-to-x-workspace/
       run_manifest.json
       SUMMARY.md
       strategy_decision.json  # optional but preferred for arbitrary/adaptive inputs
+      # run_manifest.json may include brand_profile for Agent engineering account fit
       repos/
         <repo-id>/
           repo_context.json
@@ -46,6 +47,17 @@ repo-to-x-workspace/
 - Cross-check review notes generated for a specific run.
 - Posting queues and publish logs generated for a specific run.
 
+## Brand Fit Contract
+
+Durable runs should preserve the Agent engineering account contract in
+`run_manifest.json` or `strategy_decision.json`:
+
+- positioning: `Agent 工程实战派`;
+- main question: `Agent 工程如何从 demo 变成可靠系统？`;
+- content pillar or off-main-account decision;
+- reusable asset requirement;
+- concrete discussion question requirement.
+
 ## Image Asset Contract
 
 Generated or sourced images used for X posting belong under each repo run directory:
@@ -64,7 +76,7 @@ Use `scripts/register_image_asset.py` to copy image files into `images/` and upd
 - `purpose`,
 - `source_type`,
 - `status`,
-- `path` for real files or `prompt_only` status when no file path is available,
+- `path` for real files; `prompt_only` status only when the user explicitly requested prompt-only/text-only/manual-image output,
 - `sha256` and `mime_type` for real files,
 - `prompt`,
 - `alt_text`,

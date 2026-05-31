@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a governed multi-repo workspace for repo-to-X thread generation."""
+"""Create a governed multi-repo workspace for Agent-engineering X content."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from collect_repo_context import (  # noqa: E402
     safe_slug,
     write_manifest,
 )
+from brand_profile import BRAND_PROFILE  # noqa: E402
 
 
 def utc_now() -> str:
@@ -127,6 +128,8 @@ def make_claims_ledger(source: str, owner_repo: str | None, context: dict[str, A
             "Label personal vision as personal vision.",
             "Downgrade unsupported superlatives.",
             "Do not imply official roadmap or affiliation unless verified.",
+            "Map the post to the Agent engineering brand before publishing.",
+            "Include one reusable asset and one concrete discussion question.",
         ],
     }
 
@@ -144,7 +147,6 @@ def make_images_manifest(owner_repo: str | None) -> dict[str, Any]:
             "default_image_count": "adaptive 1-3",
             "prompt_only_allowed_when": [
                 "the user explicitly requests text-only, no images, prompts-only, or manual images",
-                "the image generation tool is unavailable or cannot expose a local file path",
             ],
             "allowed_statuses": ["planned", "prompt_only", "generated", "approved", "rejected"],
             "allowed_source_types": [
@@ -154,7 +156,7 @@ def make_images_manifest(owner_repo: str | None) -> dict[str, Any]:
                 "prompt_only",
             ],
             "storage": "Store generated files under images/ and register them with scripts/register_image_asset.py.",
-            "review_gate": "Before Ready To Post, run scripts/check_image_assets.py. Prompt-only is not the default.",
+            "review_gate": "Before Ready To Post, run scripts/check_image_assets.py. Prompt-only is only for explicit user-requested prompt/text/manual-image mode.",
         },
         "images": [
             {
@@ -220,7 +222,7 @@ def make_images_manifest(owner_repo: str | None) -> dict[str, Any]:
         ],
         "rules": [
             "Generate 1-3 actual images by default for final posting packs.",
-            "Do not downgrade to prompt-only unless the user opted out or the tool cannot provide a file.",
+            "Do not downgrade to prompt-only when actual image generation fails; block the image gate instead.",
             "Generated visuals must be labeled as conceptual.",
             "Do not create fake screenshots, fake GitHub metrics, or fake benchmark charts.",
             "Use official repo assets only when actually present and attributed.",
@@ -300,6 +302,7 @@ def write_summary(run_dir: Path, manifest: dict[str, Any]) -> None:
             "- `claims_ledger.json` filled for public claims.",
             "- `cross_check_review.md` marked `pass`.",
             "- `posting_pack.md` updated with final copy and image map.",
+            "- Agent engineering Brand Fit, reusable asset, and discussion question filled.",
             "- `scripts/check_image_assets.py <repo-dir>` passes, unless the user explicitly opted out of actual images.",
             "",
             "This run directory is local workspace output and should stay out of git.",
@@ -336,6 +339,12 @@ def main() -> int:
         "sources": sources,
         "env": env_info,
         "workspace_contract": str(SKILL_ROOT / "references" / "run-workspace-contract.md"),
+        "brand_profile": {
+            "positioning": BRAND_PROFILE["positioning"],
+            "tagline": BRAND_PROFILE["tagline"],
+            "pillars": BRAND_PROFILE["pillars"],
+            "main_account_rule": "Publish only content tied to Agent reliability, build-in-public, paper-to-system, or embodied AI watch.",
+        },
         "git_hygiene": {
             "ignored_workspace": "repo-to-x-workspace/",
             "do_not_commit": [

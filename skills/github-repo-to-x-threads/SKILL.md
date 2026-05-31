@@ -1,11 +1,11 @@
 ---
 name: github-repo-to-x-threads
-description: Use this skill whenever the user gives any technical input and wants an X/Twitter post, thread, article, launch/share post, responsible recommendation, project/paper writeup, social media copy, or asks the posting skill to improve/evolve from evals, feedback, live metrics, or GitHub Trending experiments. Inputs can be GitHub repositories, owner/repo strings, local paths, arXiv/alphaXiv papers, blog/docs URLs, PDFs/notes, source lists, existing posting packs, raw ideas, or prior run workspaces. This skill routes the input to a posting strategy, collects evidence, separates verified facts from inference and user vision, drafts responsible X copy, generates GPT Image 2 visual assets by default, optionally publishes through the official X API, records outcomes into local strategy memory, and can synthesize an auditable skill-evolution report plus patch plan so future posts improve without silently weakening claim safety.
+description: Use this skill whenever the user gives any technical input and wants Agent-engineering-positioned X/Twitter content: posts, threads, articles, launch/share posts, responsible recommendations, project/paper writeups, bug-report rewrites, profile/pinned-post positioning, social media copy, or skill improvement from evals, feedback, live metrics, or GitHub Trending experiments. Inputs can be GitHub repositories, owner/repo strings, local paths, arXiv/alphaXiv papers, blog/docs URLs, PDFs/notes, source lists, existing posting packs, raw ideas, KYC/support complaints, profile text, or prior run workspaces. This skill routes the input through an Agent engineering brand gate, collects evidence, separates verified facts from inference and user vision, drafts responsible X copy with reusable assets and concrete discussion questions, generates GPT Image 2 visual assets by default, optionally publishes through the official X API, records outcomes into local strategy memory, and can synthesize an auditable skill-evolution report plus patch plan without silently weakening claim safety.
 ---
 
 # GitHub Repo to X Threads
 
-Turn a GitHub repository into a responsible, high-signal X thread. The goal is not hype. The goal is a post that earns technical trust: accurate claims, clear attribution, useful framing, and a strong hook.
+Turn technical sources into responsible, high-signal X content for an Agent engineering account. The goal is not hype or generic AI curation. The goal is a post that reinforces one public promise: **Agent 工程如何从 demo 变成可靠系统**.
 
 ## Use When
 
@@ -24,17 +24,111 @@ Use this skill when the user asks things like:
 - "记录这次发帖效果，下次变强"
 - "搭建一套 skill 自进化体系"
 - "把这批 eval / live 结果总结成 skill 改进计划"
+- "把这条 KYC/客服吐槽改成专业 bug report"
+- "帮我重写 bio / 置顶帖 / 账号定位"
+
+## Brand Profile
+
+Default account positioning:
+
+```text
+Agent 工程实战派
+Core question: Agent 工程如何从 demo 变成可靠系统？
+```
+
+Main content pillars:
+
+- **Agent reliability**: hallucination boundaries, uncertainty, tool routing,
+  debugging memory, failure memory, evals, production constraints.
+- **Build in public**: the user's own MCP/Agent work, failures, fixes, design
+  tradeoffs, and validation loops.
+- **Paper to system**: papers translated into engineering patterns, not paper
+  summaries.
+- **Embodied AI watch**: robotics/embodied AI only when tied to agent systems,
+  tool use, real-world task execution, or reliability.
+
+Content routing:
+
+- Technical repo/paper/source -> main-account posting pack when it supports one
+  pillar.
+- KYC/support/platform complaint -> professional bug report by default; keep on
+  the main account only if tied to an Agent workflow reliability lesson.
+- Life/media/mood note -> off-main-account by default; main account only after
+  rewriting as a concrete Agent engineering failure-mode analogy.
+- Profile/bio/pinned-post request -> use
+  `references/profile-bio-pinned-post.md`.
+
+Public shape requirements:
+
+- Post 1 starts from reader pain, technical conflict, or engineering risk.
+- Every thread includes one reusable asset: checklist, flowchart, issue
+  template, prompt snippet, before/after table, or failure-mode map.
+- Every thread ends with one concrete discussion question.
+- Emotion is converted into process language: repro, impact, expected behavior,
+  evidence, and next action.
+
+Read `references/agent-engineering-brand-profile.md` for the full account
+contract, `references/bug-report-rewrite-template.md` for support/KYC rewrites,
+`references/paper-to-system-template.md` for research-paper inputs, and
+`references/model-intelligence-quality-chain.md` for the model-side quality
+chain. Read `references/creator-style-patterns.md` when improving content
+quality, taste, cadence, demo value, or creator-pattern fit.
+
+## Creator Style Patterns
+
+Use creator patterns as content modes, not as impersonation targets. Do not
+copy a specific creator's catchphrases, personal identity, emoji habits, or
+community nicknames.
+
+Default modes:
+
+- `engineering_mentor`: AI/Agent updates become engineering judgment,
+  practical rules, product critique, and caveats.
+- `demo_first_tool`: tools and workflows are explained through real tested
+  steps, screenshots/video plans, use cases, and limitations.
+- `test_catalog`: model/news/previews are short, visual, status-aware, and
+  separated into official, tested, leaked, rumored, or unverified.
+- `builder_resource_log`: build-in-public progress uses short sentences,
+  numbered resources, open-source/community loops, and one saveable list.
+- `product_translator_longform`: papers, podcasts, English sources, tools, and
+  product cases become Chinese long-form explanations with product implications,
+  resource links, and clear source/interpretation boundaries.
+
+Before drafting, choose one primary mode and one optional secondary mode. The
+mode must change the output: hook, evidence, media plan, reusable asset, and
+discussion question should all match it.
+
+## Model Intelligence Quality Chain
+
+Before public copy is marked ready, the model must expose these stages:
+
+1. `source_grounding`: inspectable facts and unsafe claims.
+2. `brand_lane`: main-account pillar or off-main/professional bug-report lane.
+3. `angle_tournament`: materially different theses, not one summary rewritten.
+4. `creator_pattern`: engineering mentor, demo-first tool, test catalog,
+   builder resource log, or product translator longform selected without
+   impersonation.
+5. `asset_design`: reusable asset selected before drafting.
+6. `draft_synthesis`: thesis -> mechanism -> example -> caveat -> attribution/question.
+7. `adversarial_review`: attack unsupported claims, generic voice, missing
+   asset/question, emotion leakage, and image governance.
+8. `final_gate`: ready/revise/block with exact reason.
+
+If a stage is missing, treat the pack as not fully reviewed.
 
 ## Inputs To Resolve
 
 Infer these from the prompt when possible. Ask only if the missing answer would cause a misleading post.
 
-- **Source/input**: one or more GitHub URLs, `owner/repo` strings, local paths, arXiv/alphaXiv papers, web URLs, PDFs/notes, existing posting packs, raw ideas, or a source-list file.
+- **Source/input**: one or more GitHub URLs, `owner/repo` strings, local paths, arXiv/alphaXiv papers, web URLs, PDFs/notes, existing posting packs, raw ideas, profile/bio prompts, KYC/support complaints, or a source-list file.
 - **User relationship to the repo**: default to `independent sharer` unless the user clearly says they are the author, maintainer, contributor, or company/team member.
 - **Posting language**: match the user's language; for Chinese prompts, write Chinese by default with technical English terms where natural.
 - **User angle**: optional personal vision, use case, comparison, build plan, demo plan, or critique.
+- **Brand lane**: default to the Agent engineering main account only when the
+  source maps to agent reliability, build-in-public, paper-to-system, or
+  embodied AI watch.
 - **Output size**: adaptive. Use as many posts as the repo evidence and user angle genuinely need. Prefer a concise 4-8 post thread for simple repos, 8-12 for rich repos or repo+vision posts, and split further only when nuance, caveats, or evidence would otherwise be lost. Do not force exactly 8 posts.
-- **Visuals**: default to 1-3 actual generated images for final posting packs. Use GPT Image 2 or the available built-in image generation tool unless the user explicitly says text-only, no images, prompts-only, or manual images. Do not require the user to separately ask for generated assets after they invoked this skill.
+- **Visuals**: default to 1-3 actual generated images for technical final posting packs. Use GPT Image 2 or the available built-in image generation tool unless the user explicitly says text-only, no images, prompts-only, or manual images. For professional bug reports, prefer real user-provided evidence screenshots or text-only output; do not generate fake support/KYC evidence.
 - **Final-mile preference**: default to a paste-ready posting pack, not a prose-only critique. The user should be able to publish with minimal manual cleanup.
 - **Publish mode**: default to `manual-safe`. Use `official-api-publish` only when the user explicitly wants CLI posting/uploading and has configured official X API user credentials. Never default to cookie/session/proxy-based posting services.
 - **Evolution mode**: default to `record-and-suggest`. Improve future strategy through local strategy memory, but do not silently rewrite claims or skill instructions after one successful post.
@@ -66,20 +160,26 @@ The router writes or returns a `strategy_decision.json` shape with:
 
 - source classification,
 - selected strategy,
+- Agent engineering brand fit,
 - evidence plan,
 - image policy,
 - thread shape,
 - learned notes from local strategy memory.
 
-Read `references/self-evolving-strategy.md` when the user wants "any input", adaptive strategy, self-evolving behavior, postmortem feedback, or a reusable posting system. Read `references/skill-evolution-system.md` when the user asks the skill itself to learn from evals, publish outcomes, metrics, or Trending experiments. Read `references/content-quality-gates.md` when a draft is safe but generic, too smooth, too abstract, or the user complains that it lacks taste.
+Read `references/self-evolving-strategy.md` when the user wants "any input", adaptive strategy, self-evolving behavior, postmortem feedback, or a reusable posting system. Read `references/skill-evolution-system.md` when the user asks the skill itself to learn from evals, publish outcomes, metrics, or Trending experiments. Read `references/content-quality-gates.md` and `references/creator-style-patterns.md` when a draft is safe but generic, too smooth, too abstract, too newsy, missing demo value, or the user complains that it lacks taste.
 
 Input routing rules:
 
 - GitHub URL / `owner/repo` / local repo -> use repo evidence workflow below.
-- arXiv or alphaXiv -> paper-share workflow: read metadata and PDF text, search for official code before claiming code availability.
+- arXiv or alphaXiv -> paper-to-system workflow: read metadata and PDF text, search for official code before claiming code availability, then translate the paper into engineering patterns.
 - Web URL -> page-evidence workflow: browse/open the page, collect public facts, and avoid over-quoting.
 - Existing run/posting pack -> publish/review workflow: re-run cross-check and image gates before live publish.
 - Raw idea -> research-first workflow: turn the idea into source questions; do not publish factual claims without evidence.
+- KYC/support/platform complaint -> professional bug-report workflow: remove
+  rage, hashtag stacks, and unsupported motive claims; preserve repro, impact,
+  expected behavior, evidence, and next action.
+- Profile/bio/pinned-post -> profile-positioning workflow: write a clear
+  Agent engineering promise before tactical posting copy.
 
 ### 1. Collect Evidence
 
@@ -114,7 +214,7 @@ repo-to-x-workspace/runs/<run-id>/
 
 If the user gives a remote GitHub repo:
 
-1. Clone it into a temporary or workspace analysis directory.
+1. Clone it into the governed run workspace.
 2. Read local files from the clone.
 3. Fetch live metadata from GitHub.
 
@@ -127,7 +227,8 @@ If the user gives a local repo path:
 Prefer the bundled helper when useful:
 
 ```bash
-python -B <skill-dir>/scripts/collect_repo_context.py <github-url-or-owner/repo-or-local-path> --out /tmp/repo-to-x-context
+python -B <skill-dir>/scripts/collect_repo_context.py <github-url-or-owner/repo-or-local-path> \
+  --out repo-to-x-workspace/context/collect-repo-context
 ```
 
 Then inspect the generated `repo_context.json` and `file_manifest.txt`.
@@ -229,6 +330,8 @@ Adaptive structure:
 6. Deployment path, use case, or implication.
 7. Caveats / early-stage boundary / what not to overclaim.
 8. Closing question or discussion prompt when useful.
+9. Reusable asset: checklist, flowchart, issue template, prompt snippet,
+   before/after table, or failure-mode map.
 
 The structure is a thinking scaffold, not a fixed post count. Drop sections that are irrelevant, merge thin sections, and add sections when the repo needs more careful attribution, evidence, comparisons, caveats, or user vision. A shorter accurate thread is better than padded content; a longer careful thread is better than compressing away responsibility.
 
@@ -247,11 +350,20 @@ Avoid:
 - Fake certainty about project maturity.
 - Hidden affiliation.
 - Asking people to contribute to a project the user does not own.
+- Support-rant shape: all-caps anger, repeated mentions, hashtag stacks, ticket
+  spam, or demands like "fix this now".
+- Main-account life/media chatter that has no Agent engineering mechanism.
 
 Before locking the draft, do an angle pass:
 
 - Find the one thesis a technical reader would remember or repeat.
 - Prefer one sharp "not X, but Y" or "if the system is used this way, the training objective changes" frame over a complete source summary.
+- Confirm the brand lane: agent reliability, build-in-public, paper-to-system,
+  embodied AI watch, professional bug report, or off-main-account.
+- Select the creator pattern: engineering mentor, demo-first tool, test catalog,
+  or builder resource log. Make the media plan, asset, and question match it.
+- Name the reusable asset before drafting the final thread.
+- Write the final discussion question before locking the thread.
 - Generate at least 2-3 materially different angles when the input is rich, unfamiliar, or publication-bound.
 - Cut generic openers such as "recently saw", "worth reading", "interesting repo/paper", unless the rest of the hook is unusually strong.
 - If the result reads like a paper abstract or README split into numbered posts, it is not ready even if the claims are safe.
@@ -263,6 +375,10 @@ Run a content-quality gate before treating hook polishing as the problem:
 - **Psychological trigger fit**: use cognitive conflict, curiosity gap, risk/loss, identity, or numeric anchor only when the evidence supports it. Do not turn technical nuance into clickbait.
 - **Plain-language concept audit**: every high-level phrase such as "agentic", "self-evolving", "paradigm", "framework", or "future" must be immediately reducible to a concrete mechanism, file, workflow, or failure mode.
 - **Anti-smoothness**: remove overly even AI prose: repeated "not X, but Y" turns, ritual transitions, perfectly balanced paragraphs, and conclusions that erase the real caveat. A technical post can have one visible uncertainty.
+- **Creator pattern fit**: select one coherent mode. Product/tool posts should
+  show tested steps or demo media; news/previews need status boundaries; build
+  logs need an artifact, next validation, and community loop; engineering
+  mentor posts need judgment plus a practical rule.
 - **X shape**: sequence the thread as thesis -> mechanism -> example -> caveat -> link/implication. Do not make every post a feature list.
 
 When Grok is configured and the user complains about quality, rigidity, taste, or weak hooks, run a draft tournament before publishing:
@@ -282,6 +398,11 @@ The final output should reduce the user's posting friction. After drafting, conv
 Include:
 
 - **Paste-ready thread**: one clean code block containing only the posts, with no commentary inside.
+- **Brand fit**: content pillar, account-fit decision, noise risk, reader
+  takeaway, reusable asset, and discussion question.
+- **Model quality chain**: source grounding, brand lane, angle tournament,
+  creator pattern, asset design, draft synthesis, adversarial review, and final
+  gate.
 - **Per-post length audit**: mark each post as `OK`, `Tight`, or `Split` based on visible length. Do not force exact counts when multilingual text makes counting unreliable; use a conservative estimate and split posts that are clearly too long.
 - **Image placement**: specify which image goes with which post, usually image 1 on the hook post and optional supporting images on later posts.
 - **Alt text**: one short alt text per image, ready to paste into X.
@@ -317,6 +438,9 @@ Suggested final-mile template:
 **Pre-Flight**
 - Repo owner credited.
 - Personal vision labeled as personal.
+- Agent engineering brand fit is explicit.
+- Reusable asset is present.
+- Concrete discussion question is present.
 - No unsupported "best/first/only" claim.
 - Images are conceptual or attributed.
 - Link works.
@@ -372,11 +496,11 @@ Never run `--live` if `cross_check_review.md` is not `pass`, referenced images a
 
 ### 7. Produce GPT Image 2 Visual Assets
 
-Default rule: a final X posting pack includes actual generated images. When this skill is invoked for a repo-to-X posting pack, treat image generation as required by default. Use the `imagegen` skill / built-in `image_gen` tool after the text strategy is clear unless the user explicitly opts out with text-only, no images, prompts-only, or manual images. Do not say "images were not generated because the user did not explicitly request generated assets"; invoking this skill is enough signal to generate the default visual pack.
+Default rule: a technical final X posting pack includes actual generated images. When this skill is invoked for a repo/paper/source-to-X technical pack, treat image generation as required by default. Use the `imagegen` skill / built-in `image_gen` tool after the text strategy is clear unless the user explicitly opts out with text-only, no images, prompts-only, or manual images. Professional bug reports are the exception: use real evidence screenshots supplied by the user or text-only copy; do not generate fake KYC/support evidence. Do not say "images were not generated because the user did not explicitly request generated assets"; invoking this skill is enough signal to generate the default visual pack for technical posts.
 
 Hard triggers: if the user asks for GPT Image 2, Image 2, image2, generated images, actual images, or "配图", generate images. Do not stop at prompts. Do not satisfy an image request by drawing low-quality placeholder cards with Python, SVG, HTML/CSS, or canvas unless the user explicitly asks for deterministic code-native graphics.
 
-If the built-in image tool returns an image in chat or under `$CODEX_HOME/generated_images/...`, copy or move the selected image file into the repo run directory's `images/` folder, then register it. If the tool cannot expose a local file path, register the asset as `prompt_only` and clearly say the actual file could not be governed locally. `prompt_only` is a fallback for tool limitations or explicit user opt-out, not the default path. Do not pretend a chat-only image is a local posting asset.
+If the built-in image tool returns an image in chat or under `$CODEX_HOME/generated_images/...`, copy or move the selected image file into the repo run directory's `images/` folder, then register it. If an actual-image pack is required and the tool cannot expose a governable local file path, the image gate is blocked. Do not register prompt-only as a fallback, and do not pretend a chat-only image is a local posting asset.
 
 Responsible visual rules:
 
@@ -400,7 +524,7 @@ For each image, output:
 - Alt text: concise, accessible description.
 - Disclosure line: e.g. "Generated conceptual visual, not an official project screenshot."
 
-If image generation is available, generate 1-3 images by default. Do not stop at prompts. If image generation is not available, provide ready-to-run prompts, register them as `prompt_only`, and make that limitation explicit.
+If image generation is available, generate 1-3 images by default. Do not stop at prompts. If image generation is not available for an actual-image pack, stop at a blocked image gate and report the limitation. Prompt-only output is allowed only when the user explicitly requested prompt-only/text-only/manual-image mode.
 
 Generated images must be stored under the repo run directory's `images/` folder and recorded in `images_manifest.json` when a run workspace exists. Do not leave generated images only in chat, Downloads, a hidden app cache, or a random temp folder when the user asked for a governed posting pack.
 
@@ -416,11 +540,12 @@ python -B <skill-dir>/scripts/register_image_asset.py <repo-run-dir> /path/to/ge
   --disclosure "Generated conceptual visual, not an official project screenshot."
 ```
 
-If the image generation tool cannot expose a local file path, register a prompt-only asset instead and say so:
+Only when the user explicitly requested prompt-only output, register a prompt-only asset and label it as non-publish-ready media:
 
 ```bash
 python -B <skill-dir>/scripts/register_image_asset.py <repo-run-dir> \
   --prompt-only \
+  --prompt-only-reason user_requested_prompt_only \
   --id image-1 \
   --post 1/N \
   --purpose "hook visual" \
@@ -441,7 +566,7 @@ When a run workspace exists, run the image gate before presenting "Ready To Post
 python -B <skill-dir>/scripts/check_image_assets.py <repo-run-dir>
 ```
 
-If this command fails because images are still `planned` or `prompt_only`, use `imagegen` / built-in image generation and register the generated files before claiming the pack is ready. Only pass `--allow-prompt-only` when the user explicitly opted out of actual images or the image tool is unavailable.
+If this command fails because images are still `planned` or `prompt_only`, use `imagegen` / built-in image generation and register the generated files before claiming the pack is ready. Only pass `--allow-prompt-only` when the user explicitly requested prompt-only/text-only/manual-image mode; never use it as a fallback for failed image generation.
 
 Default Image 2 pack:
 
@@ -649,6 +774,9 @@ Publish gate recommendation:
 
 - `post_eval.json` decision should be `ready`, or the user explicitly approves publishing despite `revise`.
 - `claim_safety` must stay above the threshold in `x-eval-rubric.md`.
+- `brand_clarity`, `cta_specificity`, `asset_value`, `emotion_control`, and
+  `account_fit` should pass; a safe post can still be revised if it blurs the
+  account.
 - `cross_check_review.md` and image gates still matter more than a high Grok score.
 - Never optimize for engagement by weakening attribution, source boundaries, or generated-image disclosure.
 
@@ -708,9 +836,13 @@ Experiment rules:
 
 Before finalizing, run this checklist:
 
-- Does the first post clearly credit the repo owner?
+- Is the repo owner credited early enough to avoid hidden affiliation?
 - Are all strong claims backed by repo files or GitHub metadata?
 - Are personal opinions and visions labeled as personal?
+- Does the post fit the Agent engineering account promise?
+- Is there one reusable asset?
+- Is there one concrete discussion question?
+- Has complaint emotion been converted into a bug-report or failure-mode shape?
 - Does the thread avoid sounding like an official announcement when the user is only sharing?
 - Does it include a useful technical reason to care?
 - Does it include at least one caveat or maturity boundary when appropriate?
@@ -724,13 +856,13 @@ Before finalizing, run this checklist:
 Use this pattern when the user says the project is not theirs:
 
 ```text
-(1/N) 最近看到一个很有意思的开源项目：<repo> by <owner>.
+(1/N) Agent 系统最容易重复踩坑的地方，不是模型不够聪明，而是失败没有地方沉淀。
 
-它做的是 <verified project scope>. 我不是项目成员，只是从开发者视角觉得这个方向值得认真看一下。
+<repo> by <owner> 正在处理 <verified project scope>. 我不是项目成员，只是从 Agent 工程视角看它的 failure-memory 价值。
 
 <repo URL>
 
-下面是我的个人理解和一点延伸思考。
+下面是我的个人理解和一个可复用检查表。
 ```
 
 Then continue with verified facts first, and the user's vision second.

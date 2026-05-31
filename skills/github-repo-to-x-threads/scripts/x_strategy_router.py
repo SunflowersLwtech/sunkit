@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from brand_profile import BRAND_PROFILE, brand_contract_lines, classify_brand_input
+
 
 GITHUB_RE = re.compile(r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/.*)?$")
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -130,7 +132,8 @@ def prompt_flags(prompt: str) -> dict[str, bool]:
         "asks_launch": any(word in text for word in ("launch", "发布版", "我做的", "i built", "we built", "released", "ship")),
         "asks_compare": any(word in text for word in ("compare", "对比", "比较", "roundup", "候选池", "多个", "5 个")),
         "asks_article": any(word in text for word in ("article", "长文", "x article", "文章")),
-        "asks_builder_notes": any(word in text for word in ("我试了", "tested", "demo", "踩坑", "build notes", "复盘")),
+        "asks_builder_notes": any(word in text for word in ("我试了", "tested", "demo", "踩坑", "build notes", "build-in-public", "building in public", "mcp creator", "debug memory", "复盘")),
+        "asks_profile": any(word in text for word in ("bio", "profile", "置顶", "pinned", "账号定位", "定位", "主页")),
         "asks_no_images": any(word in text for word in ("text-only", "no image", "不要配图", "不要图片", "prompts-only")),
         "asks_images": any(word in text for word in ("配图", "image2", "gpt image", "image 2", "生成图", "actual images")),
     }
@@ -160,8 +163,21 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
     flags = prompt_flags(prompt)
     kinds = {item["kind"] for item in classifications}
     source_count = len(classifications)
+    brand_fit = classify_brand_input(
+        "\n".join([prompt, *[str(item.get("source", "")) for item in classifications]]),
+        kinds,
+    )
 
-    if flags["asks_publish"] and "existing_posting_pack" in kinds:
+    if flags["asks_profile"]:
+        strategy_id = "profile_positioning"
+        strategy_name = "Profile positioning / pinned post"
+    elif brand_fit["content_lane"] == "professional_bug_report":
+        strategy_id = "professional_bug_report"
+        strategy_name = "Professional bug report rewrite"
+    elif brand_fit["content_lane"] == "off_main_account_or_agent_link_required":
+        strategy_id = "off_main_filter"
+        strategy_name = "Off-main-account filter or Agent-link rewrite"
+    elif flags["asks_publish"] and "existing_posting_pack" in kinds:
         strategy_id = "publish_existing_pack"
         strategy_name = "Publish approved governed pack"
     elif flags["asks_compare"] or source_count > 1:
@@ -171,8 +187,8 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
         strategy_id = "launch_thread"
         strategy_name = "Launch thread"
     elif "paper" in kinds:
-        strategy_id = "paper_share"
-        strategy_name = "Independent paper share"
+        strategy_id = "paper_to_system"
+        strategy_name = "Paper-to-system engineering thread"
     elif flags["asks_article"]:
         strategy_id = "x_article"
         strategy_name = "X Article / long-form post"
@@ -192,6 +208,12 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
     elif flags["asks_images"]:
         image_policy = "actual_gpt_image_required"
         image_count = 3 if source_count > 1 or strategy_id in {"x_article", "comparison_or_roundup"} else 2
+    elif strategy_id == "professional_bug_report":
+        image_policy = "manual_evidence_screenshots_preferred"
+        image_count = 0
+    elif strategy_id in {"profile_positioning", "off_main_filter"}:
+        image_policy = "text_only_default"
+        image_count = 0
     else:
         image_policy = "actual_gpt_image_default"
         image_count = 1 if strategy_id in {"publish_existing_pack"} else 2
@@ -220,7 +242,7 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
         "thread_shape": {
             "default_posts": "adaptive",
             "short": "1 post or 4-6 thread items for simple inputs",
-            "standard": "6-10 thread items for repo/paper shares",
+            "standard": "6-10 thread items for repo shares or paper-to-system posts",
             "long": "10-15+ only when comparison, caveats, or evidence need space",
         },
         "evidence_plan": list(dict.fromkeys(evidence_plan)),
@@ -229,6 +251,19 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
             "User vision is labeled as personal vision.",
             "Unknowns are converted into caveats, not confident claims.",
         ],
+        "brand_profile": {
+            "positioning": BRAND_PROFILE["positioning"],
+            "tagline": BRAND_PROFILE["tagline"],
+            "pillar": brand_fit["pillar"],
+            "content_lane": brand_fit["content_lane"],
+            "account_fit": brand_fit["account_fit"],
+            "emotion_risk": brand_fit["emotion_risk"],
+            "routing_note": brand_fit["routing_note"],
+            "requires_reusable_asset": True,
+            "requires_discussion_question": True,
+            "acceptable_assets": brand_fit["required_asset_types"],
+            "contract": brand_contract_lines(),
+        },
         "learned_notes": learned_notes(profile, strategy_id),
     }
 
@@ -252,8 +287,10 @@ def build_decision(sources: list[str], prompt: str, memory_root: Path) -> dict[s
         "next_steps": [
             "Create or reuse a governed run workspace.",
             "Collect source-specific evidence before drafting.",
+            "Apply the Agent engineering brand gate before writing public copy.",
             "Fill claims_ledger.json and cross_check_review.md.",
-            "Generate and register actual GPT Image 2 assets unless explicitly opted out.",
+            "Add one reusable asset and one concrete discussion question.",
+            "Follow the selected image policy; generate/register GPT Image 2 assets only when the strategy requires generated visuals.",
             "After publish or review, run record_post_outcome.py to evolve local strategy memory.",
         ],
     }
@@ -261,7 +298,7 @@ def build_decision(sources: list[str], prompt: str, memory_root: Path) -> dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sources", nargs="*", help="Any source: repo, paper URL, web URL, local path, posting pack, or raw idea")
+    parser.add_argument("sources", nargs="*", help="Any source: repo, paper URL, web URL, local path, posting pack, profile prompt, support complaint, or raw idea")
     parser.add_argument("--prompt", default="", help="Full user request or angle")
     parser.add_argument("--source-file", help="Optional file containing one source per line")
     parser.add_argument("--memory-root", default=str(Path.cwd() / "repo-to-x-workspace" / "strategy-memory"))

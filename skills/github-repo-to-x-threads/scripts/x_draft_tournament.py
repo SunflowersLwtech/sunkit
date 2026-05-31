@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate angle-first X draft variants and select a stronger rewrite candidate."""
+"""Generate Agent-engineering angle-first X draft variants and select a rewrite."""
 
 from __future__ import annotations
 
@@ -18,18 +18,32 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from x_eval_post import XAI_CHAT_URL, strip_code_fence  # noqa: E402
 from x_publish_thread import extract_ready_to_post, load_env  # noqa: E402
+from brand_profile import BRAND_PROFILE, brand_contract_lines, classify_brand_input  # noqa: E402
+from model_quality_chain import quality_chain_markdown, quality_chain_prompt_lines, quality_chain_schema  # noqa: E402
 
 
 ANGLE_CONTRACT = [
+    "The account positioning is Agent 工程实战派: Agent 工程如何从 demo 变成可靠系统.",
+    "Every winning variant must map to agent reliability, build-in-public, paper-to-system, or embodied AI watch.",
+    "Every winning variant must include one reusable asset and one concrete discussion question.",
+    "If the current pack is a support/KYC rant, convert it into a cold bug report or an Agent reliability failure-mode lesson.",
+    "If the current pack is life/media chatter, move it off-main-account unless it has a concrete Agent engineering mechanism.",
     "Do the angle tournament before writing variants: produce at least 3 materially different angles, not 3 phrasings of the same summary.",
     "Each angle must include a repeatable thesis, reader pain, concrete example, caveat, and claim-risk note.",
     "Strong angle shape: not just <repo category>, but <mechanism> that changes <workflow constraint>.",
+    "Select one creator content mode before drafting: engineering_mentor, demo_first_tool, test_catalog, builder_resource_log, or product_translator_longform.",
+    "Creator patterns are structure only. Do not imitate a specific creator's personal identity, catchphrases, emoji habits, or community nicknames.",
+    "For demo_first_tool, include real tested steps or a clear not-tested boundary plus screenshot/video placement when real media is available.",
+    "For test_catalog, separate official release, preview, leak, rumor, tested result, and inference.",
+    "For builder_resource_log, include artifact, current status, next validation, and a community loop.",
+    "For product_translator_longform, separate original-source facts, interpretation, product/workflow implication, trend prediction, and user vision.",
     "The winning first post must be repeatable as a thesis. It cannot simply introduce the repo or say it is interesting.",
     "Forbidden first-post patterns: 最近看到, 值得认真看, 很有意思, quick thread, this repo is, 这个项目是, 这个库是.",
     "Use one coherent voice. Chinese is default; English is for repo names, paths, APIs, commands, or one deliberate hook line.",
     "Every variant needs one concrete example or path/command/API and one visible caveat/boundary.",
     "Do not put multi-line code in one tweet. Use a one-line pseudo snippet, a path, or split the example across posts.",
     "Put repo name and URL by post 2 or the final post unless the current pack intentionally has no URL.",
+    "Expose the model quality chain status; missing stages are not publish-ready.",
 ]
 
 
@@ -93,21 +107,35 @@ def parse_json_content(content: str) -> dict[str, Any]:
 
 
 def run_grok(api_key: str, model: str, pack: dict[str, Any], prompt: str, variants: int, timeout: int) -> dict[str, Any]:
+    source_context = pack.get("source_context") if isinstance(pack.get("source_context"), dict) else {}
+    source_kind = str(source_context.get("source_kind") or "")
+    source_kinds = {source_kind} if source_kind else set()
+    brand_fit = classify_brand_input(prompt + "\n" + pack.get("posting_pack", ""), source_kinds)
     system = (
         "You are a senior technical X editor. Your job is to make posts less rigid and more worth reading. "
         "Use only the provided evidence. Do not invent benchmarks, authorship, code availability, results, or affiliations. "
-        "Prioritize one sharp repeatable thesis over a complete summary. Return only valid JSON."
+        "Prioritize one sharp repeatable thesis over a complete summary, while protecting the user's Agent engineering brand. "
+        "Return only valid JSON."
     )
     user = {
         "task": "Run an angle-first draft tournament for this governed X posting pack.",
         "user_feedback": prompt,
+        "brand_profile": BRAND_PROFILE,
+        "brand_fit": brand_fit,
+        "brand_contract": brand_contract_lines(),
+        "model_quality_chain": quality_chain_prompt_lines(),
         "angle_contract": ANGLE_CONTRACT,
         "rules": [
             "Keep claim safety and attribution boundaries.",
+            "The main account promise is Agent 工程如何从 demo 变成可靠系统.",
+            "Diagnose brand fit before rewriting: pillar, account fit, noise risk, reusable asset, discussion question.",
+            "If account fit is weak, recommend off-main-account handling or rewrite around a concrete Agent reliability mechanism.",
             "Do not turn caveats into hype.",
             "Avoid generic openers like 'recently saw', 'worth reading', or 'interesting paper'.",
             "The winning draft should sound like a real technical reader found a non-obvious takeaway.",
             "A shorter sharper thread can beat a complete summary.",
+            "Pick a creator pattern and make the hook, media plan, reusable asset, and discussion question match it.",
+            "Reward practical next action: the reader can try, inspect, compare, save, or adapt something after reading.",
             "Prefer 4-6 posts unless the evidence is thin; each post should add a new job: thesis, mechanism, example, caveat, link.",
             "Do not remove a caveat just to make the hook cleaner.",
             "If the pack is metadata-only, do not add source-code-internal claims unless they are stated in the README or metadata.",
@@ -118,13 +146,25 @@ def run_grok(api_key: str, model: str, pack: dict[str, Any], prompt: str, varian
         "pack": pack,
         "output_schema": {
             "quality_diagnosis": ["string"],
+            "brand_diagnosis": {
+                "pillar": "string",
+                "account_fit": "string",
+                "noise_risk": "string",
+                "reusable_asset_needed": "string",
+                "discussion_question_needed": "string",
+            },
+            "model_quality_chain": quality_chain_schema(),
             "angle_candidates": [
                 {
                     "id": "A",
                     "angle": "string",
                     "thesis": "one-sentence repeatable claim",
                     "reader_pain": "string",
-                    "concrete_example": "string",
+                "concrete_example": "string",
+                "brand_connection": "string",
+                "creator_pattern": "engineering_mentor|demo_first_tool|test_catalog|builder_resource_log|product_translator_longform|other",
+                "reusable_asset": "string",
+                "discussion_question": "string",
                     "why_it_might_work": "string",
                     "risk": "string",
                     "hook": "string",
@@ -136,13 +176,19 @@ def run_grok(api_key: str, model: str, pack: dict[str, Any], prompt: str, varian
                     "id": "v1",
                     "angle_id": "A",
                     "style": "string",
+                    "creator_pattern": "engineering_mentor|demo_first_tool|test_catalog|builder_resource_log|product_translator_longform|other",
                     "posts": ["paste-ready post text, already numbered if thread"],
                     "why_better_than_current": "string",
                     "risks_or_claim_checks": ["string"],
+                    "brand_fit": "string",
+                    "reusable_asset": "string",
+                    "discussion_question": "string",
                     "scorecard": {
                         "thesis_strength": "string",
                         "concrete_example": "string",
                         "caveat_visible": "string",
+                        "creator_pattern_fit": "string",
+                        "practical_next_action": "string",
                         "voice_consistency": "string",
                     },
                 }
@@ -203,6 +249,12 @@ def write_markdown(path: Path, result: dict[str, Any]) -> None:
     ]
     for item in result.get("quality_diagnosis", []):
         lines.append(f"- {item}")
+    lines.extend(["", *quality_chain_markdown(result)])
+    diagnosis = result.get("brand_diagnosis") if isinstance(result.get("brand_diagnosis"), dict) else {}
+    if diagnosis:
+        lines.extend(["", "## Brand Diagnosis", ""])
+        for key in ("pillar", "account_fit", "noise_risk", "reusable_asset_needed", "discussion_question_needed"):
+            lines.append(f"- {key}: {diagnosis.get(key, '')}")
     lines.extend(["", "## Angle Candidates", ""])
     for angle in result.get("angle_candidates", []):
         lines.append(f"### {angle.get('id', '')}: {angle.get('angle', '')}")
@@ -216,6 +268,18 @@ def write_markdown(path: Path, result: dict[str, Any]) -> None:
         example = angle.get("concrete_example")
         if example:
             lines.append(f"- Concrete example: {example}")
+        brand = angle.get("brand_connection")
+        if brand:
+            lines.append(f"- Brand connection: {brand}")
+        creator_pattern = angle.get("creator_pattern")
+        if creator_pattern:
+            lines.append(f"- Creator pattern: {creator_pattern}")
+        asset = angle.get("reusable_asset")
+        if asset:
+            lines.append(f"- Reusable asset: {asset}")
+        question = angle.get("discussion_question")
+        if question:
+            lines.append(f"- Discussion question: {question}")
         lines.append(f"- Why it might work: {angle.get('why_it_might_work', '')}")
         lines.append(f"- Risk: {angle.get('risk', '')}")
         caveat = angle.get("caveat")
@@ -288,7 +352,11 @@ def write_proposed_pack(path: Path, source_pack: str, variant: dict[str, Any]) -
         "",
         f"- Recommended variant: `{variant.get('id', '')}`",
         f"- Angle: `{variant.get('angle_id', '')}`",
+        f"- Creator pattern: {variant.get('creator_pattern', '')}",
         f"- Why better: {variant.get('why_better_than_current', '')}",
+        f"- Brand fit: {variant.get('brand_fit', '')}",
+        f"- Reusable asset: {variant.get('reusable_asset', '')}",
+        f"- Discussion question: {variant.get('discussion_question', '')}",
         "",
         "\n".join(audit_lines),
     ]

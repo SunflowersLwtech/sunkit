@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score a governed posting pack before publishing to X."""
+"""Score a governed Agent-engineering posting pack before publishing to X."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ SKILL_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from x_publish_thread import extract_ready_to_post, load_env, read_json  # noqa: E402
+from brand_profile import likely_discussion_question  # noqa: E402
 
 
 XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
@@ -131,8 +132,24 @@ def text_features(posts: list[str]) -> dict[str, Any]:
     mentions = re.findall(r"(?<!\w)@\w+", full)
     questions = full.count("?") + full.count("？")
     cta_words = re.findall(r"\b(follow|retweet|like|share|subscribe|dm|click|join)\b", full, flags=re.I)
+    vague_cta = re.findall(r"(thoughts\??|想法[？?]?|怎么看[？?]?|欢迎讨论)", full, flags=re.I)
     ai_slop = re.findall(
         r"\b(game[- ]changer|revolutionary|future is here|unlock|supercharge|10x|best|only|ultimate)\b",
+        full,
+        flags=re.I,
+    )
+    emotion_terms = re.findall(
+        r"(angry|furious|slamming|ridiculous|fix this|垃圾|离谱|气死|崩溃|傻逼|sb|维权|控诉|拉黑|😤)",
+        full,
+        flags=re.I,
+    )
+    complaint_terms = re.findall(
+        r"(kyc|sumsub|plasma|ticket|support|appeal|reject|客服|工单|申诉|拒绝|表单|bug)",
+        full,
+        flags=re.I,
+    )
+    bug_report_structure = re.findall(
+        r"(repro|steps?|impact|expected|actual|evidence|ticket|复现|影响|预期|实际|证据|工单)",
         full,
         flags=re.I,
     )
@@ -212,6 +229,69 @@ def text_features(posts: list[str]) -> dict[str, Any]:
         full,
         flags=re.I,
     )
+    brand_markers = re.findall(
+        r"(agent|agents|tool[- ]use|tool use|uncertainty|failure memory|debug memory|mcp|eval|routing|hallucination|embodied|robot|reliability|智能体|可靠|工具调用|不确定|失败记忆|调试记忆|具身|机器人|工程)",
+        full,
+        flags=re.I,
+    )
+    asset_markers = re.findall(
+        r"(checklist|flowchart|issue template|prompt snippet|before/after|failure[- ]mode|rubric|template|playbook|清单|流程图|模板|对照表|失败模式|提示词|检查表|PRD|Bug Report)",
+        full,
+        flags=re.I,
+    )
+    demo_evidence_markers = re.findall(
+        r"(我试了|我测了|实测|测试了|跑了一遍|录屏|截图|screen ?record|screenshot|demo|演示|效果|步骤|怎么用|how to use|before/after|diff)",
+        full,
+        flags=re.I,
+    )
+    tested_claim_markers = re.findall(
+        r"(我试了|我测了|实测|tested|have you tested|not tested|未测试|没有实测)",
+        full,
+        flags=re.I,
+    )
+    status_boundary_markers = re.findall(
+        r"(available|released|launch(?:ed)?|preview|beta|leak(?:ed)?|rumou?r|official|unofficial|tested|untested|not tested|上线|发布|预览|内测|泄露|传闻|官方|非官方|实测|未测试)",
+        full,
+        flags=re.I,
+    )
+    builder_log_markers = re.findall(
+        r"(build[- ]in[- ]public|我在做|我做了|今天|昨晚|进度|修了|开源|即将开源|周刊|资源|清单|飞书|微信群|评论区|测试资格|next validation|下一步|共建)",
+        full,
+        flags=re.I,
+    )
+    product_translator_markers = re.findall(
+        r"(产品经理|产品视角|产品形态|产品化|工作流|商业模式|平台机会|中文化|转译|解读|长文|论文|播客|访谈|英文资料|资源链接|阅读路径|趋势判断|反共识|标题|案例)",
+        full,
+        flags=re.I,
+    )
+    practical_action_markers = re.findall(
+        r"(try|test|inspect|compare|save|adapt|run|clone|install|open|configure|验证|复现|运行|安装|接入|配置|对比|保存|复用|试一下|测一下|看一下|跑一下)",
+        full,
+        flags=re.I,
+    )
+    community_loop_markers = re.findall(
+        r"(你会|你测|你试|你觉得|评论|讨论|反馈|reply|beta|issue|PR|微信群|共建|测试资格|have you tested|what would|how would)",
+        full,
+        flags=re.I,
+    )
+    creator_pattern_markers = (
+        demo_evidence_markers
+        + status_boundary_markers
+        + builder_log_markers
+        + product_translator_markers
+        + practical_action_markers
+        + community_loop_markers
+    )
+    life_media_markers = re.findall(
+        r"(电视剧|电影|剧情|life|生活|吐槽|travel|food|日常)",
+        full,
+        flags=re.I,
+    )
+    quality_chain_markers = re.findall(
+        r"(Model Quality Chain|source_grounding|brand_lane|angle_tournament|creator_pattern|asset_design|draft_synthesis|adversarial_review|final_gate)",
+        full,
+        flags=re.I,
+    )
     hook_tension_markers = re.findall(
         r"(为什么|怎么会|问题不是|真正的问题|不是.{0,36}而是|not .{0,48} but|instead of|rather than|反常识|误区|风险|代价|坑|footgun|constraint|trade[- ]off|vs\.?|对比|反而|悬念)",
         first_body,
@@ -226,6 +306,7 @@ def text_features(posts: list[str]) -> dict[str, Any]:
     voice_drift = cjk_chars > 40 and len(english_function_words) > max(5, len(posts) * 2)
     plain_language_gap = len(high_concepts) > 2 and len(material_markers) < max(2, len(high_concepts) // 2)
     ai_smoothness_count = len(ritual_transition_phrases) + max(0, len(thesis_markers) - 2) + int(plain_language_gap)
+    all_caps_words = re.findall(r"\b[A-Z]{4,}\b", full)
     total_chars = sum(lengths)
     return {
         "post_count": len(posts),
@@ -239,8 +320,15 @@ def text_features(posts: list[str]) -> dict[str, Any]:
         "hashtag_count": len(hashtags),
         "mention_count": len(mentions),
         "question_count": questions,
+        "has_discussion_question": int(likely_discussion_question(full)),
+        "vague_cta_count": len(vague_cta),
         "cta_count": len(cta_words),
         "ai_slop_count": len(ai_slop),
+        "emotion_term_count": len(emotion_terms),
+        "exclamation_count": full.count("!"),
+        "all_caps_word_count": len(all_caps_words),
+        "complaint_term_count": len(complaint_terms),
+        "bug_report_structure_count": len(bug_report_structure),
         "caveat_count": len(caveat_terms),
         "generic_opener_count": len(generic_openers),
         "repo_note_opener_count": len(repo_note_openers),
@@ -252,6 +340,18 @@ def text_features(posts: list[str]) -> dict[str, Any]:
         "first_material_marker_count": len(first_material_markers),
         "vague_abstraction_count": len(vague_abstractions),
         "high_concept_count": len(high_concepts),
+        "brand_marker_count": len(brand_markers),
+        "asset_marker_count": len(asset_markers),
+        "creator_pattern_marker_count": len(creator_pattern_markers),
+        "demo_evidence_marker_count": len(demo_evidence_markers),
+        "tested_claim_marker_count": len(tested_claim_markers),
+        "status_boundary_marker_count": len(status_boundary_markers),
+        "builder_log_marker_count": len(builder_log_markers),
+        "product_translator_marker_count": len(product_translator_markers),
+        "practical_action_marker_count": len(practical_action_markers),
+        "community_loop_marker_count": len(community_loop_markers),
+        "life_media_marker_count": len(life_media_markers),
+        "quality_chain_marker_count": len(quality_chain_markers),
         "plain_language_gap_count": int(plain_language_gap),
         "hook_tension_marker_count": len(hook_tension_markers),
         "ai_smoothness_count": ai_smoothness_count,
@@ -398,6 +498,8 @@ def deterministic_scores(
         structure_fit -= 0.12
     if features["mention_count"] > 4:
         structure_fit -= 0.08
+    if features["quality_chain_marker_count"] < 4:
+        structure_fit -= 0.06
 
     voice_authenticity = 0.62
     if features["template_phrase_count"]:
@@ -439,6 +541,104 @@ def deterministic_scores(
     if not features["caveat_count"]:
         risk_control -= 0.05
 
+    brand_clarity = 0.42
+    brand_clarity += min(0.28, features["brand_marker_count"] * 0.025)
+    if features["first_thesis_marker_count"]:
+        brand_clarity += 0.08
+    if features["material_marker_count"] >= 3:
+        brand_clarity += 0.08
+    if re.search(r"(agent|智能体|可靠|failure|debug|tool|工具|具身|机器人)", "\n".join(posts), flags=re.I):
+        brand_clarity += 0.10
+    if features["life_media_marker_count"] and features["brand_marker_count"] < 2:
+        brand_clarity -= 0.22
+    if features["complaint_term_count"] and features["brand_marker_count"] < 2:
+        brand_clarity -= 0.12
+
+    cta_specificity = 0.35
+    if features["has_discussion_question"]:
+        cta_specificity += 0.25
+    if features["question_count"]:
+        cta_specificity += min(0.18, features["question_count"] * 0.06)
+    if features["material_marker_count"] >= 3 or features["asset_marker_count"]:
+        cta_specificity += 0.10
+    if features["vague_cta_count"] and features["question_count"] <= features["vague_cta_count"]:
+        cta_specificity -= 0.18
+    if not features["has_discussion_question"]:
+        cta_specificity -= 0.12
+
+    asset_value = 0.34
+    asset_value += min(0.30, features["asset_marker_count"] * 0.08)
+    if features["material_marker_count"] >= 3:
+        asset_value += 0.10
+    if features["example_marker_count"] and features["caveat_count"]:
+        asset_value += 0.08
+    if re.search(r"(1\.|2\.|3\.|①|②|③|- )", "\n".join(posts)):
+        asset_value += 0.06
+    if not features["asset_marker_count"]:
+        asset_value -= 0.12
+
+    emotion_control = 0.82
+    emotion_control -= min(0.30, features["emotion_term_count"] * 0.06)
+    emotion_control -= min(0.18, max(0, features["exclamation_count"] - 1) * 0.04)
+    emotion_control -= min(0.12, features["all_caps_word_count"] * 0.02)
+    if features["hashtag_count"] > 2:
+        emotion_control -= 0.12
+    if features["mention_count"] > 4:
+        emotion_control -= 0.08
+    if features["complaint_term_count"] and features["bug_report_structure_count"] >= 3:
+        emotion_control += 0.12
+    if features["complaint_term_count"] and features["bug_report_structure_count"] < 2:
+        emotion_control -= 0.12
+
+    account_fit = 0.45
+    account_fit += min(0.25, features["brand_marker_count"] * 0.025)
+    if features["asset_marker_count"]:
+        account_fit += 0.10
+    if features["has_discussion_question"]:
+        account_fit += 0.08
+    if features["life_media_marker_count"] and features["brand_marker_count"] < 2:
+        account_fit -= 0.28
+    if features["complaint_term_count"] and features["bug_report_structure_count"] >= 3:
+        account_fit += 0.05
+    elif features["complaint_term_count"] and features["brand_marker_count"] < 2:
+        account_fit -= 0.18
+
+    creator_pattern_fit = 0.46
+    if features["first_thesis_marker_count"] and features["material_marker_count"] >= 2:
+        creator_pattern_fit += 0.12
+    if features["demo_evidence_marker_count"] and features["practical_action_marker_count"]:
+        creator_pattern_fit += 0.13
+    if features["status_boundary_marker_count"] and (
+        features["question_count"] or features["caveat_count"] or features["url_count"]
+    ):
+        creator_pattern_fit += 0.10
+    if features["builder_log_marker_count"] and (
+        features["asset_marker_count"] or features["community_loop_marker_count"]
+    ):
+        creator_pattern_fit += 0.12
+    if features["product_translator_marker_count"] and (
+        features["caveat_count"] or features["url_count"] or features["material_marker_count"]
+    ):
+        creator_pattern_fit += 0.12
+    if features["practical_action_marker_count"] and features["community_loop_marker_count"]:
+        creator_pattern_fit += 0.08
+    if features["asset_marker_count"] and features["has_discussion_question"]:
+        creator_pattern_fit += 0.06
+    if features["creator_pattern_marker_count"] >= 2:
+        creator_pattern_fit += 0.05
+    if features["generic_opener_count"] or features["repo_note_opener_count"]:
+        creator_pattern_fit -= 0.08
+    if features["summary_phrase_count"] >= max(4, features["post_count"] + 1) and not (
+        features["demo_evidence_marker_count"]
+        or features["status_boundary_marker_count"]
+        or features["builder_log_marker_count"]
+    ):
+        creator_pattern_fit -= 0.08
+    if features["tested_claim_marker_count"] and not (
+        features["example_marker_count"] or features["material_marker_count"]
+    ):
+        creator_pattern_fit -= 0.10
+
     return {
         "claim_safety": clamp(claim_safety),
         "hook_strength": clamp(hook_strength),
@@ -451,21 +651,33 @@ def deterministic_scores(
         "structure_fit": clamp(structure_fit),
         "voice_authenticity": clamp(voice_authenticity),
         "risk_control": clamp(risk_control),
+        "brand_clarity": clamp(brand_clarity),
+        "cta_specificity": clamp(cta_specificity),
+        "asset_value": clamp(asset_value),
+        "emotion_control": clamp(emotion_control),
+        "account_fit": clamp(account_fit),
+        "creator_pattern_fit": clamp(creator_pattern_fit),
     }
 
 
 WEIGHTS = {
-    "claim_safety": 0.18,
-    "hook_strength": 0.12,
-    "angle_freshness": 0.14,
-    "specificity_density": 0.12,
-    "audience_fit": 0.08,
-    "bookmark_value": 0.10,
-    "reply_potential": 0.06,
-    "media_quality": 0.08,
-    "structure_fit": 0.05,
+    "claim_safety": 0.15,
+    "hook_strength": 0.10,
+    "angle_freshness": 0.09,
+    "specificity_density": 0.08,
+    "audience_fit": 0.05,
+    "bookmark_value": 0.07,
+    "reply_potential": 0.04,
+    "media_quality": 0.05,
+    "structure_fit": 0.04,
     "voice_authenticity": 0.04,
     "risk_control": 0.03,
+    "brand_clarity": 0.07,
+    "cta_specificity": 0.04,
+    "asset_value": 0.05,
+    "emotion_control": 0.03,
+    "account_fit": 0.02,
+    "creator_pattern_fit": 0.05,
 }
 
 
@@ -497,9 +709,18 @@ def grok_eval(
             "Penalize hooks that only work if the reader saw the link card, title, or image.",
             "Penalize high-level concepts that are not converted into concrete workflow language.",
             "Penalize over-smooth AI prose: ritual transitions, uniform paragraph endings, repeated balanced turns, and fake certainty.",
+            "Penalize weak Agent engineering brand fit, off-topic life/support chatter, and emotional complaint posts.",
+            "Penalize threads without a concrete discussion question or reusable asset.",
+            "Penalize drafts that mix creator modes incoherently or copy a specific creator's identity, catchphrases, emoji habits, or community nicknames.",
+            "Penalize 'tested' or 'demo' claims without real test details, screenshot/video plan, or a clear not-tested boundary.",
+            "Penalize product-translation posts that blur original source facts, interpretation, trend prediction, and user vision.",
             "Reward source-material richness: inspectable artifacts, sourced numbers, contrast, reader pain, and real caveats.",
+            "Reward content that supports Agent reliability, build-in-public, paper-to-system, or embodied AI watch.",
             "Reward concrete technical value, bookmark value, high-quality media, and responsible attribution.",
             "Reward a memorable thesis that a technical reader could repeat after reading the thread.",
+            "Reward coherent creator patterns: engineering mentor, demo-first tool, test catalog, builder resource log, or product translator longform.",
+            "Reward Chinese technical translation that turns complex sources into product/workflow decisions with resource links and caveats.",
+            "Reward practical next action and a community loop that invites useful test results, workflow comparisons, or design tradeoffs.",
             "Do not recommend unsafe manipulation or clickbait.",
         ],
         "text_only_eval_instruction": (
@@ -593,6 +814,18 @@ def decision_from_score(final_score: float, scores: dict[str, float], ignore_med
         return "revise"
     if scores.get("voice_authenticity", 0) < 0.58:
         return "revise"
+    if scores.get("brand_clarity", 0) < 0.58:
+        return "revise"
+    if scores.get("cta_specificity", 0) < 0.55:
+        return "revise"
+    if scores.get("asset_value", 0) < 0.55:
+        return "revise"
+    if scores.get("emotion_control", 0) < 0.60:
+        return "revise"
+    if scores.get("account_fit", 0) < 0.55:
+        return "revise"
+    if scores.get("creator_pattern_fit", 0) < 0.58:
+        return "revise"
     if final_score >= 0.80:
         return "ready"
     if final_score >= 0.65:
@@ -640,6 +873,34 @@ def rule_top_fixes(features: dict[str, Any], scores: dict[str, float], text_only
         fixes.append("Cut README-summary phrasing; explain the mechanism and workflow implication instead.")
     if features.get("voice_drift_count"):
         fixes.append("Keep one language voice; reserve English for technical names or one deliberate hook line.")
+    if features.get("quality_chain_marker_count", 0) < 4:
+        fixes.append("Expose the model quality chain: source grounding, brand lane, angle tournament, creator pattern, asset design, adversarial review, and final gate.")
+    if scores.get("brand_clarity", 0) < 0.58:
+        fixes.append("Tie the post to the Agent engineering promise: reliability, build-in-public, paper-to-system, or embodied AI watch.")
+    if scores.get("asset_value", 0) < 0.55:
+        fixes.append("Add one reusable asset: checklist, flowchart, issue template, prompt snippet, before/after table, or failure-mode map.")
+    if scores.get("cta_specificity", 0) < 0.55:
+        fixes.append("End with one concrete technical question instead of a vague CTA or no CTA.")
+    if scores.get("emotion_control", 0) < 0.60:
+        fixes.append("Convert emotion into process language: repro, impact, expected behavior, evidence, and next action.")
+    if scores.get("account_fit", 0) < 0.55:
+        fixes.append("Move off-main-account or rewrite around a concrete Agent engineering failure mode.")
+    if scores.get("creator_pattern_fit", 0) < 0.58:
+        if text_only_eval:
+            fixes.append("Select one creator pattern and align the hook, evidence, asset, and question to it without impersonating anyone.")
+        else:
+            fixes.append("Select one creator pattern and align the hook, evidence, media plan, asset, and question to it without impersonating anyone.")
+    if features.get("tested_claim_marker_count") and not (
+        features.get("example_marker_count") or features.get("material_marker_count")
+    ):
+        if text_only_eval:
+            fixes.append("Back any 'tested/demo' claim with a concrete step, command, result, or a not-tested boundary.")
+        else:
+            fixes.append("Back any 'tested/demo' claim with a concrete step, screenshot/video plan, command, result, or a not-tested boundary.")
+    if not features.get("practical_action_marker_count"):
+        fixes.append("Add a practical next action: try, test, inspect, compare, save, or adapt something.")
+    if not features.get("community_loop_marker_count") and scores.get("cta_specificity", 0) < 0.65:
+        fixes.append("Add a community loop: ask for a concrete test result, workflow comparison, design tradeoff, or beta feedback.")
     if features.get("post_count", 0) < 4 and features.get("total_chars", 0) < 420:
         fixes.append("Expand only if there is new substance: mechanism, example, caveat, or link.")
     if features.get("over_280_count"):

@@ -4,6 +4,21 @@ Use this when a post is safe but still feels generic, smooth, or low-value.
 These gates adapt content-diagnosis patterns for technical X posts, but the
 rules here are repo-to-X specific.
 
+## 0. Agent Engineering Brand Gate
+
+The main account is `Agent 工程实战派`: Agent 工程如何从 demo 变成可靠系统.
+Before writing, classify the input into one lane:
+
+- `main_account`: agent reliability, build-in-public, paper-to-system, or
+  embodied AI watch.
+- `professional_bug_report`: KYC/support/platform complaint rewritten as repro,
+  impact, expected behavior, evidence, and next action.
+- `off_main_account_or_agent_link_required`: life/media/mood content that has no
+  concrete Agent engineering mechanism.
+
+Do not polish off-topic material into a main-account post. Either move it off
+the main account or rewrite it around a concrete Agent failure mode.
+
 ## 1. Source Material Gate
 
 Do not optimize a hook before the content has enough material. A publishable
@@ -91,3 +106,45 @@ the post.
   -> example -> caveat -> link or implication.
 - A short post is acceptable only when it adds a new thought. Short filler is
   worse than no post.
+- Every thread should leave the reader with one reusable asset: checklist,
+  flowchart, issue template, prompt snippet, before/after table, or failure-mode
+  map.
+- End with one concrete technical question, not a vague "thoughts?".
+
+## 6. Creator Pattern Gate
+
+Use `creator-style-patterns.md` when a draft is safe but still feels like a
+generic summary. Select one primary mode before rewriting:
+
+- `engineering_mentor`: turn updates into engineering judgment, practical
+  rules, product critique, and caveats.
+- `demo_first_tool`: show how a tool is used, what was tested, what media proves
+  it, and where it breaks.
+- `test_catalog`: keep news/previews/leaks short, visual, source-aware, and
+  explicit about tested vs untested status.
+- `builder_resource_log`: make build-in-public posts artifact-first, numbered,
+  saveable, and connected to a next validation or community loop.
+- `product_translator_longform`: turn papers, podcasts, English sources, tools,
+  and product cases into Chinese explanations with source boundaries, product
+  implications, and saveable resource links.
+
+Pattern fit changes the draft:
+
+- Hook: mentor posts lead with conflict; demo posts lead with pain/result; news
+  posts lead with what changed; build logs lead with artifact/progress; product
+  translation posts lead with a counter-intuitive product question or trend
+  judgment.
+- Evidence: demo/test claims need real test details or a clear "not tested"
+  boundary; translation posts must separate original-source facts from
+  interpretation and user vision.
+- Media: tool posts should prefer screenshots/video when available; generated
+  images are conceptual and cannot fake UI evidence.
+- Asset: choose the saveable object that matches the mode, such as a quick test
+  checklist, integration steps, status table, progress log template, or reading
+  path.
+- Question: ask for a concrete test result, workflow comparison, design
+  tradeoff, or beta/use-case feedback.
+
+Do not imitate a specific creator's identity, catchphrases, emoji habits, or
+community nicknames. Absorb the structural pattern, then write in the user's own
+Agent engineering voice.

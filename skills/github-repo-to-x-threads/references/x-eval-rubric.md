@@ -24,6 +24,12 @@ Use 0.0-1.0 scores.
 | `structure_fit` | Thread length, sequencing, links, caveats, and post lengths fit X ergonomics. |
 | `voice_authenticity` | The copy sounds like a real technical reader with taste, not a rigid generated template. |
 | `risk_control` | Low spam/template/link/controversy/downranking risk. |
+| `brand_clarity` | The copy clearly supports the Agent engineering positioning rather than a generic AI/news/life stream. |
+| `cta_specificity` | The ending asks a concrete technical question that can trigger useful replies. |
+| `asset_value` | The thread gives readers a reusable asset such as a checklist, template, flow, prompt, or failure map. |
+| `emotion_control` | Emotional or complaint-like input is converted into process, repro, impact, and expected behavior. |
+| `account_fit` | The post belongs on the main account; off-topic support/life/media material is filtered or rewritten. |
+| `creator_pattern_fit` | The draft uses one coherent content mode: engineering mentor, demo-first tool, test catalog, builder resource log, or product translator longform, without impersonation. |
 
 Additional content-quality checks:
 
@@ -31,22 +37,36 @@ Additional content-quality checks:
 - `hook_independence`: post 1 works without the link card, image, or title and makes topic + reason to read + evidence credibility legible.
 - `plain_language_conversion`: high-level concepts are translated into concrete mechanisms or workflows.
 - `anti_smoothness`: the copy avoids over-polished AI patterns, repeated balanced turns, ritual transitions, and fake certainty.
+- `demo_or_test_evidence`: tool/testing claims include real test details,
+  screenshot/video plans, or a clear not-tested boundary.
+- `practical_next_action`: the reader can try, inspect, compare, save, or adapt
+  something after reading.
+- `community_loop`: the final question invites useful test results, workflow
+  comparisons, design tradeoffs, or beta feedback.
+- `translation_value`: complex sources become clear Chinese product/workflow
+  decisions while preserving source, interpretation, and user-vision boundaries.
 
 Default weighted score:
 
 ```text
 final_score =
-  0.18 * claim_safety
-+ 0.12 * hook_strength
-+ 0.14 * angle_freshness
-+ 0.12 * specificity_density
-+ 0.08 * audience_fit
-+ 0.10 * bookmark_value
-+ 0.06 * reply_potential
-+ 0.08 * media_quality
-+ 0.05 * structure_fit
+  0.15 * claim_safety
++ 0.10 * hook_strength
++ 0.09 * angle_freshness
++ 0.08 * specificity_density
++ 0.05 * audience_fit
++ 0.07 * bookmark_value
++ 0.04 * reply_potential
++ 0.05 * media_quality
++ 0.04 * structure_fit
 + 0.04 * voice_authenticity
 + 0.03 * risk_control
++ 0.07 * brand_clarity
++ 0.04 * cta_specificity
++ 0.05 * asset_value
++ 0.03 * emotion_control
++ 0.02 * account_fit
++ 0.05 * creator_pattern_fit
 ```
 
 Recommended gates:
@@ -58,6 +78,12 @@ Recommended gates:
 - Any `angle_freshness < 0.62`: revise, even if the thread is accurate.
 - Any `specificity_density < 0.65`: revise.
 - Any `voice_authenticity < 0.58`: revise.
+- Any `brand_clarity < 0.58`: revise.
+- Any `cta_specificity < 0.55`: revise.
+- Any `asset_value < 0.55`: revise.
+- Any `emotion_control < 0.60`: revise.
+- Any `account_fit < 0.55`: revise.
+- Any `creator_pattern_fit < 0.58`: revise.
 - Any `media_quality < 0.65` when images are required: regenerate or remove image references.
 
 The harsh rule: a safe, accurate summary is not automatically ready. If it reads like a paper abstract split into numbered tweets, if the hook needs the link card to make sense, or if the draft has no inspectable example, it should go through draft tournament or rewrite.
@@ -75,6 +101,14 @@ Use Grok for semantic judgment:
 - What is the one thesis a reader would remember or repost?
 - Is there enough source material to justify the hook, or is the copy writing around an empty thesis?
 - Which high-level concept should be translated into concrete workflow language?
+- Does this belong on the Agent engineering main account?
+- What reusable asset does the reader save?
+- Is the discussion question specific enough to answer?
+- If the source is a complaint, has emotion been converted into a bug report?
+- Which creator pattern is the draft using, and does the hook/media/asset/question match that pattern?
+- Are "tested", "demo", "preview", "leak", "rumor", and "official release" boundaries truthful?
+- If the post translates a paper/podcast/English source, are original facts,
+  product interpretation, and trend prediction separated?
 
 Grok should return JSON. Treat it as a reviewer, not as evidence. If Grok says a factual claim is true, still require the claim ledger or source context.
 

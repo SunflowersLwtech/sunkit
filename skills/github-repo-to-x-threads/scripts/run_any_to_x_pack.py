@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a governed X posting workspace for arbitrary inputs."""
+"""Create a governed Agent-engineering X workspace for arbitrary inputs."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ SKILL_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from collect_repo_context import load_dotenv, safe_slug  # noqa: E402
+from brand_profile import BRAND_PROFILE  # noqa: E402
 from run_repo_to_x_pack import make_claims_ledger, make_images_manifest, write_json  # noqa: E402
 from x_strategy_router import build_decision  # noqa: E402
 
@@ -76,6 +77,8 @@ def source_context(item: dict[str, Any], workspace_dir: Path) -> dict[str, Any]:
         "notes": [
             "This is an arbitrary-input run. Collect source-specific evidence before drafting public claims.",
             "For GitHub/local repos, prefer run_repo_to_x_pack.py when deeper repo evidence is required.",
+            "Apply the Agent engineering brand gate before publishing on the main account.",
+            "KYC/support/life/media inputs must become cold bug reports, Agent failure-mode notes, or off-main-account drafts.",
             "Fill claims_ledger.json before publishing.",
         ]
         + list(item.get("notes") or []),
@@ -156,6 +159,7 @@ def write_summary(run_dir: Path, manifest: dict[str, Any], strategy: dict[str, A
             "## Strategy Gate",
             "",
             "- Read `strategy_decision.json` before drafting.",
+            "- Apply the Agent engineering Brand Fit gate: pillar, account fit, reusable asset, discussion question.",
             "- Collect source-specific evidence before making public claims.",
             "- Do not publish until `cross_check_review.md` is `pass` and image gates pass.",
             "- After review or publish, run `record_post_outcome.py` so the local strategy memory improves.",
@@ -167,7 +171,7 @@ def write_summary(run_dir: Path, manifest: dict[str, Any], strategy: dict[str, A
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sources", nargs="*", help="Any input source: repo, paper, URL, local path, posting pack, or idea")
+    parser.add_argument("sources", nargs="*", help="Any input source: repo, paper, URL, local path, posting pack, profile prompt, support complaint, or idea")
     parser.add_argument("--prompt", default="", help="Full user request or angle")
     parser.add_argument("--source-file")
     parser.add_argument("--out-root", default=str(Path.cwd() / "repo-to-x-workspace" / "runs"))
@@ -198,6 +202,11 @@ def main() -> int:
         "strategy_decision_path": str(run_dir / "strategy_decision.json"),
         "strategy_memory_root": str(memory_root),
         "workspace_contract": str(SKILL_ROOT / "references" / "run-workspace-contract.md"),
+        "brand_profile": {
+            "positioning": BRAND_PROFILE["positioning"],
+            "tagline": BRAND_PROFILE["tagline"],
+            "pillars": BRAND_PROFILE["pillars"],
+        },
         "repos": repos,
     }
     write_json(run_dir / "strategy_decision.json", strategy)

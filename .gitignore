@@ -4,6 +4,7 @@
 !skills/**/.env.example
 .claude/
 .agents/
+plugins/
 __pycache__/
 *.py[cod]
 .DS_Store

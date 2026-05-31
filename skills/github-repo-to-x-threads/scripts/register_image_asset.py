@@ -62,6 +62,8 @@ def load_manifest(path: Path) -> dict:
             "Use official repo assets only when actually present and attributed.",
             "Do not reference an image in posting_pack.md unless it exists in images_manifest.json.",
             "Actual image files must be copied into images/ and include sha256.",
+            "Prompt-only entries are allowed only for explicit user-requested prompt-only/text-only/manual-image mode.",
+            "Prompt-only entries are never a fallback for failed actual image generation.",
         ],
     }
 
@@ -96,6 +98,7 @@ def build_entry(args: argparse.Namespace, copied_path: Path | None, repo_run_dir
         "mime_type": mime_type,
         "prompt": prompt,
         "prompt_path": args.prompt_file or "",
+        "prompt_only_reason": args.prompt_only_reason if args.prompt_only else "",
         "alt_text": args.alt_text,
         "disclosure": args.disclosure,
         "review_status": args.review_status,
@@ -107,6 +110,15 @@ def build_entry(args: argparse.Namespace, copied_path: Path | None, repo_run_dir
 
 def copy_asset(args: argparse.Namespace, repo_run_dir: Path) -> Path | None:
     if args.prompt_only:
+        if args.prompt_only_reason not in {
+            "user_requested_prompt_only",
+            "user_requested_text_only",
+            "user_requested_manual_images",
+        }:
+            raise SystemExit(
+                "--prompt-only requires --prompt-only-reason "
+                "user_requested_prompt_only|user_requested_text_only|user_requested_manual_images"
+            )
         return None
     if not args.asset_path:
         raise SystemExit("asset_path is required unless --prompt-only is set")
@@ -159,7 +171,17 @@ def main() -> int:
     )
     parser.add_argument("--review-status", default="needs_review", choices=["needs_review", "approved", "rejected"])
     parser.add_argument("--review-notes", default="")
-    parser.add_argument("--prompt-only", action="store_true", help="Register a prompt without an image file")
+    parser.add_argument(
+        "--prompt-only",
+        action="store_true",
+        help="Register a prompt without an image file only when the user explicitly requested prompt-only/text-only/manual-image output",
+    )
+    parser.add_argument(
+        "--prompt-only-reason",
+        choices=["user_requested_prompt_only", "user_requested_text_only", "user_requested_manual_images"],
+        default="",
+        help="Required with --prompt-only; prompt-only is never a fallback for failed image generation",
+    )
     parser.add_argument("--replace", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 

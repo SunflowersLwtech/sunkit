@@ -104,14 +104,14 @@ def extract_ready_to_post(markdown: str) -> list[str]:
     return [part.strip() for part in re.split(r"\n\s*\n", block) if part.strip()]
 
 
-def post_index_from_label(label: str, fallback: int) -> int:
+def post_index_from_label(label: str, default: int) -> int:
     match = re.match(r"\s*(?:Post\s*)?(\d+)\s*/", str(label), flags=re.IGNORECASE)
     if match:
         return int(match.group(1))
     match = re.match(r"\s*(?:Post\s*)?(\d+)\b", str(label), flags=re.IGNORECASE)
     if match:
         return int(match.group(1))
-    return fallback
+    return default
 
 
 def build_queue(repo_run_dir: Path) -> dict[str, Any]:
@@ -131,7 +131,7 @@ def build_queue(repo_run_dir: Path) -> dict[str, Any]:
             if not image_id:
                 continue
             index = post_index_from_label(str(image.get("post", "")), 1)
-            if image.get("path") or image.get("status") == "prompt_only":
+            if image.get("path"):
                 images_by_post.setdefault(index, []).append(image_id)
 
     return {
@@ -281,7 +281,7 @@ def oauth1_authorization(
 ) -> str:
     creds = oauth1_credentials(env)
     if not creds:
-        raise RuntimeError("missing OAuth1 user credentials for media upload fallback")
+        raise RuntimeError("missing OAuth1 user credentials for media upload path")
     oauth_params = {
         "oauth_consumer_key": creds["consumer_key"],
         "oauth_nonce": uuid.uuid4().hex,
@@ -499,8 +499,8 @@ def publish(args: argparse.Namespace) -> int:
     root_tweet_id = ""
     previous_tweet_id = ""
     reply_mode = args.reply_mode or str(queue.get("reply_mode") or "previous")
-    for fallback_index, post in enumerate(queue.get("posts", []), start=1):
-        index = int(post.get("index") or fallback_index)
+    for default_index, post in enumerate(queue.get("posts", []), start=1):
+        index = int(post.get("index") or default_index)
         text = str(post.get("text", "")).strip()
         if not text:
             raise SystemExit(f"post {index} has empty text")
@@ -533,8 +533,7 @@ def publish(args: argparse.Namespace) -> int:
         if not args.live:
             for image in post_images:
                 if not image.get("path"):
-                    entry["image_warnings"].append(f"{image.get('id')} has no local path")
-                    continue
+                    raise SystemExit(f"post {index} references image {image.get('id')} with no governed local path")
                 resolve_image_file(repo_run_dir, image)
         if args.live:
             media_ids = [upload_image(token, env, repo_run_dir, image) for image in post_images]

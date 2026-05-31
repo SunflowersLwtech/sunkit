@@ -33,7 +33,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-prompt-only",
         action="store_true",
-        help="Allow prompt-only entries when image generation is unavailable or the user opted out",
+        help="Allow prompt-only entries only for explicit prompt-only/text-only/manual-image user requests",
     )
     args = parser.parse_args()
 
@@ -61,6 +61,13 @@ def main() -> int:
             else:
                 warnings.append(f"{image_id}: optional prompt_only image was not used")
             continue
+        if prompt_only and args.allow_prompt_only:
+            reason = str(image.get("prompt_only_reason") or "")
+            if reason not in {"user_requested_prompt_only", "user_requested_text_only", "user_requested_manual_images"}:
+                errors.append(
+                    f"{image_id}: prompt_only requires explicit user-request reason; got {reason or '<missing>'}"
+                )
+                continue
 
         if status == "planned":
             if required:

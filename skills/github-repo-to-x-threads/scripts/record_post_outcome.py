@@ -88,7 +88,7 @@ def infer_strategy(repo_run_dir: Path, explicit: str) -> tuple[str, dict[str, An
     context = read_json(repo_run_dir / "repo_context.json") or read_json(repo_run_dir / "source_context.json")
     source_kind = str(context.get("source_kind") or context.get("kind") or "").lower()
     if source_kind == "paper":
-        return "paper_share", {}
+        return "paper_to_system", {}
     if source_kind in {"github_repo", "local_repo", "local_directory"}:
         return "independent_technical_share", {}
     if source_kind == "web_url":

@@ -15,7 +15,7 @@
     },
     {
       "id": 3,
-      "prompt": "这个本地目录 /tmp/some-open-source-repo 我想发 X 推荐一下。只要分析项目本身，不要加我的个人 vision。输出要能直接复制发。",
+      "prompt": "这个本地目录 /Users/sunfl/projects/some-open-source-repo 我想发 X 推荐一下。只要分析项目本身，不要加我的个人 vision。输出要能直接复制发。",
       "expected_output": "Reads the local repo, fetches origin metadata if available, produces a concise independent recommendation thread, includes evidence/caveats, avoids unsupported social metrics if unavailable, and gives a copy-paste ready final posting pack.",
       "files": []
     },
@@ -34,19 +34,19 @@
     {
       "id": 6,
       "prompt": "给这个 repo 生成 3 张 image2 配图，不要只是 prompts。",
-      "expected_output": "Treats image2/配图 as a hard trigger for native image generation, uses imagegen or the available built-in image generation path instead of script-drawn placeholders, stores selected files under the run workspace images/ directory when a path is available, registers them in images_manifest.json with alt text/disclosure/review status, and records prompt_only only when the tool cannot expose a local file.",
+      "expected_output": "Treats image2/配图 as a hard trigger for native image generation, uses imagegen or the available built-in image generation path instead of script-drawn placeholders, stores selected files under the run workspace images/ directory, registers them in images_manifest.json with alt text/disclosure/review status, and blocks the image gate if no governable local image file exists instead of recording prompt_only as a fallback.",
       "files": []
     },
     {
       "id": 7,
       "prompt": "colbymchenry/codegraph 帮我做成可直接发 X 的 posting pack。",
-      "expected_output": "Does not say images were skipped because the user did not explicitly request generated assets. Uses adaptive thread length rather than forcing exactly 8 posts, generates at least one actual image with the native image generation path when available, registers the generated file under images_manifest.json, runs scripts/check_image_assets.py before saying Ready To Post, and only uses prompt-only if the user opted out or the image tool is unavailable.",
+      "expected_output": "Does not say images were skipped because the user did not explicitly request generated assets. Uses adaptive thread length rather than forcing exactly 8 posts, generates at least one actual image with the native image generation path, registers the generated file under images_manifest.json, runs scripts/check_image_assets.py before saying Ready To Post, and blocks the image gate instead of using prompt-only when actual image generation fails.",
       "files": []
     },
     {
       "id": 8,
       "prompt": "https://www.alphaxiv.org/abs/2605.22817 这不是 repo，但我也想用同一套系统决定策略、生成中文 X thread、配图并准备发布。",
-      "expected_output": "Routes the alphaXiv URL as a paper input, creates or references a governed arbitrary-input workspace with strategy_decision.json, reads paper metadata/PDF evidence before drafting, searches or caveats official code availability, uses paper-share framing, generates actual GPT Image 2 conceptual visuals by default, and preserves independent-share attribution.",
+      "expected_output": "Routes the alphaXiv URL as a paper input, creates or references a governed arbitrary-input workspace with strategy_decision.json, reads paper metadata/PDF evidence before drafting, searches or caveats official code availability, uses paper-to-system framing, generates actual GPT Image 2 conceptual visuals by default, and preserves independent-share attribution.",
       "files": []
     },
     {
@@ -64,7 +64,7 @@
     {
       "id": 11,
       "prompt": "我觉得现在的 skills 太死了，发出去的质量直观感觉也不怎么样。不要只给安全摘要，帮我把这个 posting pack 变成更有角度、更像真人技术判断的版本。",
-      "expected_output": "Treats the feedback as a quality signal, does not defend the old rubric, runs or references x_draft_tournament.py to produce draft_tournament.json/draft_tournament.md and a candidate posting_pack.proposed.md, revises the eval gate so angle_freshness/specificity_density/voice_authenticity can force revise, records the qualitative lesson into strategy memory, and makes clear that the proposed rewrite still needs claim/image/eval gates before live publish.",
+      "expected_output": "Treats the feedback as a quality signal, does not defend the old rubric, runs or references x_draft_tournament.py to produce draft_tournament.json/draft_tournament.md and a candidate posting_pack.proposed.md, revises the eval gate so angle_freshness/specificity_density/voice_authenticity/brand_clarity/asset_value/cta_specificity can force revise, records the qualitative lesson into strategy memory, and makes clear that the proposed rewrite still needs claim/image/eval gates before live publish.",
       "files": []
     },
     {
@@ -83,6 +83,48 @@
       "id": 14,
       "prompt": "这个 SkillOpt posting pack 安全但太像 README 摘要，hook 也要靠链接卡片才成立。参考内容诊断方法，把它改到更有素材、更有悬念、更不像 AI 平滑文。",
       "expected_output": "Runs or references the content-quality gate before rewriting, checks source-material richness, hook independence, psychological trigger fit, plain-language concept conversion, and anti-smoothness, uses concrete artifacts/numbers/caveats from evidence rather than freehand clickbait, reruns x_eval_post.py so material_marker/plain_language/ai_smoothness style signals can force revise, and keeps claim/image/publish gates intact.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "今天那条 Plasma/Sumsub KYC 吐槽太情绪化了，帮我改成能保留专业形象的 X 内容。原帖有 Ticket #104932786、#KYCbug、fix this bug!!!",
+      "expected_output": "Routes the input to professional_bug_report, strips rage/hashtag/mention spam, rewrites it as a cold PRD-style bug report with Repro/Impact/Expected/Evidence/Question, recommends off-main-account unless tied to Agent workflow reliability, and preserves ticket evidence without unsupported accusations.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "这篇 paper 帮我发 X，但不要第一句写“这篇论文很有意思”。要按 Agent 工程实战派把它拆成系统设计启发。",
+      "expected_output": "Routes to paper_to_system, opens with a reader pain or engineering tradeoff, credits the paper source boundary, converts research concepts into system components or runtime policies, includes a reusable checklist/flow/prompt asset, ends with a concrete technical discussion question, and avoids paper-summary voice.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "围绕 MCP Creator Growth 写一条 build-in-public note：今天发现 agent debug memory 里一个失败模式和修复方案。",
+      "expected_output": "Routes to build_in_public/main_account, frames the post around Agent reliability, separates shipped behavior from next validation, includes one concrete failure mode, one fix, one reusable asset such as a failure-memory issue template, and one specific question for builders.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "我想吐槽一部电视剧，里面群体进化概念很牛但角色智商很低，帮我发主号。",
+      "expected_output": "Does not publish generic TV chatter as main-account content. Either routes off_main_filter or rewrites only if the post ties the media observation to a concrete multi-agent failure mode such as missing critique, shared state, or failure memory, then adds a reusable comparison and a specific question.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "帮我写新的 bio 和置顶帖。我现在 bio 是 Agent | Embodied，但想变成 Agent 工程实战派。",
+      "expected_output": "Routes to profile_positioning, uses the Agent engineering brand profile, proposes concise bio options and a pinned post centered on moving Agent systems from demo to reliable software, names core pillars, avoids generic AI-news positioning, and does not create a normal repo posting pack.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "评估这个 posting pack：它安全但没有问题、没有可保存资产，而且有 5 个 hashtag 和明显抱怨语气。",
+      "expected_output": "Uses x_eval_post-style gates so cta_specificity, asset_value, emotion_control, and account_fit can force revise even when claim_safety passes; recommends adding a reusable asset, a concrete technical question, and converting complaint emotion into bug-report or failure-mode language.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "参考宝玉、歸藏、TestingCatalog、向阳乔木这些 AI/X 内容创作者的特点，吸收到我们的 X 内容生产 skill 里，提高内容质量，但不要模仿个人口吻。",
+      "expected_output": "Distills creator examples into reusable content modes rather than impersonation: engineering mentor, demo-first tool, test catalog, builder resource log, and product translator longform; updates or references creator-style-patterns.md, content-quality-gates.md, thread-quality-checklist.md, and the model quality chain; makes generation, draft tournament, and x_eval_post reward coherent creator_pattern_fit, demo/test evidence, translation value, practical next action, and community loop while preserving claim safety, attribution boundaries, and image governance.",
       "files": []
     }
   ]

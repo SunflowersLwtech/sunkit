@@ -359,6 +359,12 @@ def aggregate(
             evidence_by_topic["voice"].append(label)
         if re.search(r"image|media|alt|visual", lower):
             evidence_by_topic["media"].append(label)
+        if re.search(r"brand|account|agent engineering|main account|off-main|定位", lower):
+            evidence_by_topic["brand_fit"].append(label)
+        if re.search(r"asset|checklist|template|flowchart|prompt|question|cta|讨论|问题", lower):
+            evidence_by_topic["asset_cta"].append(label)
+        if re.search(r"emotion|complaint|bug report|kyc|support|hashtag|anger|情绪|吐槽", lower):
+            evidence_by_topic["emotion_control"].append(label)
 
     for key, value in weak_dimensions.items():
         if key in {"hook_strength", "angle_freshness"}:
@@ -369,6 +375,12 @@ def aggregate(
             evidence_by_topic["caveat"].append(f"avg {key}={value:.3f}")
         elif key == "voice_authenticity":
             evidence_by_topic["voice"].append(f"avg {key}={value:.3f}")
+        elif key in {"brand_clarity", "account_fit"}:
+            evidence_by_topic["brand_fit"].append(f"avg {key}={value:.3f}")
+        elif key in {"asset_value", "cta_specificity"}:
+            evidence_by_topic["asset_cta"].append(f"avg {key}={value:.3f}")
+        elif key == "emotion_control":
+            evidence_by_topic["emotion_control"].append(f"avg {key}={value:.3f}")
 
     recommendations: list[dict[str, Any]] = []
     add_recommendation(
@@ -416,6 +428,33 @@ def aggregate(
         evidence_by_topic["media"] or [
             "Image gates are separate from text-only eval by design.",
         ],
+        "P1",
+    )
+    add_recommendation(
+        recommendations,
+        "agent_engineering_brand_gate",
+        "Keep the account legible as Agent engineering practice",
+        "Route every draft through the brand lane: agent reliability, build-in-public, paper-to-system, embodied AI watch, professional bug report, or off-main-account.",
+        "Brand clarity and account-fit failures turn strong technical notes into an unmemorable mixed stream.",
+        evidence_by_topic["brand_fit"],
+        "P0",
+    )
+    add_recommendation(
+        recommendations,
+        "asset_and_question_gate",
+        "Require one reusable asset and one concrete question",
+        "Every final thread should include a saveable checklist/template/flow/prompt/failure map and end with a specific technical discussion question.",
+        "Posts with no asset and no question are hard to bookmark or reply to even when they are accurate.",
+        evidence_by_topic["asset_cta"],
+        "P0",
+    )
+    add_recommendation(
+        recommendations,
+        "professional_complaint_gate",
+        "Convert support anger into bug-report language",
+        "KYC/support/platform complaints should use repro, impact, expected behavior, evidence, and next action; otherwise move them off the main account.",
+        "Emotion and complaint-shape failures damage the account more than they help support escalation.",
+        evidence_by_topic["emotion_control"],
         "P1",
     )
 
@@ -596,8 +635,20 @@ PATCH_TARGETS = {
         "content": "- Keep voice consistent across the thread; do not drift into bilingual filler unless it serves reach or exact technical naming.",
     },
     "visual_governance_gate": {
-        "target": "Default rule: a final X posting pack includes actual generated images.",
-        "content": "Default rule: a final X posting pack includes actual generated images, but broad candidate search stays text-only until the candidate survives angle screening.",
+        "target": "Default rule: a technical final X posting pack includes actual generated images.",
+        "content": "Default rule: a technical final X posting pack includes actual generated images, but broad candidate search stays text-only until the candidate survives angle screening.",
+    },
+    "agent_engineering_brand_gate": {
+        "target": "Before locking the draft, do an angle pass:",
+        "content": "- Confirm the brand lane before drafting: agent reliability, build-in-public, paper-to-system, embodied AI watch, professional bug report, or off-main-account.",
+    },
+    "asset_and_question_gate": {
+        "target": "- Name the reusable asset before drafting the final thread.",
+        "content": "- Keep the reusable asset and final discussion question as publish gates, not optional polish.",
+    },
+    "professional_complaint_gate": {
+        "target": "- KYC/support/platform complaint -> professional bug-report workflow:",
+        "content": "- KYC/support/platform complaints must become repro, impact, expected behavior, evidence, and next action; otherwise route them off the main account.",
     },
     "rewrite_acceptance_gate": {
         "target": "- Accept a tournament rewrite only if its eval score improves over the current accepted draft.",
