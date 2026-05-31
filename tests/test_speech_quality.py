@@ -76,6 +76,16 @@ class SpeechQualityTests(unittest.TestCase):
         self.assertTrue(segments)
         self.assertLessEqual(max(len(segment["text"]) for segment in segments), 36)
 
+    def test_caption_builder_merges_short_cjk_transition_forward(self) -> None:
+        segments = build_caption_segments(
+            "我们先看事实。不过，目前公开的信息不足。",
+            audio_sec=5.0,
+            max_display_chars=36,
+        )
+        self.assertNotIn("不过", [segment["text"] for segment in segments])
+        self.assertEqual(orphan_caption_texts(segments, set()), [])
+        self.assertTrue(any("不过" in segment["text"] for segment in segments), segments)
+
     def test_quality_gate_blocks_internal_terms_and_raw_slash(self) -> None:
         candidate = {
             "input_mode": "operator_topic",

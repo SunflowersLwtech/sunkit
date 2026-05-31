@@ -95,6 +95,9 @@ def main() -> int:
 
     expected_fps = int(props.get("fps") or 30)
     expected_frames = int(props.get("durationInFrames") or 360)
+    expected_width = int(props.get("width") or 1080)
+    expected_height = int(props.get("height") or 1920)
+    expected_orientation = str(props.get("orientation") or ("horizontal" if expected_width > expected_height else "vertical"))
     expected_duration = expected_frames / float(expected_fps)
     actual_duration = float(fmt.get("duration") or 0)
     duration_tolerance = max(0.5, expected_duration * 0.03)
@@ -116,8 +119,8 @@ def main() -> int:
     compatible_pixel_formats = {"yuv420p", "yuvj420p"}
 
     if video.is_file():
-        if video_stream.get("width") != 1080 or video_stream.get("height") != 1920:
-            errors.append(f"Expected 1080x1920, got {video_stream.get('width')}x{video_stream.get('height')}")
+        if video_stream.get("width") != expected_width or video_stream.get("height") != expected_height:
+            errors.append(f"Expected {expected_width}x{expected_height}, got {video_stream.get('width')}x{video_stream.get('height')}")
         if video_stream.get("codec_name") != "h264":
             errors.append(f"Expected h264 video, got {video_stream.get('codec_name')}")
         if video_stream.get("pix_fmt") not in compatible_pixel_formats:
@@ -138,8 +141,9 @@ def main() -> int:
         "run_dir": str(run_dir),
         "video_path": str(video),
         "expected": {
-            "width": 1080,
-            "height": 1920,
+            "width": expected_width,
+            "height": expected_height,
+            "orientation": expected_orientation,
             "fps": expected_fps,
             "durationInFrames": expected_frames,
             "duration_sec": expected_duration,
@@ -148,7 +152,7 @@ def main() -> int:
             "audio_codec": "aac" if props.get("audioSrc") else None,
         },
         "policy": {
-            "render_policy": "douyin_h264_1080x1920_aac_420p",
+            "render_policy": f"searchpo_{expected_orientation}_h264_{expected_width}x{expected_height}_aac_420p",
             "searchpo_policy_sha256": sha256_file(ROOT / "config" / "searchpo_policy.json")
             if (ROOT / "config" / "searchpo_policy.json").is_file()
             else None,

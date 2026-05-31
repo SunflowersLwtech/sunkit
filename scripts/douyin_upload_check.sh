@@ -367,7 +367,7 @@ def build_post_publish_verification(manifest: dict[str, Any], upload_result: dic
                 **remote,
                 **{key: value for key, value in creator_remote.items() if value not in ("", None, [])},
             }
-    expected_statuses = {"published", "verified-published", "已发布", "pass"}
+    expected_statuses = {"published", "verified-published", "已发布"}
     row_text = str(remote.get("row_text") or remote.get("title") or "")
     expected_title = str(manifest.get("title") or "")
     expected_desc = str(manifest.get("desc") or "")
@@ -379,6 +379,7 @@ def build_post_publish_verification(manifest: dict[str, Any], upload_result: dic
     )
     checks = {
         "remote_identity_present": bool(remote.get("remote_post_id") or remote.get("permalink") or remote.get("remote_row_hash")),
+        "remote_identity_not_adapter_only": remote.get("raw_detection_source") != "adapter_output_only",
         "remote_status_published": remote["status"] in expected_statuses,
         "title_match": title_match,
         "remote_duration_present": bool(remote["duration_sec"]),
@@ -426,7 +427,9 @@ if check_level == "adapter":
             "douyin_contract": contract_path.is_file(),
         }
     )
-elif check_level != "manifest":
+elif check_level == "manifest":
+    errors.append("SEARCHPO_DOUYIN_CHECK_LEVEL=manifest is not a release gate; use adapter")
+else:
     errors.append(f"Unsupported SEARCHPO_DOUYIN_CHECK_LEVEL: {check_level}")
 for name, ok in required_files.items():
     if not ok:

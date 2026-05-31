@@ -8,6 +8,7 @@ import email.utils
 import hashlib
 import html
 import json
+import math
 import re
 import socket
 import ssl
@@ -17,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +28,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.policy import compile_policy_regex, policy_get
+from scripts.env_utils import env_value, first_env
 
 REGISTRY_PATH = ROOT / "data_prep" / "source_registry.json"
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+ENV_FILE = ROOT / ".env"
 
 HEADERS = {
     "User-Agent": "searchpo-e2e/0.1 (+https://local)",
@@ -85,14 +88,85 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
-def fetch_text(url: str, timeout: float, token: str | None = None) -> str:
+def fetch_text(url: str, timeout: float, token: str | None = None, extra_headers: dict[str, str] | None = None) -> str:
     headers = dict(HEADERS)
+    if extra_headers:
+        headers.update(extra_headers)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
+
+
+def fetch_exa_search(url: str, query: str, limit: int, timeout: float) -> str:
+    api_key = env_value("EXA_API_KEY", ENV_FILE)
+    payload = json.dumps({"query": query, "numResults": limit, "type": "auto"}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            **HEADERS,
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
+
+
+def source_token(source: dict[str, Any]) -> str:
+    auth = str(source.get("auth") or "")
+    if auth == "optional_github_token":
+        return first_env(["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"], ENV_FILE)
+    if auth == "optional_huggingface_token":
+        return env_value("HUGGINGFACE_TOKEN", ENV_FILE)
+    return ""
+
+
+def missing_required_env(source: dict[str, Any]) -> list[str]:
+    required_any = [str(item) for item in source.get("requires_env_any") or []]
+    if required_any and not first_env(required_any, ENV_FILE):
+        return required_any
+    return []
+
+
+def render_query(value: str) -> str:
+    today = datetime.now(timezone.utc).date()
+    replacements = {
+        "{date_minus_7d}": (today - timedelta(days=7)).isoformat(),
+        "{date_minus_14d}": (today - timedelta(days=14)).isoformat(),
+        "{date_minus_30d}": (today - timedelta(days=30)).isoformat(),
+    }
+    rendered = value
+    for needle, replacement in replacements.items():
+        rendered = rendered.replace(needle, replacement)
+    return rendered
+
+
+def with_query_params(base_url: str, params: dict[str, Any]) -> str:
+    parsed = urllib.parse.urlparse(base_url)
+    query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value is not None and value != "":
+            query[key] = str(value)
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
+
+
+def query_strings(source: dict[str, Any], limit: int) -> list[tuple[str, int]]:
+    queries = [render_query(str(item)) for item in source.get("queries") or [] if str(item).strip()]
+    try:
+        max_queries = max(1, int(env_value("SEARCHPO_MAX_QUERIES_PER_SOURCE", ENV_FILE, "3") or "3"))
+    except ValueError:
+        max_queries = 3
+    selected = queries[:max_queries]
+    if not selected:
+        return [("", limit)]
+    per_query_limit = max(1, math.ceil(limit / len(selected)))
+    return [(query, per_query_limit) for query in selected]
 
 
 def raw_sha(raw: dict[str, Any]) -> str:
@@ -130,7 +204,44 @@ def parse_json_source(source: dict[str, Any], text: str, collected_at: str, limi
     data = json.loads(text)
     rows: list[dict[str, Any]] = []
 
-    if source_id == "hacker_news_algolia":
+    if source_id == "github_search_ai_repos":
+        for repo in data.get("items", [])[:limit]:
+            full_name = str(repo.get("full_name") or "")
+            rows.append(
+                raw_item(
+                    source_id,
+                    full_name or repo.get("html_url"),
+                    repo.get("html_url"),
+                    full_name,
+                    repo.get("description") or " ".join(str(topic) for topic in repo.get("topics") or [])[:500],
+                    repo.get("created_at") or repo.get("pushed_at") or repo.get("updated_at"),
+                    collected_at,
+                    {
+                        "stars": repo.get("stargazers_count"),
+                        "forks": repo.get("forks_count"),
+                        "open_issues": repo.get("open_issues_count"),
+                        "watchers": repo.get("watchers_count"),
+                    },
+                    repo,
+                )
+            )
+    elif source_id == "exa_web_search":
+        for result in data.get("results", [])[:limit]:
+            url = result.get("url")
+            rows.append(
+                raw_item(
+                    source_id,
+                    result.get("id", url),
+                    url,
+                    result.get("title") or url or "",
+                    result.get("text") or result.get("snippet") or result.get("summary"),
+                    result.get("publishedDate") or result.get("published_date"),
+                    collected_at,
+                    {"score": result.get("score")},
+                    result,
+                )
+            )
+    elif source_id == "hacker_news_algolia":
         for hit in data.get("hits", [])[:limit]:
             url = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
             rows.append(
@@ -166,6 +277,67 @@ def parse_json_source(source: dict[str, Any], text: str, collected_at: str, limi
                         "downloads": model.get("downloads"),
                     },
                     model,
+                )
+            )
+    elif source_id == "devto_ai":
+        for article in data[:limit]:
+            tags = article.get("tag_list") or []
+            rows.append(
+                raw_item(
+                    source_id,
+                    article.get("id", article.get("url")),
+                    article.get("url") or article.get("canonical_url"),
+                    article.get("title") or "",
+                    article.get("description") or " ".join(str(tag) for tag in tags),
+                    article.get("published_at") or article.get("created_at"),
+                    collected_at,
+                    {
+                        "positive_reactions": article.get("positive_reactions_count"),
+                        "comments": article.get("comments_count"),
+                    },
+                    article,
+                )
+            )
+    elif source_id == "lobsters_ai":
+        for story in data[:limit]:
+            url = story.get("url") or story.get("comments_url")
+            rows.append(
+                raw_item(
+                    source_id,
+                    story.get("short_id", url),
+                    url,
+                    story.get("title") or "",
+                    story.get("description") or " ".join(str(tag) for tag in story.get("tags") or []),
+                    story.get("created_at"),
+                    collected_at,
+                    {
+                        "score": story.get("score"),
+                        "comments": story.get("comment_count"),
+                    },
+                    story,
+                )
+            )
+    elif source_id == "libraries_io_search":
+        for package in data[:limit]:
+            name = str(package.get("name") or package.get("full_name") or "")
+            platform = str(package.get("platform") or "").strip()
+            source_item_id = f"{platform}/{name}" if platform and name else name or package.get("repository_url")
+            rows.append(
+                raw_item(
+                    source_id,
+                    source_item_id,
+                    package.get("repository_url") or package.get("package_manager_url"),
+                    source_item_id,
+                    package.get("description") or " ".join(str(keyword) for keyword in package.get("keywords") or []),
+                    package.get("latest_release_published_at") or package.get("created_at"),
+                    collected_at,
+                    {
+                        "stars": package.get("stars"),
+                        "ecosystem_rank": package.get("rank"),
+                        "dependent_repos": package.get("dependent_repos_count"),
+                        "dependent_projects": package.get("dependents_count"),
+                    },
+                    package,
                 )
             )
     elif source_id == "v2ex_hot":
@@ -278,18 +450,77 @@ def parse_github_trending(source: dict[str, Any], text: str, collected_at: str, 
     return rows
 
 
-def source_url(source: dict[str, Any], limit: int) -> str:
+def source_urls(source: dict[str, Any], limit: int) -> list[tuple[str, str, int]]:
     source_id = source["id"]
+    primary_endpoint = str(source["primary_endpoint"])
+    if source_id == "github_search_ai_repos":
+        return [
+            (
+                with_query_params(primary_endpoint, {"q": query, "sort": "updated", "order": "desc", "per_page": per_query_limit}),
+                query,
+                per_query_limit,
+            )
+            for query, per_query_limit in query_strings(source, limit)
+        ]
     if source_id == "hacker_news_algolia":
-        return f"{source['primary_endpoint']}?tags=story&query=AI&hitsPerPage={limit}"
+        return [
+            (
+                with_query_params(primary_endpoint, {"tags": "story", "query": query or "AI", "hitsPerPage": per_query_limit}),
+                query or "AI",
+                per_query_limit,
+            )
+            for query, per_query_limit in query_strings(source, limit)
+        ]
     if source_id == "huggingface_models":
-        return f"{source['primary_endpoint']}?sort=likes&direction=-1&limit={limit}"
+        urls = []
+        for query, per_query_limit in query_strings(source, limit):
+            params = dict(urllib.parse.parse_qsl(query, keep_blank_values=True))
+            params["limit"] = per_query_limit
+            urls.append((with_query_params(primary_endpoint, params), query, per_query_limit))
+        return urls
     if source_id == "arxiv_ai_ml_cl":
-        return (
-            f"{source['primary_endpoint']}?search_query=cat:cs.AI&start=0&max_results={limit}"
-            "&sortBy=submittedDate&sortOrder=descending"
-        )
-    return source.get("probe_url") or source["primary_endpoint"]
+        return [
+            (
+                with_query_params(
+                    primary_endpoint,
+                    {
+                        "search_query": query or "cat:cs.AI",
+                        "start": 0,
+                        "max_results": per_query_limit,
+                        "sortBy": "submittedDate",
+                        "sortOrder": "descending",
+                    },
+                ),
+                query or "cat:cs.AI",
+                per_query_limit,
+            )
+            for query, per_query_limit in query_strings(source, limit)
+        ]
+    if source_id == "devto_ai":
+        return [
+            (
+                with_query_params(primary_endpoint, {"tag": query or "ai", "top": 7, "per_page": per_query_limit}),
+                query or "ai",
+                per_query_limit,
+            )
+            for query, per_query_limit in query_strings(source, limit)
+        ]
+    if source_id == "exa_web_search":
+        return [
+            (primary_endpoint, query, per_query_limit)
+            for query, per_query_limit in query_strings(source, limit)
+        ]
+    if source_id == "libraries_io_search":
+        api_key = env_value("LIBRARIES_IO_API_KEY", ENV_FILE)
+        return [
+            (
+                with_query_params(primary_endpoint, {"q": query, "per_page": per_query_limit, "api_key": api_key}),
+                query,
+                per_query_limit,
+            )
+            for query, per_query_limit in query_strings(source, limit)
+        ]
+    return [(source.get("probe_url") or primary_endpoint, "native", limit)]
 
 
 def collect_sources(registry: dict[str, Any], raw_dir: Path, limit: int, timeout: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -299,34 +530,73 @@ def collect_sources(registry: dict[str, Any], raw_dir: Path, limit: int, timeout
 
     for source in registry["sources"]:
         source_id = source["id"]
-        url = source_url(source, limit)
         started = time.time()
+        missing_env = missing_required_env(source)
+        if missing_env:
+            statuses.append(
+                {
+                    "source": source_id,
+                    "ok": True,
+                    "skipped": True,
+                    "count": 0,
+                    "elapsed_ms": 0,
+                    "missing_required_env": missing_env,
+                }
+            )
+            continue
+        source_rows: list[dict[str, Any]] = []
+        errors: list[str] = []
+        requests = source_urls(source, limit)
+        token = source_token(source)
+        request_timeout = float(source.get("timeout_seconds") or timeout)
         try:
-            text = fetch_text(url, timeout)
-            if source_id == "github_trending":
-                rows = parse_github_trending(source, text, collected_at, limit)
-            elif "json" in str(source.get("fetch_method")):
-                rows = parse_json_source(source, text, collected_at, limit)
-            else:
-                rows = parse_feed_source(source, text, collected_at, limit)
-            write_jsonl(raw_dir / f"{source_id}.jsonl", rows)
-            all_rows.extend(rows)
-            statuses.append({"source": source_id, "ok": True, "count": len(rows), "elapsed_ms": round((time.time() - started) * 1000)})
-        except (
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            ET.ParseError,
-            json.JSONDecodeError,
-            ValueError,
-            TimeoutError,
-            socket.timeout,
-            ssl.SSLError,
-        ) as exc:
+            for url, query, request_limit in requests:
+                try:
+                    if source_id == "exa_web_search":
+                        text = fetch_exa_search(url, query, request_limit, request_timeout)
+                    else:
+                        text = fetch_text(url, request_timeout, token=token)
+                    if source_id == "github_trending":
+                        rows = parse_github_trending(source, text, collected_at, request_limit)
+                    elif "json" in str(source.get("fetch_method")):
+                        rows = parse_json_source(source, text, collected_at, request_limit)
+                    else:
+                        rows = parse_feed_source(source, text, collected_at, request_limit)
+                    source_rows.extend(rows)
+                except (
+                    urllib.error.URLError,
+                    urllib.error.HTTPError,
+                    ET.ParseError,
+                    json.JSONDecodeError,
+                    ValueError,
+                    TimeoutError,
+                    socket.timeout,
+                    ssl.SSLError,
+                ) as exc:
+                    errors.append(f"{query}: {exc}")
+                    if source.get("abort_on_first_error"):
+                        break
+            if source_rows:
+                write_jsonl(raw_dir / f"{source_id}.jsonl", source_rows)
+            all_rows.extend(source_rows)
+            statuses.append(
+                {
+                    "source": source_id,
+                    "ok": bool(source_rows),
+                    "count": len(source_rows),
+                    "requests": len(requests),
+                    "failed_requests": len(errors),
+                    "elapsed_ms": round((time.time() - started) * 1000),
+                    **({"errors": errors[:3]} if errors else {}),
+                }
+            )
+        except Exception as exc:
             statuses.append(
                 {
                     "source": source_id,
                     "ok": False,
                     "count": 0,
+                    "requests": len(requests),
                     "elapsed_ms": round((time.time() - started) * 1000),
                     "error": str(exc),
                 }
@@ -344,15 +614,23 @@ def entity_for(row: dict[str, Any]) -> tuple[str, str]:
     source = row["source"]
     url = row.get("url")
     title = row.get("title") or ""
-    if source == "github_trending" and url:
+    if source in {"github_trending", "github_search_ai_repos"} and url:
         return "repo", "repo:" + url.removeprefix("https://github.com/").strip("/")
     if source == "huggingface_models":
         return "model", "model:" + row["source_item_id"]
     if source == "arxiv_ai_ml_cl":
         return "paper", "paper:arxiv:" + row["source_item_id"].replace("abs/", "")
-    if source in {"hacker_news_algolia", "v2ex_hot"}:
+    if source == "libraries_io_search":
+        if url and domain(url) == "github.com":
+            return "repo", "repo:" + url.removeprefix("https://github.com/").strip("/")
+        return "product", "package:" + row["source_item_id"]
+    if source == "exa_web_search":
+        if url and domain(url) == "github.com":
+            return "repo", "repo:" + url.removeprefix("https://github.com/").strip("/")
+        return "article", "web:" + (domain(url) or source) + ":" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:12]
+    if source in {"hacker_news_algolia", "v2ex_hot", "lobsters_ai"}:
         return "discussion", "web:" + (domain(url) or source) + ":" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:12]
-    if source == "kr36_feed":
+    if source in {"kr36_feed", "devto_ai", "openai_news_rss"}:
         return "article", "web:" + (domain(url) or source) + ":" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:12]
     return "product", "product:" + (domain(url) or hashlib.sha1(title.encode("utf-8")).hexdigest()[:12])
 
@@ -370,7 +648,20 @@ def freshness_hours(published_at: str | None, collected_at: str) -> float | None
 
 def metric_strength(metrics: dict[str, Any]) -> float | None:
     values: list[float] = []
-    for key in ("stars_today", "stars", "points", "comments", "likes", "downloads", "replies"):
+    for key in (
+        "stars_today",
+        "stars",
+        "forks",
+        "points",
+        "comments",
+        "likes",
+        "downloads",
+        "replies",
+        "positive_reactions",
+        "score",
+        "dependent_repos",
+        "dependent_projects",
+    ):
         value = metrics.get(key)
         try:
             if value is not None:
@@ -397,7 +688,7 @@ def risk_flags(row: dict[str, Any], signals: dict[str, Any]) -> list[str]:
         flags.append("no_demo_signal")
     if signals["ad_language_density"] and signals["ad_language_density"] > float(thresholds.get("ad_language_density", 0.08)):
         flags.append("marketing_biased")
-    if row["source"] in {"v2ex_hot", "hacker_news_algolia"}:
+    if row["source"] in {"v2ex_hot", "hacker_news_algolia", "lobsters_ai"}:
         flags.append("community_only")
     return flags
 

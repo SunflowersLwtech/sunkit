@@ -75,6 +75,14 @@ def _duration(run_dir: Path) -> tuple[int, int]:
     return int(props.get("durationInFrames") or 0), int(props.get("fps") or 30)
 
 
+def _layout(run_dir: Path) -> dict[str, Any]:
+    props = read_json(run_dir / "remotion_input_props.json")
+    width = int(props.get("width") or 1080)
+    height = int(props.get("height") or 1920)
+    orientation = str(props.get("orientation") or ("horizontal" if width > height else "vertical"))
+    return {"width": width, "height": height, "orientation": orientation}
+
+
 def _extract_frames(video: Path, run_dir: Path, duration_frames: int, fps: int) -> tuple[list[dict[str, Any]], list[str]]:
     ffmpeg = shutil.which("ffmpeg")
     warnings: list[str] = []
@@ -157,6 +165,7 @@ def main() -> int:
         errors.append(f"video missing: {video}")
 
     duration_frames, fps = _duration(run_dir)
+    layout = _layout(run_dir)
     captions = _caption_segments(run_dir)
     punch_words = {str(item).strip() for item in policy_get("visual_audit.punch_words", [])}
     short_segments = orphan_caption_texts(captions, punch_words)
@@ -180,10 +189,14 @@ def main() -> int:
     if video.is_file():
         frames, frame_warnings = _extract_frames(video, run_dir, duration_frames, fps)
         checks["frames"] = frames
-        warnings.extend(frame_warnings)
+        errors.extend(frame_warnings)
+        if len(frames) < 3 or any(not frame.get("exists") for frame in frames):
+            errors.append("deterministic audit requires 3 successfully extracted frame samples")
         ocr_results, ocr_errors = _ocr_frames(frames)
         checks["ocr"] = ocr_results
         errors.extend(ocr_errors)
+        if len(ocr_results) != len(frames):
+            errors.append("OCR result count does not match extracted frame sample count")
         media_errors, media_warnings, media_checks = _black_silence_checks(video, provider)
         errors.extend(media_errors)
         warnings.extend(media_warnings)
@@ -196,12 +209,18 @@ def main() -> int:
         "video_path": str(video),
         "durationInFrames": duration_frames,
         "fps": fps,
+        "layout": layout,
         "provider": provider,
         "caption_count": len(captions),
         "caption_max_chars": max_caption_chars,
         "ocr_layout_report": {
             "method": "tesseract_ocr_plus_static_layout_constraints",
-            "caption_safe_area": {"bottom_px": 330, "left_px": 70, "right_px": 70, "max_chars": max_allowed_caption_chars},
+            "caption_safe_area": {
+                "bottom_px": 96 if layout["orientation"] == "horizontal" else 330,
+                "left_px": 180 if layout["orientation"] == "horizontal" else 70,
+                "right_px": 180 if layout["orientation"] == "horizontal" else 70,
+                "max_chars": max_allowed_caption_chars,
+            },
             "frame_samples": [frame.get("path") for frame in checks.get("frames", [])],
             "ocr_text": [item.get("text") for item in checks.get("ocr", [])],
         },

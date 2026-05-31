@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -14,7 +15,7 @@ from urllib.parse import urlparse
 from agent_harness.artifact_identity import sha256_json_file
 from agent_harness.core import Artifact, Gate, HarnessContext, StageResult, utc_now, write_json, retry_call, logger
 from agent_harness.douyin_distribution import evaluate_douyin_distribution_gate
-from agent_harness.evidence import write_evidence_artifacts
+from agent_harness.evidence import strong_research_review_errors, write_evidence_artifacts
 from agent_harness.policy import content_profile, policy_format, policy_get, unsupported_terms
 from agent_harness.research import run_research_enrichment
 from agent_harness.service_artifacts import (
@@ -34,8 +35,10 @@ from agent_harness.speech_quality import (
     unverified_quality_warning,
     verification_next_step_for_candidate,
 )
+from agent_harness.agent_visual import agent_visual_text_items, require_agent_visual
 from agent_harness.storyboard import card_scenes, derive_default_storyboard, storyboard_text_items, validate_storyboard
 from agent_harness.subjects import ensure_subject_pool, is_operator_topic
+from agent_harness.video_profile import choose_video_profile, normalize_video_profile
 
 # scripts/ holds the publishing/normalization helpers shared with the CLIs.
 _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -56,6 +59,29 @@ PROVIDER_ENV_CONTRACT = {
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def voiceover_manifest_errors(manifest: dict[str, Any], audio_path: Path) -> list[str]:
+    errors: list[str] = []
+    if manifest.get("status") != "pass":
+        errors.append(f"status is {manifest.get('status') or 'missing'}")
+    if manifest.get("provider") != "gemini":
+        errors.append(f"provider is {manifest.get('provider') or 'missing'}")
+    if not audio_path.is_file():
+        errors.append(f"audio file missing: {audio_path}")
+    elif manifest.get("audio_sha256") != sha256_file(audio_path):
+        errors.append("audio_sha256 does not match audio file")
+    if not manifest.get("audio_duration_sec") or not manifest.get("audio_frames"):
+        errors.append("audio_duration_sec/audio_frames missing")
+    return errors
 
 
 def _state_or_file(context: HarnessContext, key: str, filename: str) -> dict[str, Any]:
@@ -126,6 +152,12 @@ def _public_operator_source_label(candidate: dict[str, Any], profile: dict[str, 
         if host:
             return host
     return str(profile.get("manual_source_label") or profile.get("source") or "指定主题")
+
+
+def _candidate_has_external_url(candidate: dict[str, Any]) -> bool:
+    url = str(candidate.get("canonical_url") or "")
+    manual_scheme = str(policy_get("subject_inputs.operator_topic.manual_url_scheme", "manual-topic://"))
+    return bool(url.startswith(("http://", "https://")) and not url.startswith(manual_scheme))
 
 
 def _candidate_title_summary(candidate: dict[str, Any], polish: dict[str, Any] | None = None) -> tuple[str, str]:
@@ -227,15 +259,21 @@ def run_repo_script(context: HarnessContext, args: list[str], timeout: int = 180
 
 def build_main_task_plan(candidate: dict[str, Any], include_providers: bool) -> dict[str, Any]:
     operator_topic = is_operator_topic(candidate)
+    seed_only_topic = operator_topic and not _candidate_has_external_url(candidate)
     first_task = {
         "id": "resolve_operator_topic" if operator_topic else "select_candidate",
         "owner": "claude_main_agent",
         "gate": "operator_topic_recorded" if operator_topic else "candidate_has_url",
     }
+    subject_task = {
+        "id": "subject_detail_fetch",
+        "owner": "searchpo-research-agent",
+        "gate": "subject_seed_recorded" if seed_only_topic else "subject_detail_fetched",
+    }
     if include_providers:
         ordered_tasks = [
             first_task,
-            {"id": "subject_detail_fetch", "owner": "searchpo-research-agent", "gate": "subject_detail_fetched"},
+            subject_task,
             {"id": "research_enrichment", "owner": "searchpo-research-agent", "gate": "research_enrichment_passed"},
             {"id": "cross_check", "owner": "claude_main_agent", "gate": "cross_check_passed"},
             {"id": "content_improvement_loop", "owner": "claude_impl_agent", "gate": "content_improvement_loop"},
@@ -255,7 +293,7 @@ def build_main_task_plan(candidate: dict[str, Any], include_providers: bool) -> 
     else:
         ordered_tasks = [
             first_task,
-            {"id": "subject_detail_fetch", "owner": "searchpo-research-agent", "gate": "subject_detail_fetched"},
+            subject_task,
             {"id": "research_enrichment", "owner": "searchpo-research-agent", "gate": "research_enrichment_passed"},
             {"id": "cross_check", "owner": "claude_main_agent", "gate": "cross_check_passed"},
             {"id": "publish_package", "owner": "claude_impl_agent", "gate": "claims_ledger_coverage"},
@@ -385,9 +423,17 @@ def build_video_payload(
             storyboard = validate_storyboard(polish_storyboard)
         except ValueError as exc:
             raise RuntimeError(f"DeepSeek polish storyboard did not pass validation: {exc}") from exc
+    elif polish:
+        raise RuntimeError("DeepSeek polish storyboard is required; default storyboard fallback is not allowed in provider mode")
+    agent_visual: dict[str, Any] | None = None
+    if polish:
+        try:
+            agent_visual = require_agent_visual((polish or {}).get("agent_visual") or (polish or {}).get("agentVisual"))
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     cards = (polish or {}).get("cards") or (card_scenes(storyboard) if storyboard else []) or profile_cards
-    if len(cards) < len(profile_cards):
+    if not polish and len(cards) < len(profile_cards):
         cards = list(cards) + profile_cards[len(cards):]
     cards = [
         {
@@ -441,6 +487,12 @@ def build_video_payload(
             verification_next_step=verification_next_step,
             footer=footer,
         )
+    fallback_profile = choose_video_profile(candidate, fps=fps)
+    video_profile = normalize_video_profile((polish or {}).get("video_profile") if polish else None, fallback=fallback_profile)
+    storyboard_style = storyboard.get("style") if isinstance(storyboard.get("style"), dict) else {}
+    if not storyboard_style.get("motion") and video_profile.get("motion"):
+        storyboard_style["motion"] = video_profile["motion"]
+        storyboard["style"] = storyboard_style
 
     return {
         "badge": badge,
@@ -458,6 +510,13 @@ def build_video_payload(
         "verificationNextStep": verification_next_step,
         "cards": cards,
         "storyboard": storyboard,
+        "agentVisual": agent_visual or {"enabled": False},
+        "agentVisualRequired": bool(polish),
+        "videoProfile": video_profile,
+        "orientation": video_profile["orientation"],
+        "aspectRatio": video_profile["aspect_ratio"],
+        "width": video_profile["width"],
+        "height": video_profile["height"],
         "audioSrc": "voiceover.wav",
         "voiceoverText": voiceover_text,
         "captions": captions,
@@ -524,6 +583,7 @@ def build_claims_ledger(
         "voiceover": render_payload.get("voiceoverText"),
         "cards": render_payload.get("cards") or [],
         "storyboard": storyboard_text_items(render_payload.get("storyboard")),
+        "agent_visual": agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")),
         "tags": douyin_copy.get("tags") or [],
     }
     claims: list[dict[str, Any]] = []
@@ -555,6 +615,8 @@ def build_claims_ledger(
             add_claim("cards", " / ".join(str(card.get(key) or "") for key in ("label", "value", "detail")), index=index)
     for index, scene_text in enumerate(fields["storyboard"], start=1):
         add_claim("storyboard", scene_text, index=index, claim_type="visible_scene_text")
+    for index, visual_text in enumerate(fields["agent_visual"], start=1):
+        add_claim("agent_visual", visual_text, index=index, claim_type="visible_scene_text")
     for index, tag in enumerate(fields["tags"], start=1):
         add_claim("tags", tag, index=index, claim_type="platform_tag")
     required_fields = ["title", "description", "tags"]
@@ -563,8 +625,10 @@ def build_claims_ledger(
         required_fields.extend(["voiceover", "cards"])
         if fields["storyboard"]:
             required_fields.append("storyboard")
+        if fields["agent_visual"]:
+            required_fields.append("agent_visual")
     else:
-        not_applicable_fields.extend(["voiceover", "cards", "storyboard"])
+        not_applicable_fields.extend(["voiceover", "cards", "storyboard", "agent_visual"])
     coverage = {
         "required_fields": required_fields,
         "not_applicable_fields": not_applicable_fields,
@@ -603,6 +667,7 @@ def build_content_plan(
     title = candidate.get("title") or "Searchpo Radar"
     plan = content_profile(candidate).get("plan", {})
     evidence_summary = (evidence_bundle or {}).get("evidence_summary") or {}
+    suggested_video_profile = choose_video_profile(candidate, None, evidence_bundle)
     return {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -629,6 +694,7 @@ def build_content_plan(
         "execution_steps": plan.get("execution_steps", []),
         "gates": plan.get("gates", []),
         "publish_platforms": ["douyin"],
+        "suggested_video_profile": suggested_video_profile,
     }
 
 
@@ -662,6 +728,9 @@ def write_post_artifacts(
     cross_check = cross_check_review or {}
     evidence_summary = (evidence_bundle or {}).get("evidence_summary") or {}
     cross_check_status = str(cross_check.get("status") or "missing")
+    strong_research_errors = strong_research_review_errors(cross_check)
+    if strong_research_errors:
+        raise RuntimeError("strong research review required before writing post artifacts: " + "; ".join(strong_research_errors))
     source_facts = [str(item) for item in cross_check.get("source_facts") or evidence_summary.get("source_facts") or []]
     constructive_angles = [str(item) for item in cross_check.get("constructive_angles") or evidence_summary.get("constructive_angles") or []]
     normalized_douyin_copy = {"title": title, "desc": desc, "tags": tags}
@@ -900,7 +969,7 @@ class SelectCandidateStage:
 @dataclass(frozen=True)
 class SubjectEvidenceStage:
     name: str = "subject_evidence"
-    title: str = "Fetch subject detail evidence and cross-check"
+    title: str = "Fetch subject detail evidence or record research seed"
     owner: str = "searchpo-research-agent"
 
     def run(self, context: HarnessContext) -> StageResult:
@@ -913,29 +982,56 @@ class SubjectEvidenceStage:
         candidate["cross_check_status"] = review.get("status")
         write_json(selected_path, candidate)
         source_count = int(bundle.get("source_count") or 0)
-        return StageResult(
-            step="observe",
-            status="completed" if review.get("status") == "pass" else "failed",
-            details=f"Fetched {source_count} detailed source artifacts and cross-checked content boundary.",
-            artifacts=[
-                Artifact("evidence_bundle", context.run_dir / "evidence_bundle.json", {"source_count": source_count}),
-                Artifact("cross_check_review", context.run_dir / "cross_check_review.json", {"status": review.get("status")}),
-            ],
-            gates=[
-                Gate(
-                    "subject_detail_fetched",
-                    "pass" if source_count else "fail",
-                    "Detailed subject evidence was fetched from the canonical URL",
-                    {"source_count": source_count, "source_kind": bundle.get("source_kind")},
+        seed_only = bundle.get("source_kind") == "operator_topic_seed"
+        status_ok = bool(source_count) and (seed_only or review.get("status") == "pass")
+        gates = [
+            Gate(
+                "subject_seed_recorded" if seed_only else "subject_detail_fetched",
+                "pass" if source_count else "fail",
+                (
+                    "Operator topic seed was recorded; independent widesearch is still required"
+                    if seed_only
+                    else "Detailed subject evidence was fetched from the canonical URL"
                 ),
+                {"source_count": source_count, "source_kind": bundle.get("source_kind")},
+            )
+        ]
+        if seed_only:
+            gates.append(
+                Gate(
+                    "widesearch_required",
+                    "pass",
+                    "Topic seed is not external evidence; research enrichment must supply independent sources",
+                    {"requires_widesearch": True, "external_evidence": False},
+                )
+            )
+        else:
+            gates.append(
                 Gate(
                     "cross_check_passed",
                     str(review.get("status") or "fail"),
                     "Cross-check verified the evidence boundary before copy generation",
                     {"errors": review.get("errors") or [], "warnings": review.get("warnings") or []},
-                ),
+                )
+            )
+        return StageResult(
+            step="observe",
+            status="completed" if status_ok else "failed",
+            details=(
+                "Recorded operator topic research seed; widesearch enrichment must provide external evidence."
+                if seed_only
+                else f"Fetched {source_count} detailed source artifacts and cross-checked content boundary."
+            ),
+            artifacts=[
+                Artifact("evidence_bundle", context.run_dir / "evidence_bundle.json", {"source_count": source_count}),
+                Artifact("cross_check_review", context.run_dir / "cross_check_review.json", {"status": review.get("status")}),
             ],
-            metadata={"canonical_url": bundle.get("canonical_url"), "source_kind": bundle.get("source_kind")},
+            gates=gates,
+            metadata={
+                "canonical_url": bundle.get("canonical_url"),
+                "source_kind": bundle.get("source_kind"),
+                "requires_widesearch": seed_only,
+            },
         )
 
 
@@ -967,14 +1063,16 @@ class ResearchEnrichmentStage:
         source_count = int(bundle.get("source_count") or 0)
         supplemental_count = int(review.get("supplemental_source_count") or 0)
         hosts = review.get("independent_source_hosts") or []
+        strong_research_errors = strong_research_review_errors(review)
         return StageResult(
             step="observe",
-            status="completed" if review.get("status") == "pass" else "failed",
+            status="completed" if not strong_research_errors else "failed",
             details=(
                 f"AnySearch enrichment added {supplemental_count} supplemental sources "
                 f"across {len(hosts)} independent hosts."
             ),
             artifacts=[
+                Artifact("widesearch_strategy", context.run_dir / "widesearch_strategy.json", {"status": review.get("status")}),
                 Artifact("anysearch_research", context.run_dir / "anysearch_research.json", {"status": review.get("status")}),
                 Artifact("fact_bank", context.run_dir / "fact_bank.json", {"fact_count": len(fact_bank.get("source_backed_facts") or [])}),
                 Artifact("topic_brief", context.run_dir / "topic_brief.json", {"topic": research_brief.get("topic")}),
@@ -996,9 +1094,9 @@ class ResearchEnrichmentStage:
                 ),
                 Gate(
                     "cross_check_passed",
-                    str(review.get("status") or "fail"),
+                    "pass" if not strong_research_errors else "fail",
                     "Enriched cross-check verified the source boundary before copy generation",
-                    {"errors": review.get("errors") or [], "warnings": review.get("warnings") or []},
+                    {"errors": [*(review.get("errors") or []), *strong_research_errors], "warnings": review.get("warnings") or []},
                 ),
             ],
             metadata={"supplemental_source_count": supplemental_count, "independent_source_hosts": hosts},
@@ -1014,10 +1112,18 @@ class PlanContentStage:
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
+        cross_check = context.state.get("cross_check_review")
+        if cross_check is None:
+            cross_check_path = context.run_dir / "cross_check_review.json"
+            cross_check = read_json(cross_check_path) if cross_check_path.exists() else {}
+        if str(cross_check.get("status") or "") != "pass" or cross_check.get("research_sufficient") is not True:
+            raise RuntimeError(
+                "research cross-check must pass with research_sufficient=true before content planning"
+            )
         plan = build_content_plan(
             candidate,
             context.state.get("evidence_bundle"),
-            context.state.get("cross_check_review"),
+            cross_check,
             context.state.get("fact_bank"),
             context.state.get("topic_brief") or context.state.get("research_brief"),
         )
@@ -1091,16 +1197,24 @@ class GeminiTTSStage:
         manifest_path = context.run_dir / "voiceover_manifest.json"
         manifest = read_json(manifest_path)
         audio_path = Path(manifest["audio_path"])
+        manifest_errors = voiceover_manifest_errors(manifest, audio_path)
         context.state["voiceover_manifest"] = manifest
         return StageResult(
             step="act",
-            status="completed" if audio_path.is_file() else "failed",
+            status="completed" if not manifest_errors else "failed",
             details="Gemini generated the run voiceover audio artifact.",
             artifacts=[
                 Artifact("voiceover_manifest", manifest_path, {"model": manifest.get("model"), "voice": manifest.get("voice")}),
                 Artifact("voiceover_audio", audio_path, {"mime_type": manifest.get("output_mime_type")}),
             ],
-            gates=[Gate("voiceover_generated", "pass" if audio_path.is_file() else "fail", "Gemini TTS wrote voiceover.wav")],
+            gates=[
+                Gate(
+                    "voiceover_generated",
+                    "pass" if not manifest_errors else "fail",
+                    "Gemini TTS wrote a hash-bound voiceover.wav",
+                    {"errors": manifest_errors},
+                )
+            ],
             metadata=script_result,
         )
 
@@ -1129,7 +1243,7 @@ class BuildCaptionsStage:
             audit_status = str(read_json(audit_path).get("status") or "missing")
         return StageResult(
             step="act",
-            status="completed",
+            status="completed" if segment_count and audit_status == "pass" else "failed",
             details=f"Built {segment_count} caption segments locked to the voiceover length.",
             artifacts=[
                 artifact
@@ -1168,10 +1282,10 @@ class ContentScoringStage:
             overall = 0
             verdict = "missing"
         context.state["content_score"] = {"overall": overall, "verdict": verdict}
-        gate_status = "pass" if verdict == "pass" or overall >= 6.0 else "warn"
+        gate_status = "pass" if verdict == "pass" else "fail"
         return StageResult(
             step="act",
-            status="completed",
+            status="completed" if gate_status == "pass" else "failed",
             details=f"Content quality score: {overall}/10 ({verdict})",
             artifacts=[Artifact("content_score", path, {"overall": overall, "verdict": verdict})] if path.exists() else [],
             gates=[Gate("content_quality_scored", gate_status, f"Quality {overall}/10: {verdict}", {"overall": overall})],
@@ -1653,6 +1767,7 @@ class ContentPreflightStage:
         cross_check_path = context.run_dir / "cross_check_review.json"
         cross_check = context.state.get("cross_check_review") or (read_json(cross_check_path) if cross_check_path.exists() else {})
         cross_check_status = str(cross_check.get("status") or "missing")
+        strong_research_errors = strong_research_review_errors(cross_check)
         distribution_path = post_dir / "douyin_distribution_review.json"
         distribution_review = read_json(distribution_path) if distribution_path.exists() else {}
         distribution_status = str(distribution_review.get("status") or "missing")
@@ -1673,7 +1788,7 @@ class ContentPreflightStage:
         content_score = context.state.get("content_score") or {}
         quality_warning = content_score.get("overall", 10) < 5.0
 
-        all_pass = not unsafe_hits and coherence_ok and cross_check_status == "pass" and distribution_status == "pass"
+        all_pass = not unsafe_hits and coherence_ok and not strong_research_errors and distribution_status == "pass"
         canonical_url = str(candidate.get("canonical_url") or "")
         source_url_present = canonical_url.startswith("http://") or canonical_url.startswith("https://")
         review = {
@@ -1689,7 +1804,7 @@ class ContentPreflightStage:
                 "coherence_issues": coherence_issues,
                 "content_quality_warning": quality_warning,
                 "cross_check_status": cross_check_status,
-                "cross_check_errors": cross_check.get("errors") or [],
+                "cross_check_errors": [*(cross_check.get("errors") or []), *strong_research_errors],
                 "douyin_distribution_status": distribution_status,
                 "douyin_distribution_blockers": distribution_review.get("blocking_issues") or [],
                 "douyin_distribution_warnings": distribution_review.get("warnings") or [],

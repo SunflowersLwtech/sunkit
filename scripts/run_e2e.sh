@@ -61,7 +61,16 @@ finalize_and_exit_fail() {
 
 python3 scripts/check_env.py --env-file .env --profile "$PROFILE"
 
+if [[ -n "${SEARCHPO_LINK:-}" && -n "${SEARCHPO_TOPIC_URL:-}" && "${SEARCHPO_LINK}" != "${SEARCHPO_TOPIC_URL}" ]]; then
+  echo "SEARCHPO_LINK and SEARCHPO_TOPIC_URL both set but point to different URLs; pass only one canonical source boundary." >&2
+  exit 2
+fi
+
 DIRECT_LINK="${SEARCHPO_LINK:-${SEARCHPO_TOPIC_URL:-}}"
+if [[ -n "$DIRECT_LINK" && ! "$DIRECT_LINK" =~ ^https?:// ]]; then
+  echo "SEARCHPO_LINK/SEARCHPO_TOPIC_URL must be an http(s) URL: $DIRECT_LINK" >&2
+  exit 2
+fi
 if [[ -n "${SEARCHPO_TOPIC:-}" || -n "$DIRECT_LINK" ]]; then
   TOPIC_VALUE="${SEARCHPO_TOPIC:-$DIRECT_LINK}"
   TOPIC_ARGS=(--topic "$TOPIC_VALUE")
@@ -77,6 +86,14 @@ if [[ -n "${SEARCHPO_TOPIC:-}" || -n "$DIRECT_LINK" ]]; then
   python3 agent_harness/run_agent_loop.py "${TOPIC_ARGS[@]}"
   RUN_DIR="$(cat runtime/latest_run.txt)"
 else
+  if [[ "${SEARCHPO_ENABLE_DAILY_RADAR:-0}" != "1" ]]; then
+    cat >&2 <<'EOF'
+Searchpo now expects an operator-supplied topic or link.
+Pass SEARCHPO_TOPIC="..." for widesearch from a topic, or SEARCHPO_LINK="https://..." / SEARCHPO_TOPIC_URL="https://..." for a canonical source boundary.
+Set SEARCHPO_ENABLE_DAILY_RADAR=1 only when you explicitly want the legacy source-registry candidate sweep.
+EOF
+    exit 2
+  fi
   python3 data_prep/scripts/probe_sources.py --timeout 10 --min-ok-sources 4 --min-ok-p0 3 --allow-transient-statuses 429,500,502,503,504 --allow-transient-timeouts
   python3 data_prep/scripts/run_pipeline.py --limit-per-source "${SEARCHPO_LIMIT_PER_SOURCE:-10}" --shortlist-size 10 --timeout 15
   RUN_DIR="$(cat runtime/latest_run.txt)"

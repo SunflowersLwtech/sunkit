@@ -130,6 +130,84 @@ function assertCommand(entry, map) {
   }
 }
 
+function assertTextContains(filePath, text, needle, context) {
+  if (!text.includes(needle)) {
+    fail(`${context} missing required text in ${path.relative(repoRoot, filePath)}: ${needle}`);
+  }
+}
+
+function assertFullFlowTeamContract(map) {
+  const requiredTeamPrompt =
+    'Use the searchpo-main-agent as lead. Do not run research and implementation in parallel. First spawn or assign only searchpo-research-agent for AnySearch-first source discovery/extraction, GitHub API/README evidence, FactBank/TopicBrief, cross-check tasks, and only supporting DeepWiki repo context when useful. Wait until the main agent verifies cross_check_review.status == pass and research_sufficient == true, then spawn or assign searchpo-impl-agent for provider, render, audit, and Douyin tasks. The main agent must not run implementation commands itself; it verifies artifacts and makes the final release decision.';
+  const fullFlowSkill = sourcePath(map.sourceRoot, 'searchpo-full-flow', 'SKILL.md');
+  const fullFlowCommand = sourcePath(map.commandSourceRoot ?? 'commands', 'searchpo-full-flow.md');
+  const mainAgent = sourcePath(map.agentSourceRoot ?? 'agents', 'searchpo-main-agent.md');
+  const implAgent = sourcePath(map.agentSourceRoot ?? 'agents', 'searchpo-impl-agent.md');
+  const researchAgent = sourcePath(map.agentSourceRoot ?? 'agents', 'searchpo-research-agent.md');
+  const deepwikiSkill = sourcePath(map.sourceRoot, 'searchpo-deepwiki-research', 'SKILL.md');
+  const implSkill = sourcePath(map.sourceRoot, 'searchpo-impl-agent', 'SKILL.md');
+  const alignmentDoc = path.join(repoRoot, 'docs', 'agent-team-alignment.md');
+
+  for (const filePath of [fullFlowSkill, fullFlowCommand, alignmentDoc]) {
+    assertTextContains(filePath, readText(filePath), requiredTeamPrompt, 'Codex full-flow agent-team contract');
+  }
+
+  assertTextContains(
+    mainAgent,
+    readText(mainAgent),
+    'Do not run them in parallel',
+    'Codex main-agent delegation guard'
+  );
+  assertTextContains(
+    mainAgent,
+    readText(mainAgent),
+    'Do not personally run implementation commands when `searchpo-impl-agent` is available.',
+    'Codex main-agent implementation guard'
+  );
+  assertTextContains(
+    fullFlowSkill,
+    readText(fullFlowSkill),
+    'If the host cannot spawn or assign teammates, say that before running the flow',
+    'Codex full-flow fallback guard'
+  );
+  assertTextContains(
+    fullFlowCommand,
+    readText(fullFlowCommand),
+    'artifact owner labels alone do not prove real subagent execution',
+    'Codex full-flow verification guard'
+  );
+  assertTextContains(
+    fullFlowCommand,
+    readText(fullFlowCommand),
+    'Research and implementation must be sequential.',
+    'Codex full-flow sequencing guard'
+  );
+  assertTextContains(
+    researchAgent,
+    readText(researchAgent),
+    'Do not return research complete from DeepWiki-only notes.',
+    'AnySearch-first research-agent guard'
+  );
+  assertTextContains(
+    deepwikiSkill,
+    readText(deepwikiSkill),
+    'Confirm `searchpo-research-agent` has started the AnySearch-first evidence path',
+    'DeepWiki supporting-context guard'
+  );
+  assertTextContains(
+    implAgent,
+    readText(implAgent),
+    'Do not begin provider, render, audit, or publish work until the main agent has explicitly verified the research barrier.',
+    'Impl-agent research barrier guard'
+  );
+  assertTextContains(
+    implSkill,
+    readText(implSkill),
+    'implementation must not run in parallel with research',
+    'Impl skill sequencing guard'
+  );
+}
+
 function assertAgent(entry, map) {
   assertValidEntryName('agent', entry);
   const agentRoot = map.agentSourceRoot ?? 'agents';
@@ -231,6 +309,7 @@ for (const entry of bridgeMap.agents) {
   assertAgent(entry, bridgeMap);
 }
 assertAgentTeam(bridgeMap);
+assertFullFlowTeamContract(bridgeMap);
 
 for (const entry of bridgeMap.agents) {
   const agentRoot = bridgeMap.agentSourceRoot ?? 'agents';

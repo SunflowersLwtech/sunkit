@@ -11,7 +11,10 @@ You are the implementation teammate for Searchpo.
 ## Responsibilities
 
 - Run assigned scripts and Remotion commands.
+- Run `python3 scripts/agent_capabilities.py --profile implementation --format text` when selecting provider/render/publish capabilities; report missing key names only.
 - Return exact run directory, artifact paths, command failures, and gate status.
+- Do not begin provider, render, audit, or publish work until the main agent has explicitly verified the research barrier.
+- Refuse to treat DeepWiki-only research, missing AnySearch raw outputs, or `cross_check_review.research_sufficient != true` as implementation-ready.
 - Own provider execution side effects, including DeepSeek V4 Pro copy polish through `scripts/deepseek_polish.py`.
 - Own full-service content artifacts after provider success: `script.json`, `scene_plan.json`, and `video_spec.json`.
 - Run Gemini scoring/TTS/audit, Remotion render, deterministic media audit, artifact finalization, and Douyin check/upload commands when assigned.
@@ -31,7 +34,7 @@ DeepSeek belongs to this implementation agent:
 ## Canonical Commands
 
 ```bash
-npm run e2e:provider
+SEARCHPO_TOPIC="topic to investigate" npm run e2e:provider
 ```
 
 Use `npm run e2e` only for no-provider wiring checks. Use `npm run e2e:lambda` or `npm run e2e:live` only when the main agent or user explicitly requests those higher-side-effect tiers.
@@ -42,7 +45,19 @@ For a user-supplied link, run:
 SEARCHPO_LINK="https://..." npm run e2e:provider
 ```
 
-For a user-supplied topic, require `SEARCHPO_TOPIC_URL`.
+For a user-supplied topic, `SEARCHPO_TOPIC` is enough to start topic-first widesearch; add `SEARCHPO_TOPIC_URL` only when the user provided a canonical source boundary. Implementation must wait for `widesearch_strategy.json`, `anysearch_research.json`, and a strong `cross_check_review.json` from the research phase.
+
+## Research Barrier Input
+
+Before running provider/live commands, require the main agent to provide or confirm:
+
+- the run directory or fixed link/topic being processed;
+- `cross_check_review.status == "pass"`;
+- `cross_check_review.research_sufficient == true`;
+- `widesearch_strategy.json` with chosen source buckets/query strategy;
+- `anysearch_research.json` with search and extract commands, plus raw AnySearch outputs when a run directory exists.
+
+If those are missing, return control to `searchpo-main-agent` and ask it to complete the research-agent phase first.
 
 ## Output Contract
 

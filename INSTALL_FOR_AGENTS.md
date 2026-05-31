@@ -18,8 +18,11 @@ Searchpo skills are first-class files in this repo:
 skills/
   RESOLVER.md
   _AGENT_README.md
+  searchpo-full-flow/SKILL.md
   searchpo-main-agent/SKILL.md
   searchpo-impl-agent/SKILL.md
+  searchpo-agent-capabilities/SKILL.md
+  searchpo-deepwiki-research/SKILL.md
   remotion-best-practices/SKILL.md
   searchpo-plugin-check/SKILL.md
 ```
@@ -57,6 +60,12 @@ npm run ci:static
 ```
 
 `agent-plugin:check` validates skill paths, command paths, agent paths, shared deps, frontmatter routing metadata, and the bridge map. `ci:static` adds TypeScript, JSON, Python compile, shell syntax, and live-publish guard checks.
+
+Project MCP config lives in `.mcp.json`; DeepWiki should be available as the `deepwiki` MCP server. To verify safe capability routing without exposing secrets:
+
+```bash
+npm run agent:capabilities:check
+```
 
 ## Step 4: Run the Safe Flow
 

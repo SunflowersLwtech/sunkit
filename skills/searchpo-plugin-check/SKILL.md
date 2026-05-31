@@ -43,6 +43,7 @@ npm run ci:static
 - `.claude/agents/` matches the `agents/` source after `npm run skills:sync`.
 - `.codex/agents/` and `/Users/sunfl/.codex/agents/searchpo-*.toml` are generated from `agents/` after `npm run skills:sync`.
 - Codex user-level skill symlinks point back to this repo unless `--project-only` is used.
+- The full-flow skill, slash command, main-agent instructions, and alignment doc preserve the Codex agent-team guard: explicitly spawn or assign `searchpo-research-agent` and `searchpo-impl-agent` when tools exist, require sequential research-before-implementation, require AnySearch-first research before DeepWiki-only context, prevent main-agent implementation work, otherwise report `manual fallback`.
 
 ## Output
 

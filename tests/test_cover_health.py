@@ -34,6 +34,20 @@ class CoverHealthTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "pass", result)
 
+    def test_readable_horizontal_cover_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "horizontal.jpg"
+            image = Image.new("RGB", (1920, 1080), (18, 22, 28))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((120, 120, 840, 320), fill=(255, 214, 10))
+            draw.rectangle((120, 400, 1480, 760), fill=(250, 250, 245))
+            draw.rectangle((120, 860, 680, 980), fill=(114, 231, 255))
+            image.save(path, quality=95)
+
+            result = analyze_cover(path)
+
+            self.assertEqual(result["status"], "pass", result)
+
 
 if __name__ == "__main__":
     unittest.main()

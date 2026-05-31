@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from agent_harness.policy import policy_get
+from agent_harness.agent_visual import agent_visual_text_items
 from agent_harness.storyboard import storyboard_text_items
 from agent_harness.subjects import is_operator_topic
 
@@ -248,6 +249,7 @@ def evaluate_quality_gate(
     for card in render_payload.get("cards") or []:
         public_fields.extend([card.get("label"), card.get("value"), card.get("detail")])
     public_fields.extend(storyboard_text_items(render_payload.get("storyboard")))
+    public_fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")))
     public_text = " ".join(str(item or "") for item in public_fields)
     combined_text = f"{public_text} {voiceover}"
 

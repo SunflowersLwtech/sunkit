@@ -12,6 +12,11 @@ SCENE_TYPES = {
     "bullets",
     "card",
     "compare",
+    "compare_table",
+    "terminal",
+    "flow",
+    "chart",
+    "code_diff",
     "quote",
     "cta",
 }
@@ -21,6 +26,22 @@ MOTIONS = {"calm", "standard", "punchy"}
 EMPHASIS = {"low", "normal", "high"}
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 MAX_SCENES = 8
+
+REQUIRED_SCENE_TEXT: dict[str, tuple[str, ...]] = {
+    "statement": ("title", "heading"),
+    "context": ("text", "summary", "detail"),
+    "stat": ("value", "stat", "label", "heading"),
+    "bullets": ("heading", "title", "items"),
+    "card": ("value", "detail"),
+    "compare": ("left", "right"),
+    "compare_table": ("rows", "items"),
+    "terminal": ("lines", "commands", "items"),
+    "flow": ("nodes", "steps", "items"),
+    "chart": ("value", "stat", "points", "items"),
+    "code_diff": ("additions", "added", "removals", "removed", "items"),
+    "quote": ("quote", "text"),
+    "cta": ("text",),
+}
 
 
 def bounded_text(value: Any, limit: int) -> str:
@@ -67,6 +88,17 @@ def _normalize_items(value: Any, limit: int = 58, max_items: int = 4) -> list[st
     return [bounded_text(item, limit) for item in value if str(item or "").strip()][:max_items]
 
 
+def _raw_has_required_text(scene_type: str, props: Any) -> bool:
+    raw = props if isinstance(props, dict) else {}
+    for key in REQUIRED_SCENE_TEXT.get(scene_type, ()):
+        value = raw.get(key)
+        if isinstance(value, list) and any(str(item or "").strip() for item in value):
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
     raw = props if isinstance(props, dict) else {}
     if scene_type == "statement":
@@ -106,6 +138,44 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
             "rightLabel": _first_text(raw, ("rightLabel",), "待证", 14),
             "right": _first_text(raw, ("right",), "", 90),
         }
+    if scene_type == "compare_table":
+        return {
+            "kicker": _first_text(raw, ("kicker",), "横向比较", 18),
+            "heading": _first_text(raw, ("heading", "title"), "", 56),
+            "leftLabel": _first_text(raw, ("leftLabel",), "当前方案", 14),
+            "rightLabel": _first_text(raw, ("rightLabel",), "验证边界", 14),
+            "rows": _normalize_items(raw.get("rows") or raw.get("items"), limit=76, max_items=4),
+        }
+    if scene_type == "terminal":
+        return {
+            "kicker": _first_text(raw, ("kicker",), "把它放进终端看", 18),
+            "title": _first_text(raw, ("title", "heading"), "开发者路径", 42),
+            "prompt": _first_text(raw, ("prompt",), "$", 8),
+            "lines": _normalize_items(raw.get("lines") or raw.get("commands") or raw.get("items"), limit=64, max_items=5),
+        }
+    if scene_type == "flow":
+        return {
+            "kicker": _first_text(raw, ("kicker",), "机制怎么跑", 18),
+            "heading": _first_text(raw, ("heading", "title"), "", 56),
+            "nodes": _normalize_items(raw.get("nodes") or raw.get("steps") or raw.get("items"), limit=34, max_items=5),
+            "caption": _first_text(raw, ("caption", "detail", "summary"), "", 80),
+        }
+    if scene_type == "chart":
+        return {
+            "kicker": _first_text(raw, ("kicker",), "一个数据点", 18),
+            "heading": _first_text(raw, ("heading", "title"), "", 56),
+            "label": _first_text(raw, ("label",), "信号", 18),
+            "value": _first_text(raw, ("value", "stat"), "", 28),
+            "points": _normalize_items(raw.get("points") or raw.get("items"), limit=18, max_items=5),
+        }
+    if scene_type == "code_diff":
+        return {
+            "kicker": _first_text(raw, ("kicker",), "代码视角", 18),
+            "title": _first_text(raw, ("title", "heading"), "不是只看 README", 50),
+            "filename": _first_text(raw, ("filename", "file"), "skill.md", 34),
+            "additions": _normalize_items(raw.get("additions") or raw.get("added") or raw.get("items"), limit=70, max_items=4),
+            "removals": _normalize_items(raw.get("removals") or raw.get("removed"), limit=70, max_items=2),
+        }
     if scene_type == "quote":
         return {
             "kicker": _first_text(raw, ("kicker",), "原始信号", 18),
@@ -128,6 +198,16 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
 def _scene_has_text(scene_type: str, props: dict[str, Any]) -> bool:
     if scene_type == "bullets":
         return bool(props.get("heading") or props.get("items"))
+    if scene_type == "terminal":
+        return bool(props.get("title") or props.get("lines"))
+    if scene_type == "flow":
+        return bool(props.get("heading") or props.get("nodes"))
+    if scene_type == "chart":
+        return bool(props.get("heading") or props.get("value") or props.get("points"))
+    if scene_type == "code_diff":
+        return bool(props.get("title") or props.get("additions") or props.get("removals"))
+    if scene_type == "compare_table":
+        return bool(props.get("heading") or props.get("rows"))
     return any(str(value or "").strip() for value in props.values() if not isinstance(value, list))
 
 
@@ -137,16 +217,22 @@ def validate_storyboard(storyboard: Any) -> dict[str, Any]:
     scenes_in = storyboard.get("scenes")
     if not isinstance(scenes_in, list):
         raise ValueError("storyboard.scenes must be an array")
+    if len(scenes_in) > MAX_SCENES:
+        raise ValueError(f"storyboard.scenes must contain at most {MAX_SCENES} scenes")
     scenes: list[dict[str, Any]] = []
-    for item in scenes_in:
+    for index, item in enumerate(scenes_in, start=1):
         if not isinstance(item, dict):
-            continue
+            raise ValueError(f"storyboard scene {index} must be an object")
         scene_type = item.get("type")
         if scene_type not in SCENE_TYPES:
-            continue
+            raise ValueError(f"storyboard scene {index} has unknown type: {scene_type}")
+        if not isinstance(item.get("props"), dict):
+            raise ValueError(f"storyboard scene {index} props must be an object")
+        if not _raw_has_required_text(str(scene_type), item.get("props")):
+            raise ValueError(f"storyboard scene {index} ({scene_type}) missing provider-authored text")
         props = normalize_scene_props(str(scene_type), item.get("props"))
         if not _scene_has_text(str(scene_type), props):
-            continue
+            raise ValueError(f"storyboard scene {index} ({scene_type}) has no renderable text")
         clean: dict[str, Any] = {"type": scene_type, "props": props}
         weight = item.get("weight")
         if isinstance(weight, (int, float)) and 0 < float(weight) <= 1:
@@ -155,8 +241,6 @@ def validate_storyboard(storyboard: Any) -> dict[str, Any]:
         if emphasis in EMPHASIS:
             clean["emphasis"] = emphasis
         scenes.append(clean)
-        if len(scenes) >= MAX_SCENES:
-            break
     if not scenes:
         raise ValueError("storyboard requires at least one known text scene")
     return {
@@ -167,10 +251,9 @@ def validate_storyboard(storyboard: Any) -> dict[str, Any]:
 
 
 def storyboard_text_items(storyboard: Any) -> list[str]:
-    try:
-        clean = validate_storyboard(storyboard)
-    except ValueError:
+    if not storyboard:
         return []
+    clean = validate_storyboard(storyboard)
     items: list[str] = []
     for scene in clean["scenes"]:
         props = scene.get("props") or {}
@@ -183,10 +266,9 @@ def storyboard_text_items(storyboard: Any) -> list[str]:
 
 
 def card_scenes(storyboard: Any) -> list[dict[str, str]]:
-    try:
-        clean = validate_storyboard(storyboard)
-    except ValueError:
+    if not storyboard:
         return []
+    clean = validate_storyboard(storyboard)
     cards: list[dict[str, str]] = []
     for scene in clean["scenes"]:
         if scene.get("type") != "card":
@@ -209,6 +291,14 @@ def public_source_value(url: str) -> str:
     if host:
         return "外部来源已留档"
     return "来源已留档"
+
+
+def _is_github_url(url: str) -> bool:
+    return urlparse(str(url or "")).netloc.lower().endswith("github.com")
+
+
+def _has_metric_signal(value: str) -> bool:
+    return bool(re.search(r"\d", str(value or "")))
 
 
 def derive_default_storyboard(
@@ -240,7 +330,54 @@ def derive_default_storyboard(
             },
         },
     ]
-    for card in cards[:4]:
+    if _has_metric_signal(audience_metric):
+        scenes.append(
+            {
+                "type": "chart",
+                "props": {
+                    "kicker": "数据先当信号看",
+                    "heading": "热度不是结论，但能说明关注方向",
+                    "label": "公开指标",
+                    "value": audience_metric,
+                    "points": ["来源", "关注", "验证"],
+                },
+            }
+        )
+    if _is_github_url(url):
+        scenes.extend(
+            [
+                {
+                    "type": "terminal",
+                    "props": {
+                        "kicker": "开发者会先这样验证",
+                        "title": "最小上手路径",
+                        "prompt": "$",
+                        "lines": ["clone / install", "run quick start", "inspect examples", "check tests"],
+                    },
+                },
+                {
+                    "type": "flow",
+                    "props": {
+                        "kicker": "机制不要只靠文字讲",
+                        "heading": "把 repo 还原成一条工作流",
+                        "nodes": ["输入", "核心模块", "输出", "验证门槛"],
+                        "caption": "这类场景让 agent 用结构图解释机制，而不是堆段落。",
+                    },
+                },
+                {
+                    "type": "code_diff",
+                    "props": {
+                        "kicker": "源码视角",
+                        "title": "别只复述 README",
+                        "filename": "repo / docs / tests",
+                        "additions": ["看入口模块", "看示例输入输出", "看测试和 CI"],
+                        "removals": ["只看 star 数"],
+                    },
+                },
+            ]
+        )
+    card_limit = 1 if _is_github_url(url) and _has_metric_signal(audience_metric) else (2 if _is_github_url(url) else 4)
+    for card in cards[:card_limit]:
         scenes.append(
             {
                 "type": "card",

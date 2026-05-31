@@ -22,7 +22,10 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from agent_harness.policy import policy_get, policy_format, unsupported_claim_regex, unsupported_terms
+from agent_harness.evidence import strong_research_review_errors
+from agent_harness.agent_visual import agent_visual_text_items, require_agent_visual
 from agent_harness.storyboard import card_scenes, storyboard_text_items, validate_storyboard
+from agent_harness.video_profile import choose_video_profile, normalize_video_profile
 from env_utils import env_value
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
@@ -104,6 +107,7 @@ def rendered_polish_text(polished: dict[str, Any]) -> str:
             str(polished.get("douyin_desc") or ""),
             json.dumps(polished.get("cards") or [], ensure_ascii=False),
             " ".join(storyboard_text_items(polished.get("storyboard"))),
+            " ".join(agent_visual_text_items(polished.get("agent_visual") or polished.get("agentVisual"))),
         ]
     )
 
@@ -142,6 +146,10 @@ def normalize_polish_payload(data: dict[str, Any]) -> dict[str, Any]:
         except ValueError as exc:
             raise RuntimeError(f"DeepSeek response storyboard is invalid: {exc}") from exc
     cards = data.get("cards") or (card_scenes(data.get("storyboard")) if data.get("storyboard") else [])
+    try:
+        data["agent_visual"] = require_agent_visual(data.get("agent_visual") or data.get("agentVisual"))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     min_cards = 4 if any("cards must be 4" in str(item) for item in policy_get("deepseek.constraints", [])) else 1
     if not isinstance(cards, list) or len(cards) < min_cards:
         raise RuntimeError(f"DeepSeek response missing at least {min_cards} compatibility card")
@@ -178,13 +186,19 @@ def parse_deepseek_variants(content: str, expected_count: int) -> list[dict[str,
     return clean
 
 
-def deepseek_constraints(video_seconds: int, *, variant_count: int = 1) -> list[str]:
+def deepseek_constraints(video_seconds: int, *, variant_count: int = 1, video_profile: dict[str, Any] | None = None) -> list[str]:
     chars_per_second = int(policy_get("deepseek.chars_per_second", 7))
     lo = max(60, video_seconds * chars_per_second - 30)
     hi = video_seconds * chars_per_second + 20
     voiceover_chars_range = f"{lo}-{hi} Chinese characters"
+    orientation = str((video_profile or {}).get("orientation") or "vertical")
     constraints = [
-        policy_format(item, voiceover_chars_range=voiceover_chars_range, video_seconds=video_seconds)
+        policy_format(
+            item,
+            voiceover_chars_range=voiceover_chars_range,
+            video_seconds=video_seconds,
+            video_orientation=orientation,
+        )
         for item in policy_get("deepseek.constraints", [])
     ]
     if variant_count > 1:
@@ -193,7 +207,7 @@ def deepseek_constraints(video_seconds: int, *, variant_count: int = 1) -> list[
             f"Return one JSON object with exactly one key `variants`, containing exactly {variant_count} objects."
         )
         constraints.append(
-            "Each variants item must contain exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, caveats."
+            "Each variants item must contain exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, agent_visual, video_profile, caveats."
         )
     return constraints
 
@@ -250,6 +264,7 @@ def deepseek_body(
     *,
     temperature: float,
     video_seconds: int,
+    video_profile: dict[str, Any] | None = None,
     variant_count: int = 1,
     evidence_bundle: dict[str, Any] | None = None,
     cross_check_review: dict[str, Any] | None = None,
@@ -258,13 +273,14 @@ def deepseek_body(
     attempt: int = 1,
 ) -> dict[str, Any]:
     system = policy_get("deepseek.system", "Return strict JSON only.")
+    normalized_video_profile = normalize_video_profile(video_profile or choose_video_profile())
     user = {
         "task": (
             f"Polish {variant_count} distinct short-form video packages for Douyin and Remotion."
             if variant_count > 1
             else "Polish one short-form video package for Douyin and Remotion."
         ),
-        "constraints": deepseek_constraints(video_seconds, variant_count=variant_count),
+        "constraints": deepseek_constraints(video_seconds, variant_count=variant_count, video_profile=normalized_video_profile),
         "forbidden_claim_terms": unsupported_terms(),
         "required_entity_terms": candidate_entity_terms(candidate),
         "selected_candidate": candidate,
@@ -284,11 +300,15 @@ def deepseek_body(
             "combined_excerpt": ((evidence_bundle or {}).get("evidence_summary") or {}).get("combined_excerpt") or "",
         },
         "cross_check_review": cross_check_review or {},
+        "suggested_video_profile": normalized_video_profile,
         "content_quality_requirement": [
             "Use research_brief and fact_bank to choose a concrete topic angle and visual scene path.",
             "Explain the concrete user problem, mechanism, practical fit, caveat, and next verification step.",
             "Every strong public claim must be traceable to evidence_bundle source_facts or explicitly framed as an unverified observation.",
             "For open-source projects, cover what the repo appears to do, why a developer would care, tradeoffs, and what to inspect before adopting.",
+            "For GitHub/open-source topics, do not stop at a radar summary: include problem, mechanism or architecture, practical fit, tradeoff/risk, and a concrete verification path.",
+            "The rendered provider video is agent_visual. Write custom TSX/CSS for the current topic; do not depend on the default storyboard scene renderer.",
+            "Choose video_profile.duration_seconds, orientation, motion, and animation_style for the content depth; respect the suggested_video_profile unless you have a source-grounded reason to override it.",
         ],
     }
     if revision_feedback is not None:
@@ -302,6 +322,8 @@ def deepseek_body(
             "tags": (previous_polish or {}).get("tags"),
             "cards": (previous_polish or {}).get("cards"),
             "storyboard": (previous_polish or {}).get("storyboard"),
+            "agent_visual": (previous_polish or {}).get("agent_visual"),
+            "video_profile": (previous_polish or {}).get("video_profile"),
             "caveats": (previous_polish or {}).get("caveats"),
         }
         user["gemini_feedback"] = {
@@ -335,7 +357,7 @@ def deepseek_body(
         },
         "scenes": [
             {
-                "type": "statement|context|stat|bullets|card|compare|quote|cta",
+                "type": "statement|context|stat|bullets|card|compare|compare_table|terminal|flow|chart|code_diff|quote|cta",
                 "weight": "optional number 0-1",
                 "emphasis": "optional low|normal|high",
                 "props": "object bounded to the chosen scene type",
@@ -350,6 +372,21 @@ def deepseek_body(
         "tags": ["string"],
         "cards": [{"label": "string", "value": "string", "detail": "string"}],
         "storyboard": storyboard_schema,
+        "agent_visual": {
+            "enabled": True,
+            "render_mode": "full_canvas",
+            "description": "short note on why this custom Remotion visual fits the topic",
+            "component_code": "string: TSX function body only, no import/export. Must contain a return statement. Variables available: data, frame, fps, durationInFrames, width, height, progress, audioPulse, React, AbsoluteFill, interpolate, spring, useMemo, Img, staticFile, Series, Sequence.",
+            "css": "string: custom CSS for this visual, preferably classes prefixed with agent-",
+        },
+        "video_profile": {
+            "duration_seconds": "integer between 18 and 120",
+            "orientation": "vertical|horizontal",
+            "aspect_ratio": "9:16|16:9",
+            "motion": "calm|standard|punchy",
+            "animation_style": "kinetic_text|diagrammatic|evidence_cards|minimal",
+            "decision_reason": "short string explaining why this format fits the topic",
+        },
         "caveats": ["string"],
     }
     if variant_count > 1:
@@ -383,6 +420,7 @@ def deepseek_chat(
     timeout: float,
     temperature: float = 0.4,
     video_seconds: int = 12,
+    video_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body = deepseek_body(
         model,
@@ -390,6 +428,7 @@ def deepseek_chat(
         content_plan,
         temperature=temperature,
         video_seconds=video_seconds,
+        video_profile=video_profile,
         evidence_bundle=evidence_bundle,
         cross_check_review=cross_check_review,
     )
@@ -413,6 +452,7 @@ def deepseek_chat(
             str(exc),
             timeout,
             video_seconds=video_seconds,
+            video_profile=video_profile,
         )
         validate_polish(candidate, corrected)
         corrected["_correction_applied"] = True
@@ -432,6 +472,7 @@ def deepseek_revision_chat(
     timeout: float,
     temperature: float = 0.35,
     video_seconds: int = 12,
+    video_profile: dict[str, Any] | None = None,
     attempt: int = 2,
 ) -> dict[str, Any]:
     body = deepseek_body(
@@ -440,6 +481,7 @@ def deepseek_revision_chat(
         content_plan,
         temperature=temperature,
         video_seconds=video_seconds,
+        video_profile=video_profile,
         evidence_bundle=evidence_bundle,
         cross_check_review=cross_check_review,
         revision_feedback=revision_feedback,
@@ -466,6 +508,7 @@ def deepseek_revision_chat(
             str(exc),
             timeout,
             video_seconds=video_seconds,
+            video_profile=video_profile,
         )
         validate_polish(candidate, corrected)
         corrected["_correction_applied"] = True
@@ -484,6 +527,7 @@ def correct_deepseek_polish(
     validation_error: str,
     timeout: float,
     video_seconds: int = 12,
+    video_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body = deepseek_body(
         model,
@@ -491,6 +535,7 @@ def correct_deepseek_polish(
         content_plan,
         temperature=0.1,
         video_seconds=video_seconds,
+        video_profile=video_profile,
         evidence_bundle=evidence_bundle,
         cross_check_review=cross_check_review,
     )
@@ -520,6 +565,7 @@ def deepseek_variant_chat(
     cross_check_review: dict[str, Any],
     timeout: float,
     video_seconds: int = 12,
+    video_profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     variant_count = int(policy_get("deepseek.variant_count", 3))
     body = deepseek_body(
@@ -528,6 +574,7 @@ def deepseek_variant_chat(
         content_plan,
         temperature=float(policy_get("deepseek.variant_temperature", 0.5)),
         video_seconds=video_seconds,
+        video_profile=video_profile,
         variant_count=variant_count,
         evidence_bundle=evidence_bundle,
         cross_check_review=cross_check_review,
@@ -583,6 +630,7 @@ def _multi_candidate_polish(
     cross_check_review: dict[str, Any],
     timeout: float,
     video_seconds: int = 12,
+    video_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ask the provider for multiple variants in one structured response and pick the highest-scoring valid one."""
     polished_variants = deepseek_variant_chat(
@@ -594,6 +642,7 @@ def _multi_candidate_polish(
         cross_check_review,
         timeout,
         video_seconds=video_seconds,
+        video_profile=video_profile,
     )
     variants: list[tuple[float, dict[str, Any]]] = [(_score_polish(polished), polished) for polished in polished_variants]
     if not variants:
@@ -645,10 +694,31 @@ def main() -> int:
         content_plan["source_map"] = read_json(source_map_path)
     evidence_bundle = read_json(evidence_path)
     cross_check_review = read_json(cross_check_path)
-    if cross_check_review.get("status") != "pass":
-        raise SystemExit(f"cross_check_review.json must pass before DeepSeek polish: {cross_check_review.get('errors')}")
-    duration_frames = int(env_value("SEARCHPO_DURATION_FRAMES", env_file, "360"))
-    video_seconds = duration_frames // 30
+    strong_research_errors = strong_research_review_errors(cross_check_review)
+    if strong_research_errors:
+        raise SystemExit(f"strong research review must pass before DeepSeek polish: {strong_research_errors}")
+    fallback_video_profile = choose_video_profile(candidate, content_plan, evidence_bundle)
+    video_profile_override: dict[str, Any] = {}
+    env_seconds = env_value("SEARCHPO_VIDEO_SECONDS", env_file, "")
+    env_duration_frames = env_value("SEARCHPO_DURATION_FRAMES", env_file, "")
+    env_orientation = env_value("SEARCHPO_VIDEO_ORIENTATION", env_file, "")
+    if env_seconds:
+        video_profile_override["duration_seconds"] = env_seconds
+    elif env_duration_frames:
+        try:
+            video_profile_override["duration_seconds"] = max(1, round(int(env_duration_frames) / 30))
+        except ValueError:
+            pass
+    if env_orientation:
+        video_profile_override["orientation"] = env_orientation
+    video_profile = normalize_video_profile(
+        {
+            **(content_plan.get("suggested_video_profile") or {}),
+            **video_profile_override,
+        },
+        fallback=fallback_video_profile,
+    )
+    video_seconds = int(video_profile["duration_seconds"])
     multi_candidate = env_value("SEARCHPO_POLISH_MULTI_CANDIDATE", env_file, "0") == "1"
     revision_meta: dict[str, Any] | None = None
     if args.mode == "revise":
@@ -669,6 +739,7 @@ def main() -> int:
             feedback,
             args.timeout,
             video_seconds=video_seconds,
+            video_profile=video_profile,
             attempt=args.attempt,
         )
         revision_meta = {
@@ -691,6 +762,7 @@ def main() -> int:
             cross_check_review,
             args.timeout,
             video_seconds=video_seconds,
+            video_profile=video_profile,
         )
     else:
         polished = deepseek_chat(
@@ -702,7 +774,9 @@ def main() -> int:
             cross_check_review,
             args.timeout,
             video_seconds=video_seconds,
+            video_profile=video_profile,
         )
+    polished_video_profile = normalize_video_profile(polished.get("video_profile"), fallback=video_profile)
     unsafe_hits = unsafe_hits_for(polished)
     result = {
         "schema_version": 1,
@@ -714,13 +788,15 @@ def main() -> int:
         "selected_candidate_id": candidate.get("candidate_id"),
         "status": "pass" if not unsafe_hits else "fail",
         "polished_title": bounded_text(polished["polished_title"], 80),
-        "voiceover_text": bounded_text(polished["voiceover_text"], 700),
+        "voiceover_text": bounded_text(polished["voiceover_text"], 1000),
         "script_text_hash": sha256_text(str(polished["voiceover_text"] or "")),
         "douyin_title": bounded_text(polished["douyin_title"], 55),
         "douyin_desc": bounded_text(polished["douyin_desc"], 600),
         "tags": polished["tags"],
         "cards": polished["cards"],
         "storyboard": polished.get("storyboard"),
+        "agent_visual": polished.get("agent_visual"),
+        "video_profile": polished_video_profile,
         "caveats": polished.get("caveats") or [],
         "unsafe_claim_hits": unsafe_hits,
         "correction_applied": bool(polished.get("_correction_applied")),

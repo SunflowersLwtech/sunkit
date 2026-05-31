@@ -134,6 +134,69 @@ def http_source_url(candidate: dict[str, Any]) -> str:
     return url
 
 
+def _is_operator_topic_seed(candidate: dict[str, Any]) -> bool:
+    manual_scheme = str(policy_get("subject_inputs.operator_topic.manual_url_scheme", "manual-topic://"))
+    url = str(candidate.get("canonical_url") or "")
+    return (
+        str(candidate.get("input_mode") or "") == str(policy_get("subject_inputs.operator_topic.input_mode", "operator_topic"))
+        or str(candidate.get("selection_source") or "") == str(policy_get("subject_inputs.operator_topic.selection_source", "operator_topic"))
+        or url.startswith(manual_scheme)
+    )
+
+
+def _operator_topic_seed_bundle(candidate: dict[str, Any]) -> dict[str, Any]:
+    title = str(candidate.get("title") or "operator topic").strip()
+    summary = str(candidate.get("summary") or "").strip()
+    url = str(candidate.get("canonical_url") or "").strip()
+    seed_text = "\n".join(
+        item
+        for item in [
+            f"Operator topic: {title}",
+            f"Operator context: {summary}" if summary else "",
+            "This is a user-supplied research seed, not external evidence. Use widesearch supplemental sources before making public claims.",
+        ]
+        if item
+    )
+    source = {
+        "id": "operator_topic_seed",
+        "type": "operator_topic_seed",
+        "url": url,
+        "status": "seed",
+        "evidence_role": "research_seed",
+        "requires_widesearch": True,
+        "external_evidence": False,
+        "content_type": "text/plain",
+        "sha256": sha256_text(seed_text),
+        "title": title,
+        "description": summary,
+        "text_chars": len(seed_text),
+        "excerpt": seed_text,
+    }
+    return {
+        "schema_version": 1,
+        "created_at": utc_now(),
+        "selected_candidate_id": candidate.get("candidate_id"),
+        "canonical_url": url,
+        "source_kind": "operator_topic_seed",
+        "evidence_role": "research_seed",
+        "requires_widesearch": True,
+        "external_evidence": False,
+        "sources": [source],
+        "source_count": 1,
+        "combined_text_sha256": sha256_text(seed_text),
+        "evidence_summary": {
+            "source_facts": ["operator supplied topic seed; external claims require widesearch corroboration"],
+            "constructive_angles": [
+                "Turn the topic into answerable research questions.",
+                "Separate what the user asked from what external sources actually support.",
+                "Cross-check at least two independent extracted sources before copy generation.",
+            ],
+            "candidate_terms": _terms(candidate),
+            "combined_excerpt": seed_text[:3200],
+        },
+    }
+
+
 def github_repo(url: str) -> tuple[str, str] | None:
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
@@ -215,6 +278,8 @@ def _terms(candidate: dict[str, Any]) -> list[str]:
 
 
 def build_evidence_bundle(candidate: dict[str, Any], fetcher: FetchFn = fetch_url, timeout: float = 25.0) -> dict[str, Any]:
+    if _is_operator_topic_seed(candidate) and not re.match(r"^https?://", str(candidate.get("canonical_url") or "")):
+        return _operator_topic_seed_bundle(candidate)
     url = http_source_url(candidate)
     sources: list[dict[str, Any]] = []
     primary = fetcher(url, None, timeout)
@@ -243,7 +308,7 @@ def build_evidence_bundle(candidate: dict[str, Any], fetcher: FetchFn = fetch_ur
         if item
     ]
     if not source_facts:
-        source_facts.append("primary source text loaded")
+        raise RuntimeError("primary source has no extractable source facts")
     constructive_angles = [
         "Explain the concrete user problem this source appears to address.",
         "Explain what is directly evidenced by the source, and what still needs hands-on verification.",
@@ -273,11 +338,15 @@ def cross_check_evidence(candidate: dict[str, Any], bundle: dict[str, Any]) -> d
     combined = "\n".join(str(source.get("excerpt") or source.get("json") or "") for source in sources)
     min_chars = int(policy_get("evidence_fetch.min_primary_chars", 180))
     primary = next((source for source in sources if source.get("id") == "primary_url"), {})
+    if bundle.get("source_kind") == "operator_topic_seed":
+        primary = next((source for source in sources if source.get("id") == "operator_topic_seed"), {})
     errors: list[str] = []
     warnings: list[str] = []
     if not sources:
         errors.append("evidence_bundle has no fetched sources")
-    if int(primary.get("text_chars") or 0) < min_chars:
+    if bundle.get("source_kind") == "operator_topic_seed":
+        warnings.append("operator topic seed is not external evidence; research enrichment must supply independent sources")
+    elif int(primary.get("text_chars") or 0) < min_chars:
         errors.append(f"primary source text too short for cross-check: {primary.get('text_chars') or 0} chars")
     if bundle.get("source_kind") == "github_repo":
         source_ids = {str(source.get("id")) for source in sources}
@@ -298,7 +367,7 @@ def cross_check_evidence(candidate: dict[str, Any], bundle: dict[str, Any]) -> d
         "schema_version": 1,
         "created_at": utc_now(),
         "selected_candidate_id": candidate.get("candidate_id"),
-        "status": "pass" if not errors else "fail",
+        "status": "pending_research" if bundle.get("source_kind") == "operator_topic_seed" and not errors else ("pass" if not errors else "fail"),
         "canonical_url": bundle.get("canonical_url"),
         "source_kind": bundle.get("source_kind"),
         "checks": checks,
@@ -307,6 +376,28 @@ def cross_check_evidence(candidate: dict[str, Any], bundle: dict[str, Any]) -> d
         "warnings": warnings,
         "errors": errors,
     }
+
+
+def strong_research_review_errors(review: dict[str, Any] | None) -> list[str]:
+    review = review or {}
+    min_supplemental = int(policy_get("research.min_supplemental_sources", 2))
+    min_independent_hosts = int(policy_get("research.min_independent_hosts", min_supplemental))
+    hosts = [str(host) for host in review.get("independent_source_hosts") or [] if str(host).strip()]
+    errors: list[str] = []
+    if review.get("status") != "pass":
+        errors.append(f"cross_check_review.status is {review.get('status') or 'missing'}")
+    if review.get("research_sufficient") is not True:
+        errors.append("cross_check_review.research_sufficient is not true")
+    if review.get("fact_bank_status") != "pass":
+        errors.append(f"cross_check_review.fact_bank_status is {review.get('fact_bank_status') or 'missing'}")
+    if int(review.get("supplemental_source_count") or 0) < min_supplemental:
+        errors.append(
+            f"cross_check_review.supplemental_source_count below policy minimum: "
+            f"{review.get('supplemental_source_count') or 0} < {min_supplemental}"
+        )
+    if len(set(hosts)) < min_independent_hosts:
+        errors.append(f"cross_check_review.independent_source_hosts below policy minimum: {len(set(hosts))} < {min_independent_hosts}")
+    return errors
 
 
 def write_evidence_artifacts(run_dir: Path, candidate: dict[str, Any], fetcher: FetchFn = fetch_url, timeout: float = 25.0) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -322,6 +413,6 @@ def write_evidence_artifacts(run_dir: Path, candidate: dict[str, Any], fetcher: 
             (evidence_dir / f"{source_id}.txt").write_text(str(source["excerpt"]) + "\n", encoding="utf-8")
         if source.get("json") is not None:
             write_json(evidence_dir / f"{source_id}.json", source["json"])
-    if review.get("status") != "pass":
+    if review.get("status") != "pass" and bundle.get("source_kind") != "operator_topic_seed":
         raise RuntimeError("cross-check failed: " + "; ".join(str(item) for item in review.get("errors") or []))
     return bundle, review

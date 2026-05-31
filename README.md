@@ -16,7 +16,7 @@ Backlog sources: Juejin, Zhihu, Bilibili, Linux.do, WaytoAGI, X/Twitter. Reddit 
 
 ## Purpose
 
-`searchpo` is the data-prep layer for an OSS / AI-tool radar. The first useful output is a daily shortlist of score-ready candidates, not a generic news digest.
+`searchpo` is a topic/link-driven research-to-video pipeline. The normal useful output starts from an operator-supplied topic or URL, runs widesearch and cross-check, then produces source-bounded content; autonomous daily shortlist selection is currently legacy/opt-in only.
 
 The target candidate has:
 
@@ -70,21 +70,21 @@ Run the no-provider contract path. This is safe for local wiring checks, but it 
 
 ```bash
 npm install
-npm run e2e
+SEARCHPO_TOPIC="topic to investigate" npm run e2e
 ```
 
 For a publishable local render, use the provider tier:
 
 ```bash
-npm run e2e:provider
+SEARCHPO_TOPIC="topic to investigate" npm run e2e:provider
 ```
 
 The full provider/local path does:
 
 1. `.env` coverage audit without printing secret values.
-2. live source probe and source fetch.
-3. raw/normalized/dedupe/filter/shortlist artifacts under `runtime/artifacts/YYYY-MM-DD/<run_id>/`.
-4. detailed canonical URL evidence fetch plus cross-check under `evidence_bundle.json` and `cross_check_review.json`.
+2. operator topic/link intake. The legacy live source probe/shortlist path runs only when `SEARCHPO_ENABLE_DAILY_RADAR=1`.
+3. detailed canonical URL evidence fetch or operator topic seed recording under `evidence_bundle.json`.
+4. strategy-selected widesearch/cross-check under `widesearch_strategy.json`, `anysearch_research.json`, and `cross_check_review.json`.
 5. provider-mode harness with explicit task board and gates.
 6. content improvement loop: DeepSeek draft/revision plus Gemini content score until the policy target is met.
 7. full-service planning artifacts: `topic_brief.json`, `fact_bank.json`, `source_map.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `environment_manifest.json`, and optional `analytics_feedback.json`.
@@ -97,9 +97,9 @@ The full provider/local path does:
 Explicit higher-side-effect tiers:
 
 ```bash
-npm run e2e:provider  # DeepSeek + Gemini provider calls, local render, deterministic/model audit, adapter preflight
-npm run e2e:lambda    # provider calls plus S3/Lambda render
-npm run e2e:live      # provider calls plus S3/Lambda render plus live Douyin upload
+SEARCHPO_TOPIC="topic to investigate" npm run e2e:provider  # DeepSeek + Gemini provider calls, local render, deterministic/model audit, adapter preflight
+SEARCHPO_TOPIC="topic to investigate" npm run e2e:lambda    # provider calls plus S3/Lambda render
+SEARCHPO_TOPIC="topic to investigate" npm run e2e:live      # provider calls plus S3/Lambda render plus live Douyin upload
 ```
 
 Side-effect matrix:
@@ -111,22 +111,23 @@ Side-effect matrix:
 | `npm run e2e:lambda` | `lambda` | `lambda` | `contract-check` | Provider APIs plus Remotion Lambda/S3 render with private output and lifecycle cleanup | Live Douyin upload | Same as provider, with `render_mode=lambda` and fresh Lambda site/render evidence |
 | `npm run e2e:live` | `live` | `lambda` | `live` | Provider APIs, Lambda/S3 render, live Douyin upload | Unverified final success labels | Remote identity verification passes; `submitted` alone is failure |
 
+All rows above require `SEARCHPO_TOPIC`, `SEARCHPO_LINK`, or `SEARCHPO_TOPIC_URL` unless `SEARCHPO_ENABLE_DAILY_RADAR=1` is set for the legacy source-registry sweep.
+
 Run individual stages:
 
 ```bash
-python3 data_prep/scripts/run_pipeline.py
-SEARCHPO_AGENT_MODE=provider python3 agent_harness/run_agent_loop.py
+SEARCHPO_ENABLE_DAILY_RADAR=1 python3 data_prep/scripts/run_pipeline.py
+SEARCHPO_AGENT_MODE=provider python3 agent_harness/run_agent_loop.py --topic "topic to investigate"
 python3 scripts/video_quality_loop.py "$(cat runtime/latest_run.txt)" --execution-profile provider --render-mode local --publish-mode contract-check
 npm run douyin:check
 python3 scripts/finalize_run.py "$(cat runtime/latest_run.txt)" --publish-mode contract-check
 ```
 
-Run with an operator-specified topic instead of the daily source radar selecting a candidate:
+Run with an operator-specified topic or link:
 
 ```bash
 SEARCHPO_TOPIC="Claude Code 多代理工作流怎么拆分职责" \
-SEARCHPO_TOPIC_URL="https://example.com/source-or-brief" \
-npm run e2e:topic
+npm run e2e:provider
 ```
 
 Run directly from a link. This still pulls detailed source evidence and cross-checks it before copy generation:
@@ -141,19 +142,20 @@ Optional boundaries:
 SEARCHPO_TOPIC="某个你指定的主题" \
 SEARCHPO_TOPIC_SUMMARY="你希望它重点分析的上下文" \
 SEARCHPO_TOPIC_URL="https://example.com/source-or-brief" \
-npm run e2e:topic
+npm run e2e:provider
 ```
 
-Topic contract mode skips source probing and shortlist generation, writes `subject_request.json`, then fetches the canonical URL, runs cross-check, and runs the no-provider text preflight/post-package structure checks only. Use `SEARCHPO_TOPIC="..." SEARCHPO_TOPIC_URL="..." npm run e2e:provider` for a publishable topic render. Without `SEARCHPO_TOPIC_URL` or `SEARCHPO_LINK`, the run fails before copy generation because content quality requires source evidence.
+Topic contract mode skips source probing and shortlist generation, writes `subject_request.json`, records the topic as a research seed, runs widesearch/cross-check, and runs the no-provider text preflight/post-package structure checks only. Use `SEARCHPO_TOPIC="..." npm run e2e:provider` for topic-first widesearch, or add `SEARCHPO_TOPIC_URL`/`SEARCHPO_LINK` when you already know the canonical source boundary. Without `SEARCHPO_TOPIC`, `SEARCHPO_LINK`, or `SEARCHPO_TOPIC_URL`, E2E refuses to run unless `SEARCHPO_ENABLE_DAILY_RADAR=1` is explicitly set.
 
 The tracked harness writes these per-run files under `runtime/artifacts/YYYY-MM-DD/<run_id>/`:
 
 - `harness_board.sqlite3`: task board with stage tasks, events, artifacts, and gates.
 - `agent_run.json`: harness loop summary plus board snapshot, including `subject_input_mode`.
 - `evidence_bundle.json`: fetched source details from the canonical URL plus AnySearch supplemental extracts; GitHub repo runs require repo API and README evidence.
+- `widesearch_strategy.json`: selected search strategy, subject kind, source buckets, query plan, provider hints, and docs probing ladder.
 - `anysearch_research.json`, `topic_brief.json`, `fact_bank.json`, `source_map.json`, and `research_brief.json`: research enrichment outputs required before content planning; `research_brief.json` is a compatibility view of `topic_brief.json`.
 - `cross_check_review.json`: structured source-bound content review, source facts, caveats, constructive angles, and research sufficiency.
-- Contract mode writes `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `agent_review.json`, `evidence_bundle.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, and `post/claims_ledger.json`; it does not write final media, `artifact_manifest.json`, or `run_final.json`.
+- Contract mode writes `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `agent_review.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, and `post/claims_ledger.json`; it does not write final media, `artifact_manifest.json`, or `run_final.json`.
 - Provider/live modes write `artifact_manifest.json`: final MP4/cover/render/caption/audio hashes.
 - Provider/live modes write `run_final.json`: final source of truth written after render, audit, and publish checks.
 - Provider/live modes also write `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json`, and `delivery_package.json`; `video_spec.json` is the renderer-neutral contract, `render_payload.json` is the Remotion adapter output, and `cards` remains a compatibility field.
@@ -195,19 +197,35 @@ From Claude Code or Codex, run:
 /searchpo-full-flow
 ```
 
+Codex skill pickers that do not show slash commands should use the `Searchpo Full Flow` skill, which wraps the same provider/live command contract.
+
 `npm run skills:sync:codex` installs user-level Codex skill symlinks under `~/.codex/skills/searchpo-*`, writes `~/.codex/agents/searchpo-*.toml`, and refreshes `.codex/commands/searchpo-full-flow.md` plus `.codex/agents/searchpo-*.toml` inside this project.
 
-If the user says `发抖音`, `发布`, `live`, or `post --live`, `/searchpo-full-flow` runs `npm run e2e:live`; otherwise it runs `npm run e2e:provider` for a publishable local render. Use `npm run e2e` only for no-provider contract wiring checks.
+If the user says `发抖音`, `发布`, `live`, or `post --live`, `/searchpo-full-flow` runs `npm run e2e:live`; otherwise it runs `npm run e2e:provider` for a publishable local render. Always pass `SEARCHPO_TOPIC`, `SEARCHPO_LINK`, or `SEARCHPO_TOPIC_URL`; use `npm run e2e` only for no-provider contract wiring checks.
+
+Project MCP config lives in `.mcp.json`. DeepWiki is registered there for repository-intelligence work and is wrapped by `skills/searchpo-deepwiki-research/SKILL.md`. Use it to understand GitHub repos, but keep canonical URL/API/README evidence plus AnySearch supplements as the publishable proof chain.
+
+Agents can inspect available providers and keys without exposing secret values:
+
+```bash
+npm run agent:capabilities
+npm run agent:capabilities:check
+```
 
 ## API Keys
 
 Current source fetching can run without required API keys. Use existing keys when present:
 
 - GitHub private/public repo access: `GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_PERSONAL_ACCESS_TOKEN`.
+- GitLab repo access: `GITLAB_PERSONAL_ACCESS_TOKEN_MAC0107` or `GITLAB_TOKEN`.
+- Repository/context services: DeepWiki MCP via `.mcp.json`, plus `SOURCEGRAPH_PAT` and `CONTEXT7_API_KEY` when a workflow needs them.
+- Research expansion: `ANYSEARCH_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, `TINYFISH_API_KEY`, `LIBRARIES_IO_API_KEY`, `PRODUCTHUNT_API_KEY`, `PRODUCTHUNT_API_SECRET`, `PRODUCTHUNT_API_TOKEN`, `HUGGINGFACE_TOKEN`, `REDDIT_CLIENT_ID`, and `REDDIT_CLIENT_SECRET`.
 - Gemini calls: use `GOOGLE_AGENT_PLATFORM_API` as the source value and export it as `GOOGLE_API_KEY` for Google AI Platform requests.
-- LLM scoring/review: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`.
+- LLM scoring/review: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GROK_API_KEY`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, and `AWS_BEDROCK_API_KEY`.
 - Script agents: `DEEPSEEK_API_KEY` for polish, and `GOOGLE_AGENT_PLATFORM_API` or `GOOGLE_API_KEY` for Gemini TTS and visual audit.
 - Gemini API mode: `SEARCHPO_GEMINI_API_MODE=vertex_express` for Agent Platform / Vertex keys on `aiplatform.googleapis.com`; use `developer` only for AI Studio keys that can call `generativelanguage.googleapis.com`.
+- Social source/distribution keys: `X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, `X_BEARER_TOKEN`, `TWITTERAPI_IO_USER_ID`, `TWITTERAPI_IO_API_KEY`, `BLUESKY_HANDLE`, and `BLUESKY_APP_PASSWORD`.
+- Notifications: `SEARCHPO_SLACK_WEBHOOK` and `SEARCHPO_BARK_URL`.
 
 Still optional / only needed later:
 
@@ -299,7 +317,7 @@ DOUYIN_ACCOUNT_NAME=<account_name> SEARCHPO_DOUYIN_LIVE=1 npm run douyin:upload
 Run one full live publish from source fetch through Lambda/S3 render and Douyin submit:
 
 ```bash
-DOUYIN_ACCOUNT_NAME=<account_name> npm run e2e:live
+DOUYIN_ACCOUNT_NAME=<account_name> SEARCHPO_TOPIC="topic to investigate" npm run e2e:live
 ```
 
 Live Douyin upload defaults to headed browser mode so password or risk-control prompts can be handled during submit. Set `SOCIAL_UPLOAD_HEADED=0` only when you know headless publishing works for the account.

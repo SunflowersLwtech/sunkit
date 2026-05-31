@@ -13,6 +13,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -21,6 +22,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from agent_harness.policy import policy_get
+from agent_harness.evidence import strong_research_review_errors
 from agent_harness.service_artifacts import RENDER_TO_PLANNING_TYPE, bounded_text
 from env_utils import first_env, env_value
 from gemini_api import default_gemini_mode, generate_content_url
@@ -75,6 +77,9 @@ def score_content(
             "constructive_interaction_fit": "1-10: Does the copy invite useful comments, saves, or follow-up evaluation without engagement bait?",
             "recommendation_eligibility_safety": "1-10: Does it avoid spam, duplicate-content framing, fake engagement, automation-growth tactics, and unsupported shadowban/限流 claims?",
             "constructive_interpretation": "1-10: Does it provide a useful, source-grounded explanation instead of generic hype?",
+            "format_fit": "1-10: Does the chosen duration, orientation, storyboard motion, and animation style fit the subject instead of forcing every topic into the same short vertical template?",
+            "custom_visual_fit": "1-10: Does agent_visual define a topic-specific Remotion visual instead of generic reusable cards?",
+            "open_source_explainer_value": "1-10: For GitHub/open-source topics, does it explain repo value through problem, mechanism/architecture, usage or demo path, tradeoff/risk, and verification steps?",
         },
         "required_output": {
             "scores": {
@@ -87,8 +92,11 @@ def score_content(
                 "constructive_interaction_fit": "int",
                 "recommendation_eligibility_safety": "int",
                 "constructive_interpretation": "int",
+                "format_fit": "int",
+                "custom_visual_fit": "int",
+                "open_source_explainer_value": "int",
             },
-            "overall": "float weighted average; constructive interpretation and information density must materially affect it",
+            "overall": "float weighted average; constructive interpretation, information density, format_fit, custom_visual_fit, and open_source_explainer_value must materially affect it",
             "suggestions": ["1-3 specific improvement suggestions"],
             "verdict": f"pass only if overall >= {target_overall} and every dimension >= {min_dimension}; otherwise improve",
         },
@@ -100,6 +108,14 @@ def score_content(
             "tags": polish.get("tags"),
             "cards": polish.get("cards"),
             "storyboard": polish.get("storyboard"),
+            "agent_visual": {
+                "enabled": (polish.get("agent_visual") or {}).get("enabled"),
+                "render_mode": (polish.get("agent_visual") or {}).get("render_mode"),
+                "description": (polish.get("agent_visual") or {}).get("description"),
+                "component_code_preview": str((polish.get("agent_visual") or {}).get("component_code") or "")[:1600],
+                "css_preview": str((polish.get("agent_visual") or {}).get("css") or "")[:1000],
+            },
+            "video_profile": polish.get("video_profile") or polish.get("videoProfile"),
             "scene_plan": scene_plan or {},
         },
         "candidate_context": {
@@ -125,6 +141,9 @@ def score_content(
             "The content could have been written without reading the source.",
             "It makes project capability, ranking, benchmark, or adoption claims not supported by evidence_bundle.",
             "It does not explain the problem/mechanism/tradeoff/evaluation path for an open-source project or tool.",
+            "For a GitHub/open-source topic, it gives only a trend or README summary and does not explain why a developer should care, how the project works, what could go wrong, and how to verify it.",
+            "The video_profile forces a 12-second vertical radar treatment even though the source depth requires a longer explainer or a different presentation format.",
+            "agent_visual is missing, disabled, generic, or not clearly tailored to this topic.",
             "It presents private Douyin thresholds, fixed traffic-pool sizes, completion-rate cutoffs, or a definitive shadowban/限流 diagnosis as fact without official platform-rule evidence.",
             "It asks viewers for fake likes, follows, shares, comment spam, or other engagement bait.",
             "It contains raw URLs, GitHub links, website links, or source paths in public copy.",
@@ -205,6 +224,48 @@ def candidate_entity_terms(candidate: dict[str, Any]) -> list[str]:
     return unique[:6]
 
 
+def is_open_source_candidate(candidate: dict[str, Any]) -> bool:
+    host = urlparse(str(candidate.get("canonical_url") or "")).netloc.lower()
+    signals = candidate.get("signals") if isinstance(candidate.get("signals"), dict) else {}
+    source_ids = " ".join(str(item) for item in candidate.get("source_ids") or []).lower()
+    return "github.com" in host or bool(signals.get("has_code_signal")) or "github" in source_ids
+
+
+def content_value_beats(polish: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    combined = " ".join(
+        [
+            str(polish.get("polished_title") or ""),
+            str(polish.get("voiceover_text") or ""),
+            json.dumps(polish.get("cards") or [], ensure_ascii=False),
+            json.dumps(polish.get("storyboard") or {}, ensure_ascii=False),
+        ]
+    )
+    beat_terms = {
+        "problem": ["问题", "痛点", "为什么", "开发者", "用户", "成本", "效率"],
+        "mechanism": ["机制", "架构", "原理", "流程", "怎么", "模块", "接口", "抽象", "调用链"],
+        "usage_or_demo": ["demo", "示例", "quick start", "快速开始", "运行", "安装", "使用", "输入输出"],
+        "tradeoff": ["取舍", "边界", "风险", "限制", "不适合", "代价", "坑"],
+        "verification": ["验证", "源码", "README", "测试", "CI", "benchmark", "跑通", "检查"],
+    }
+    found = {
+        beat: any(term.lower() in combined.lower() for term in terms)
+        for beat, terms in beat_terms.items()
+    }
+    cn_chars = len(re.findall(r"[一-鿿]", str(polish.get("voiceover_text") or "")))
+    video_profile = polish.get("video_profile") if isinstance(polish.get("video_profile"), dict) else {}
+    try:
+        duration_seconds = int(video_profile.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    return {
+        "open_source_candidate": is_open_source_candidate(candidate),
+        "found_beats": found,
+        "beat_count": sum(1 for ok in found.values() if ok),
+        "voiceover_chinese_chars": cn_chars,
+        "video_duration_seconds": duration_seconds,
+    }
+
+
 def deterministic_blocking_checks(
     polish: dict[str, Any],
     candidate: dict[str, Any],
@@ -224,6 +285,7 @@ def deterministic_blocking_checks(
     opening = re.split(r"[。！？!?\n]", voiceover.strip(), maxsplit=1)[0]
     hook_specific = not any(re.search(pattern, opening, re.I) for pattern in generic_hook_patterns)
     blockers: list[str] = []
+    value_beats = content_value_beats(polish, candidate)
     evidence_bundle = evidence_bundle or {}
     cross_check_review = cross_check_review or {}
     if not candidate_referenced:
@@ -232,14 +294,23 @@ def deterministic_blocking_checks(
         blockers.append(f"opening hook is too generic for short video: {opening}")
     if not evidence_bundle.get("sources"):
         blockers.append("evidence_bundle.json is missing fetched source details")
-    if cross_check_review.get("status") != "pass":
-        blockers.append(f"cross_check_review.json did not pass: {cross_check_review.get('errors')}")
+    strong_research_errors = strong_research_review_errors(cross_check_review)
+    if strong_research_errors:
+        blockers.append("strong research review did not pass: " + "; ".join(strong_research_errors))
+    if value_beats["open_source_candidate"]:
+        if value_beats["voiceover_chinese_chars"] < 180:
+            blockers.append("open-source explainer voiceover is too short to deliver useful repo analysis")
+        if value_beats["beat_count"] < 4:
+            blockers.append(
+                "open-source explainer is missing core value beats: problem, mechanism, usage/demo, tradeoff, verification"
+            )
     return {
         "candidate_terms": terms,
         "candidate_referenced": candidate_referenced,
         "hook_specific": hook_specific,
         "evidence_sources_present": bool(evidence_bundle.get("sources")),
         "cross_check_status": cross_check_review.get("status") or "missing",
+        "content_value_beats": value_beats,
         "blocking_issues": blockers,
     }
 

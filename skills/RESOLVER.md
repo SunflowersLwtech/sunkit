@@ -6,9 +6,12 @@ This is the dispatcher for the Searchpo skill bundle. Read the matching `SKILL.m
 
 | Trigger | Skill |
 | --- | --- |
-| Full Searchpo flow, daily radar, topic-mode run, release gate, publish decision | `skills/searchpo-main-agent/SKILL.md` |
+| Full Searchpo flow, `/searchpo-full-flow`, complete provider/live E2E, publishable local render, live publish request | `skills/searchpo-full-flow/SKILL.md` |
+| Topic/link widesearch orchestration, release gate, publish decision | `skills/searchpo-main-agent/SKILL.md` |
 | Source research, AnySearch enrichment, FactBank, TopicBrief, source collection, cross-check hardening | `skills/searchpo-research-agent/SKILL.md` |
+| DeepWiki MCP, GitHub repository architecture/context, repo Q&A, source-code context before FactBank | `skills/searchpo-deepwiki-research/SKILL.md` |
 | Run scripts, provider adapters, Remotion render, Gemini audit, Douyin check/upload | `skills/searchpo-impl-agent/SKILL.md` |
+| Inspect `.env` key availability, provider/API routing, DeepWiki MCP availability, side-effect capability selection | `skills/searchpo-agent-capabilities/SKILL.md` |
 | Edit `src/`, captions, cover, Remotion metadata, render quality, Lambda render | `skills/remotion-best-practices/SKILL.md` |
 | Validate Claude/Codex bridge map, skill/command/agent frontmatter, bridge sync, install health | `skills/searchpo-plugin-check/SKILL.md` |
 
@@ -24,5 +27,7 @@ This is the dispatcher for the Searchpo skill bundle. Read the matching `SKILL.m
 
 - `skills/_AGENT_README.md` explains the local skill directory contract.
 - `config/searchpo_policy.json` owns keyword, copy, scoring, and provider-prompt policy.
+- `config/agent_capabilities.json` owns redacted env-key/MCP capability routing. Use `scripts/agent_capabilities.py`; never print `.env` values.
+- `.mcp.json` declares project MCP servers; DeepWiki belongs to repo research and does not replace canonical evidence.
 - `vendor/anysearch-skill` is the project-vendored AnySearch runtime; do not put API keys there.
 - Runtime artifacts under `runtime/` are evidence, not durable source.

@@ -16,8 +16,20 @@ PATTERNS = {
     "openai_like_sk": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     "google_api_key": re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
     "bearer_token": re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}"),
-    "cookie_token": re.compile(r"\b(?:cookie|session|sid|csrf|oauth)[A-Za-z0-9_.-]*\s*[:=]\s*[A-Za-z0-9._~+/=-]{20,}", re.I),
+    "cookie_token": re.compile(
+        r"\b(?:cookie|session|sid|csrf|oauth)(?:[_-]?(?:token|secret|id))?\s*[:=]\s*[A-Za-z0-9._~+/=-]{20,}",
+        re.I,
+    ),
 }
+
+SKIP_DIRS = {".git", "node_modules", "runtime", "out", "public/generated", "__pycache__"}
+
+
+def should_skip_path(path: Path) -> bool:
+    if any(part in SKIP_DIRS for part in path.parts):
+        return True
+    name = path.name
+    return name.startswith(".env") and name != ".env.example"
 
 
 def utc_now() -> str:
@@ -27,6 +39,8 @@ def utc_now() -> str:
 def iter_files(path: Path) -> Iterable[tuple[str, bytes]]:
     if path.is_dir():
         for item in path.rglob("*"):
+            if should_skip_path(item):
+                continue
             if item.is_file():
                 yield str(item), item.read_bytes()
     elif tarfile.is_tarfile(path):

@@ -4,6 +4,8 @@ import re
 from typing import Any
 
 from agent_harness.policy import policy_get, unsupported_claim_regex
+from agent_harness.agent_visual import agent_visual_text_items
+from agent_harness.evidence import strong_research_review_errors
 from agent_harness.storyboard import storyboard_text_items
 
 URL_RE = re.compile(r"https?://[^\s，。！？；;]+", re.I)
@@ -39,6 +41,15 @@ def _regex_hits(text: str, patterns: list[str]) -> list[str]:
     return sorted(set(found))
 
 
+def _regex_hits_in_units(units: list[str], patterns: list[str]) -> list[str]:
+    found: list[str] = []
+    for unit in units:
+        unit_text = _clean_text(unit)
+        if unit_text:
+            found.extend(_regex_hits(unit_text, patterns))
+    return sorted(set(found))
+
+
 def candidate_terms(candidate: dict[str, Any]) -> list[str]:
     raw_values = [
         str(candidate.get("title") or ""),
@@ -61,9 +72,9 @@ def candidate_terms(candidate: dict[str, Any]) -> list[str]:
     return unique[:8]
 
 
-def _render_payload_text(render_payload: dict[str, Any] | None) -> str:
+def _render_payload_text_units(render_payload: dict[str, Any] | None) -> list[str]:
     if not render_payload:
-        return ""
+        return []
     fields = [
         render_payload.get("displayTitle") or render_payload.get("title"),
         render_payload.get("summary"),
@@ -79,7 +90,12 @@ def _render_payload_text(render_payload: dict[str, Any] | None) -> str:
         if isinstance(card, dict):
             fields.extend([card.get("label"), card.get("value"), card.get("detail")])
     fields.extend(storyboard_text_items(render_payload.get("storyboard")))
-    return _clean_text(" ".join(str(field or "") for field in fields))
+    fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")))
+    return [_clean_text(field) for field in fields if _clean_text(field)]
+
+
+def _render_payload_text(render_payload: dict[str, Any] | None) -> str:
+    return _clean_text(" ".join(_render_payload_text_units(render_payload)))
 
 
 def _candidate_review_text(candidate: dict[str, Any]) -> str:
@@ -111,8 +127,8 @@ def evaluate_douyin_distribution_gate(
     title = _clean_text(douyin_copy.get("title"))
     desc = _clean_text(douyin_copy.get("desc"))
     tags = [str(tag).strip() for tag in douyin_copy.get("tags") or [] if str(tag).strip()]
-    render_text = _render_payload_text(render_payload)
-    public_text = _clean_text(" ".join([title, desc, " ".join(tags), render_text]))
+    public_units = [title, desc, *tags, *_render_payload_text_units(render_payload)]
+    public_text = _clean_text(" ".join(public_units))
     subject_text = _candidate_review_text(candidate)
     cross_check_status = str((cross_check_review or {}).get("status") or "missing")
 
@@ -127,7 +143,10 @@ def evaluate_douyin_distribution_gate(
     folk_rule_hits = _regex_hits(public_text, _policy_list("douyin_distribution.private_threshold_patterns"))
     anti_spam_hits = _hits(public_text, _policy_list("douyin_distribution.distribution_risk_terms"))
     platform_abuse_hits = _regex_hits(subject_text, _policy_list("douyin_distribution.platform_abuse_subject_patterns"))
-    external_redirect_hits = _regex_hits(public_text, _policy_list("douyin_distribution.external_redirect_patterns"))
+    external_redirect_hits = _regex_hits_in_units(
+        public_units,
+        _policy_list("douyin_distribution.external_redirect_patterns"),
+    )
     public_url_hits = sorted(set(URL_RE.findall(public_text)))
     bait_hits = _hits(public_text, _policy_list("douyin_distribution.engagement_bait_phrases"))
     interaction_hits = _hits(public_text, _policy_list("douyin_distribution.constructive_interaction_markers"))
@@ -170,6 +189,9 @@ def evaluate_douyin_distribution_gate(
         )
     if cross_check_status != "pass":
         blocking_issues.append(f"cross-check status is {cross_check_status}")
+    strong_research_errors = strong_research_review_errors(cross_check_review)
+    if strong_research_errors:
+        blocking_issues.append("strong research review failed: " + "; ".join(strong_research_errors))
 
     warnings: list[str] = []
     if not interaction_hits:

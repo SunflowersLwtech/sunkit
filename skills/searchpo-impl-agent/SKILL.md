@@ -24,7 +24,9 @@ writes_to:
 
 # Searchpo Implementation Agent
 
-You execute the main agent's assigned provider, render, audit, and publish tasks. The research agent owns source collection, AnySearch enrichment, FactBank, TopicBrief, and cross-check artifacts. Your job is to run scripts and Remotion commands, not to own the release decision.
+You execute the main agent's assigned provider, render, audit, and publish tasks. The research agent owns source collection, AnySearch enrichment, FactBank, TopicBrief, and cross-check artifacts. Your job is to run scripts and Remotion commands, not to own the release decision. Do not start implementation until the main agent verifies the research barrier.
+
+Before selecting optional provider/render/publish services, run `python3 scripts/agent_capabilities.py --profile implementation --format text`. Report missing key names only; never print `.env` values.
 
 ## Provider Models (current defaults)
 
@@ -39,22 +41,34 @@ You execute the main agent's assigned provider, render, audit, and publish tasks
 Full flow:
 
 ```bash
-npm run e2e           # contract: public-source/evidence/text checks only; no providers, media, AWS, or publish checks
-SEARCHPO_TOPIC="指定主题" SEARCHPO_TOPIC_URL="https://..." npm run e2e:topic  # contract: 跳过自动选题，但仍抓取详情并 cross-check
+SEARCHPO_TOPIC="指定主题" npm run e2e           # contract: topic/link evidence/text checks only; no providers, media, AWS, or publish checks
+SEARCHPO_TOPIC="指定主题" SEARCHPO_TOPIC_URL="https://..." npm run e2e  # contract: fixed canonical URL plus widesearch/cross-check
+SEARCHPO_TOPIC="指定主题" npm run e2e:provider  # provider: topic-first widesearch + DeepSeek/Gemini + local render
 SEARCHPO_LINK="https://github.com/owner/repo" npm run e2e:provider  # link: 直接给 canonical URL，全链路内容质量 gate
-npm run e2e:provider  # provider: DeepSeek + Gemini + local render; publish_mode=contract-check
-npm run e2e:lambda    # lambda: provider + AWS Lambda/S3 render; publish_mode=contract-check
-npm run e2e:live      # live: provider + Lambda render + real Douyin upload; publish_mode=live
+SEARCHPO_TOPIC="指定主题" npm run e2e:lambda    # lambda: provider + AWS Lambda/S3 render; publish_mode=contract-check
+SEARCHPO_TOPIC="指定主题" npm run e2e:live      # live: provider + Lambda render + real Douyin upload; publish_mode=live
 ```
 
 Runtime axes are recorded separately in generated JSON: `execution_profile=contract|provider|lambda|live`, `render_mode=none|local|lambda`, and `publish_mode=none|contract-check|live`.
 
+## Research Barrier
+
+Before provider/live commands, require main-agent confirmation that:
+
+- `cross_check_review.status == "pass"`;
+- `cross_check_review.research_sufficient == true`;
+- `widesearch_strategy.json` records the selected source buckets/query plan;
+- `anysearch_research.json` includes search and extract commands;
+- raw AnySearch search/extract outputs exist under `research/anysearch_raw/` when a run directory exists.
+
+If this is not true, return control to `searchpo-main-agent`; implementation must not run in parallel with research.
+
 Stage commands:
 
 ```bash
-python3 data_prep/scripts/run_pipeline.py
 python3 agent_harness/run_agent_loop.py --topic "指定主题" --topic-url "https://..." --topic-summary "可选上下文"
-python3 agent_harness/run_agent_loop.py --mode provider
+SEARCHPO_ENABLE_DAILY_RADAR=1 python3 data_prep/scripts/run_pipeline.py  # legacy source-registry candidate sweep only
+python3 agent_harness/run_agent_loop.py --mode provider  # requires explicit run_dir unless SEARCHPO_ENABLE_DAILY_RADAR=1
 # DeepSeek/content scoring are normally run by ContentImproveLoopStage.
 # The video loop owns render, cover, metadata, deterministic audit, Gemini audit, and final artifact promotion.
 python3 scripts/video_quality_loop.py "$(cat runtime/latest_run.txt)" --execution-profile provider --render-mode local --publish-mode contract-check

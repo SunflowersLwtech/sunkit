@@ -4,9 +4,10 @@ description: Use when orchestrating a searchpo run from source selection and res
 version: 1.1.0
 triggers:
   - "searchpo full flow"
-  - "daily radar"
+  - "widesearch"
   - "topic mode"
   - "SEARCHPO_TOPIC"
+  - "SEARCHPO_LINK"
   - "release gate"
   - "publish decision"
   - "发抖音"
@@ -53,18 +54,19 @@ The main agent verifies these outputs but assigns research to `searchpo-research
 - Current run pointer: `runtime/latest_run.txt`
 - Runtime policy: `config/searchpo_policy.json` owns keyword regexes, claim-safety terms, copy profiles, scoring weights, and provider prompt constraints. Prefer editing this file over hardcoding new keywords in scripts.
 - Research policy: `config/searchpo_policy.json.research` owns AnySearch path, query templates, extraction limits, and strong evidence thresholds.
+- Agent capability policy: `config/agent_capabilities.json` owns redacted `.env` key and MCP capability routing. Use `python3 scripts/agent_capabilities.py --profile all --format text`; do not print values.
 
 ## Complete Pipeline (provider mode)
 
 ```
 source input:
-  - daily radar: probe_sources → run_pipeline
-  - operator link/topic: SEARCHPO_LINK=... or SEARCHPO_TOPIC_URL=... → subject_request.json
+  - operator topic/link: SEARCHPO_TOPIC=... and/or SEARCHPO_LINK=.../SEARCHPO_TOPIC_URL=... → subject_request.json
+  - legacy source-registry candidate sweep: only when SEARCHPO_ENABLE_DAILY_RADAR=1 is explicitly set
 → run_agent_loop:
   1. LoadSubjectInput
   2. SelectCandidate / ResolveOperatorTopic
   3. SubjectEvidence (assigned to `searchpo-research-agent`; fetch canonical URL detail; GitHub repos require repo API + README)
-  4. ResearchEnrichment (assigned to `searchpo-research-agent`; AnySearch search/extract, FactBank, TopicBrief, enriched cross-check)
+  4. ResearchEnrichment (assigned to `searchpo-research-agent`; AnySearch-first search/extract, FactBank, TopicBrief, enriched cross-check; DeepWiki MCP may support repo understanding but cannot replace AnySearch)
   5. CrossCheck (source facts, claim boundary, constructive angles, research sufficiency)
   6. PlanContent
   7. ContentImproveLoop (assigned to `searchpo-impl-agent`; DeepSeek 生成/修订，Gemini 内容评分反馈，最多按 policy 有限迭代；`improve` 不允许直接进入 TTS)
@@ -93,13 +95,13 @@ Side-effect matrix:
 | Lambda | `npm run e2e:lambda` | `lambda` | `lambda` | `contract-check` | Provider gates plus fresh Remotion Lambda/S3 render pass; no live upload. |
 | Live | `npm run e2e:live` | `live` | `lambda` | `live` | Remote Douyin identity verification passes; `submitted` alone is failure. |
 
-1. In agent-team mode, assign research/evidence work to `searchpo-research-agent`, assign provider/render/audit/upload execution to `searchpo-impl-agent`, then verify artifacts and gates as main agent.
-2. Run `npm run e2e:provider` for a publishable local render. `npm run e2e` remains a no-provider contract profile and must not fabricate audio, captions, visual audit, or publish success.
+1. In agent-team mode, use sequential delegation. Assign research/evidence work to `searchpo-research-agent` first; research must start with canonical/GitHub evidence plus AnySearch source discovery/extraction, with DeepWiki only as supporting repo context. Do not start `searchpo-impl-agent` in parallel. Assign provider/render/audit/upload execution to `searchpo-impl-agent` only after the main agent verifies `cross_check_review.status == "pass"` and `research_sufficient == true`. The main agent must not run implementation commands itself when `searchpo-impl-agent` is available.
+2. Run `npm run e2e:provider` for a publishable local render only after setting `SEARCHPO_TOPIC`, `SEARCHPO_LINK`, or `SEARCHPO_TOPIC_URL`. `npm run e2e` remains a no-provider contract profile and must not fabricate audio, captions, visual audit, or publish success.
 3. If the user provides a fixed link, run `SEARCHPO_LINK="https://..." npm run e2e:provider`. Optional: `SEARCHPO_TOPIC` can override the display topic, but the link is still the canonical evidence boundary.
-4. If the user provides a fixed topic, it must include `SEARCHPO_TOPIC_URL` for evidence fetch/cross-check. A topic without an http(s) source is not publishable.
+4. If the user provides only a topic, run `SEARCHPO_TOPIC="..." npm run e2e:provider`; the research agent must treat the topic as a seed, run widesearch, extract independent sources, and pass the strong cross-check gate before implementation.
 5. If the user says `发抖音`, `发布`, `live`, or `post --live`, run `npm run e2e:live`. If they also provide a fixed link/topic, pass `SEARCHPO_LINK` or `SEARCHPO_TOPIC_URL` into the live command.
 6. Verify artifacts per mode:
-   - Contract: `agent_run.json`, `main_task_plan.json`, `evidence_bundle.json`, `anysearch_research.json`, `source_map.json`, `fact_bank.json`, `topic_brief.json`, `research_brief.json`, `analytics_feedback.json`, `environment_manifest.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`; no final media, `artifact_manifest.json`, `run_final.json`, or publish-check artifact.
+   - Contract: `agent_run.json`, `main_task_plan.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `source_map.json`, `fact_bank.json`, `topic_brief.json`, `research_brief.json`, `analytics_feedback.json`, `environment_manifest.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`; no final media, `artifact_manifest.json`, `run_final.json`, or publish-check artifact.
    - Provider: contract artifacts plus `script.json`, `scene_plan.json`, `video_spec.json`, `artifact_manifest.json`, `delivery_package.json`, `run_final.json`, `post/douyin_upload_check.json`
    - Operator topic: additionally `subject_request.json`; `agent_run.json.subject_input_mode` should be `operator_topic`
    - Provider/Live: additionally `content_optimization_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, `gemini_visual_audit.json`; live also requires `post/post_publish_verification.json`
@@ -111,16 +113,17 @@ Side-effect matrix:
 
 ## Full-Flow Command Equivalent
 
-Claude Code exposes this as `/searchpo-full-flow`. Codex should perform the same flow when the user asks to run the Searchpo full flow, daily radar, Douyin publish flow, or the `searchpo-main-agent` flow.
+Claude Code exposes this as `/searchpo-full-flow`. Codex should perform the same flow when the user asks to run the Searchpo full flow, topic/link widesearch, Douyin publish flow, or the `searchpo-main-agent` flow.
 
-1. If the user request includes `发抖音`, `发布`, `live`, or `post --live`, run `npm run e2e:live`; otherwise run `npm run e2e:provider` for a publishable local render. Use `npm run e2e` only for a no-provider contract wiring check.
-   - If the user provides a fixed link, use `SEARCHPO_LINK="https://..." npm run e2e:provider`; use `npm run e2e:topic` only for no-provider wiring checks with `SEARCHPO_TOPIC_URL`.
+1. If the user request includes `发抖音`, `发布`, `live`, or `post --live`, run `npm run e2e:live`; otherwise run `npm run e2e:provider` for a publishable local render. Always pass `SEARCHPO_TOPIC`, `SEARCHPO_LINK`, or `SEARCHPO_TOPIC_URL`. Use `npm run e2e` only for a no-provider contract wiring check with an operator topic/link.
+   - If the user provides a fixed link, use `SEARCHPO_LINK="https://..." npm run e2e:provider`; use `SEARCHPO_TOPIC="..." npm run e2e` only for no-provider wiring checks.
 2. Read `runtime/latest_run.txt` and use that run directory for verification.
 3. Verify these artifacts in the run directory:
    - `subject_request.json` when `subject_input_mode` is `operator_topic`
    - `agent_run.json`
    - `main_task_plan.json`
    - `evidence_bundle.json`
+   - `widesearch_strategy.json`
    - `anysearch_research.json`
    - `source_map.json`
    - `fact_bank.json`

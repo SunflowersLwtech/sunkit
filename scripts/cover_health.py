@@ -25,6 +25,12 @@ class CoverThresholds:
     min_contrast: float = 90.0
 
 
+def _default_thresholds_for_dimensions(width: int, height: int) -> CoverThresholds:
+    if width > height:
+        return CoverThresholds(min_width=1280, min_height=720)
+    return CoverThresholds()
+
+
 def _load_pil():
     try:
         from PIL import Image
@@ -41,7 +47,6 @@ def _percentile(values: list[int], percentile: float) -> float:
 
 
 def analyze_cover(path: Path, thresholds: CoverThresholds | None = None) -> dict[str, Any]:
-    thresholds = thresholds or CoverThresholds()
     image_lib = _load_pil()
     path = path.expanduser().resolve()
     if not path.is_file():
@@ -54,6 +59,7 @@ def analyze_cover(path: Path, thresholds: CoverThresholds | None = None) -> dict
     with image_lib.open(path) as image:
         rgb = image.convert("RGB")
         width, height = rgb.size
+        thresholds = thresholds or _default_thresholds_for_dimensions(width, height)
         sample = rgb.resize((min(width, 270), min(height, 480)))
         lumas = sorted(round((r * 0.2126) + (g * 0.7152) + (b * 0.0722)) for r, g, b in sample.getdata())
 

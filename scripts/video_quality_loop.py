@@ -175,8 +175,39 @@ def deterministic_decision(report: dict[str, Any]) -> dict[str, Any]:
     return {"status": "fail", "repair_route": route, "failed_checks": errors, "repair_hint": "; ".join(errors)}
 
 
-def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int) -> Path:
-    audit = read_json(audit_path)
+def agent_visual_enabled(run_dir: Path) -> bool:
+    payload_path = run_dir / "render_payload.json"
+    if not payload_path.exists():
+        return False
+    try:
+        payload = read_json(payload_path)
+    except Exception:
+        return False
+    visual = payload.get("agentVisual") or payload.get("agent_visual") or {}
+    return bool(payload.get("agentVisualRequired") and isinstance(visual, dict) and visual.get("enabled"))
+
+
+def reroute_agent_visual_failures(run_dir: Path, decision: dict[str, Any]) -> dict[str, Any]:
+    if not agent_visual_enabled(run_dir) or decision.get("status") == "pass":
+        return decision
+    route = str(decision.get("repair_route") or "hard_fail")
+    hint = str(decision.get("repair_hint") or "").lower()
+    failed = " ".join(str(item) for item in decision.get("failed_checks") or []).lower()
+    dependency_failure = any(token in hint or token in failed for token in ["ffmpeg", "tesseract", "silence", "codec broken"])
+    agent_visual_failure = route == "storyboard" or "video_attempt_exception" in failed or "blank" in hint or "black frame" in hint or "overlap" in hint
+    if agent_visual_failure and not dependency_failure:
+        updated = dict(decision)
+        updated["repair_route"] = "content"
+        updated["repair_hint"] = (
+            f"{decision.get('repair_hint') or 'agent_visual render failed'} "
+            "Regenerate agent_visual.component_code/css; do not repair by switching to storyboard."
+        )
+        return updated
+    return decision
+
+
+def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int, decision: dict[str, Any] | None = None) -> Path:
+    audit = read_json(audit_path) if audit_path.exists() else {"audit": {}, "failed_checks": (decision or {}).get("failed_checks") or []}
     issues = (audit.get("audit") or {}).get("issues") or []
     failed_checks = audit.get("failed_checks") or []
     feedback = {
@@ -187,13 +218,13 @@ def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int) 
         "overall": 0,
         "scores": {},
         "failed_dimensions": {str(check): 0 for check in failed_checks},
-        "suggestions": [str(item) for item in issues if str(item).strip()] or [str(audit.get("repair_hint") or "Improve semantic fit.")],
+        "suggestions": [str(item) for item in issues if str(item).strip()] or [str((decision or audit).get("repair_hint") or "Improve semantic fit.")],
         "revision_brief": {
             "source": "gemini_visual_audit",
             "video_attempt": attempt,
             "failed_checks": failed_checks,
-            "repair_hint": audit.get("repair_hint"),
-            "instruction": "Revise content so the rendered video has source-grounded constructive insight and matches run artifacts.",
+            "repair_hint": (decision or audit).get("repair_hint"),
+            "instruction": "Revise content and regenerate agent_visual TSX/CSS so the rendered video has source-grounded constructive insight and matches run artifacts.",
         },
     }
     pending = run_dir / "optimization" / "video" / "pending_content_feedback.json"
@@ -201,8 +232,8 @@ def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int) 
     return pending
 
 
-def run_content_backtrack(run_dir: Path, audit_path: Path, attempt: int) -> dict[str, Any]:
-    feedback_path = semantic_feedback_from_audit(run_dir, audit_path, attempt)
+def run_content_backtrack(run_dir: Path, audit_path: Path, attempt: int, decision: dict[str, Any] | None = None) -> dict[str, Any]:
+    feedback_path = semantic_feedback_from_audit(run_dir, audit_path, attempt, decision)
     return run_command(
         [sys.executable, "agent_harness/run_agent_loop.py", str(run_dir), "--mode", "provider", "--resume-from", "4"],
         env={"SEARCHPO_VIDEO_FEEDBACK": str(feedback_path)},
@@ -218,6 +249,12 @@ def render_attempt(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: 
     copy_artifact(props, attempt_dir / "remotion_input_props.json")
     if manifest.exists():
         copy_artifact(manifest, attempt_dir / "render_input_manifest.json")
+    generated_visual = ROOT / "src" / "generated" / "AgentVisual.generated.tsx"
+    generated_visual_css = ROOT / "src" / "generated" / "agent-visual.generated.css"
+    if generated_visual.exists():
+        copy_artifact(generated_visual, attempt_dir / "AgentVisual.generated.tsx")
+    if generated_visual_css.exists():
+        copy_artifact(generated_visual_css, attempt_dir / "agent-visual.generated.css")
     record_stage(
         run_dir,
         name=f"remotion_input_attempt_{attempt:02d}",
@@ -445,6 +482,7 @@ def main() -> int:
         except Exception as exc:
             render_info = {}
             decision = {"status": "fail", "repair_route": "hard_fail", "repair_hint": str(exc)[:1000], "failed_checks": ["video_attempt_exception"]}
+        decision = reroute_agent_visual_failures(run_dir, decision)
 
         decision_path = attempt_dir / "video_revision_decision.json"
         write_json(
@@ -472,7 +510,7 @@ def main() -> int:
         route = str(decision.get("repair_route") or "hard_fail")
         if route == "content" and semantic_backtracks < max_semantic_backtracks and attempt < max_attempts:
             semantic_backtracks += 1
-            backtrack_meta = run_content_backtrack(run_dir, attempt_dir / "gemini_visual_audit.json", attempt)
+            backtrack_meta = run_content_backtrack(run_dir, attempt_dir / "gemini_visual_audit.json", attempt, decision)
             attempts[-1]["content_backtrack"] = backtrack_meta
             write_json(decision_path, attempts[-1])
             continue

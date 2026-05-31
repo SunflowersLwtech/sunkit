@@ -49,6 +49,11 @@ RENDER_TO_PLANNING_TYPE = {
     "bullets": "process",
     "card": "evidence",
     "compare": "comparison",
+    "compare_table": "comparison",
+    "terminal": "process",
+    "flow": "explanation",
+    "chart": "chart",
+    "code_diff": "explanation",
     "quote": "quote",
     "cta": "cta",
 }
@@ -245,7 +250,7 @@ def build_script_artifact(
     fact_bank: dict[str, Any],
 ) -> dict[str, Any]:
     title = bounded_text(polish.get("polished_title") or candidate.get("title"), 90)
-    voiceover = bounded_text(polish.get("voiceover_text"), 900)
+    voiceover = bounded_text(polish.get("voiceover_text"), 1100)
     segments = []
     roles = ["hook", "context", "conflict", "explanation", "evidence", "takeaway", "cta"]
     facts = fact_bank.get("facts") or []
@@ -276,6 +281,7 @@ def build_script_artifact(
             "voiceover_text": voiceover,
             "voiceover_segments": segments,
             "source_fact_ids": [fact.get("id") for fact in facts[:8]],
+            "video_profile": polish.get("video_profile") or {},
         },
     )
 
@@ -403,6 +409,10 @@ def build_video_spec_artifact(
 ) -> dict[str, Any]:
     duration = int(render_payload.get("durationInFrames") or 1)
     fps = int(render_payload.get("fps") or 30)
+    width = int(render_payload.get("width") or 1080)
+    height = int(render_payload.get("height") or 1920)
+    aspect_ratio = str(render_payload.get("aspectRatio") or render_payload.get("aspect_ratio") or "9:16")
+    orientation = str(render_payload.get("orientation") or ("horizontal" if width > height else "vertical"))
     scenes_in = (scene_plan or {}).get("scenes") or []
     if not scenes_in:
         scenes_in = [
@@ -441,14 +451,22 @@ def build_video_spec_artifact(
         "selected_candidate_id": candidate.get("candidate_id"),
         "title": render_payload.get("title") or candidate.get("title"),
         "platform_target": "douyin",
-        "aspect_ratio": "9:16",
-        "width": 1080,
-        "height": 1920,
+        "aspect_ratio": aspect_ratio,
+        "orientation": orientation,
+        "width": width,
+        "height": height,
         "fps": fps,
         "durationInFrames": duration,
         "duration_sec": round(duration / fps, 3) if fps else None,
         "renderer": {"engine": "remotion", "composition": "SearchpoRadar"},
         "storyboard": render_payload.get("storyboard"),
+        "agent_visual": {
+            "enabled": bool((render_payload.get("agentVisual") or {}).get("enabled")),
+            "mode": (render_payload.get("agentVisual") or {}).get("mode"),
+            "render_mode": (render_payload.get("agentVisual") or {}).get("render_mode"),
+            "description": (render_payload.get("agentVisual") or {}).get("description"),
+        },
+        "video_profile": render_payload.get("videoProfile") or render_payload.get("video_profile") or {},
         "scenes": scenes,
         "assets": assets,
         "source_map_refs": [source.get("id") for source in (source_map or {}).get("sources", [])],

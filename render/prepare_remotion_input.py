@@ -16,10 +16,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from agent_harness.storyboard import derive_default_storyboard, validate_storyboard  # noqa: E402
+from agent_harness.storyboard import validate_storyboard  # noqa: E402
+from agent_harness.agent_visual import normalize_agent_visual, require_agent_visual  # noqa: E402
+from agent_harness.video_profile import normalize_video_profile  # noqa: E402
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 PUBLIC_GENERATED_DIR = ROOT / "public" / "generated"
+GENERATED_VISUAL_TSX = ROOT / "src" / "generated" / "AgentVisual.generated.tsx"
+GENERATED_VISUAL_CSS = ROOT / "src" / "generated" / "agent-visual.generated.css"
 
 
 def read_json(path: Path) -> Any:
@@ -82,6 +86,92 @@ def derive_duration(payload: dict[str, Any], captions: list[dict[str, Any]], man
     return max(60, payload_duration, audio_duration, caption_duration), fps
 
 
+def apply_video_profile(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_profile = payload.get("videoProfile") or payload.get("video_profile") or {
+        "orientation": payload.get("orientation"),
+        "aspect_ratio": payload.get("aspectRatio") or payload.get("aspect_ratio"),
+    }
+    profile = normalize_video_profile(raw_profile)
+    payload["videoProfile"] = profile
+    payload["orientation"] = profile["orientation"]
+    payload["aspectRatio"] = profile["aspect_ratio"]
+    payload["width"] = profile["width"]
+    payload["height"] = profile["height"]
+    storyboard = payload.get("storyboard") if isinstance(payload.get("storyboard"), dict) else {}
+    style = storyboard.get("style") if isinstance(storyboard.get("style"), dict) else {}
+    if not style.get("motion") and profile.get("motion"):
+        style["motion"] = profile["motion"]
+        storyboard["style"] = style
+        payload["storyboard"] = storyboard
+    return payload
+
+
+def _placeholder_agent_visual_source() -> str:
+    return """import type {FC} from 'react';
+import type {AgentVisualProps} from '../AgentVisualTypes';
+import './agent-visual.generated.css';
+
+export const AgentVisualGenerated: FC<AgentVisualProps> = () => {
+  throw new Error('AgentVisualGenerated is missing. Run render/prepare_remotion_input.py with provider agent_visual first.');
+};
+"""
+
+
+def _agent_visual_source(component_body: str) -> str:
+    return f"""import type {{FC}} from 'react';
+import React, {{useMemo}} from 'react';
+import {{
+  AbsoluteFill,
+  Img,
+  Series,
+  Sequence,
+  interpolate,
+  spring,
+  staticFile,
+  useVideoConfig,
+}} from 'remotion';
+import type {{AgentVisualProps}} from '../AgentVisualTypes';
+import './agent-visual.generated.css';
+
+export const AgentVisualGenerated: FC<AgentVisualProps> = (props) => {{
+  const {{
+    data,
+    frame,
+    fps,
+    durationInFrames,
+    width,
+    height,
+    progress,
+    audioPulse,
+    captions,
+  }} = props;
+{component_body.rstrip()}
+}};
+"""
+
+
+def write_agent_visual_source(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("agentVisual") or payload.get("agent_visual")
+    required = bool(payload.get("agentVisualRequired"))
+    try:
+        visual = require_agent_visual(raw) if required else normalize_agent_visual(raw)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    GENERATED_VISUAL_TSX.parent.mkdir(parents=True, exist_ok=True)
+    if visual.get("enabled"):
+        GENERATED_VISUAL_TSX.write_text(_agent_visual_source(str(visual.get("component_code") or "")), encoding="utf-8")
+        GENERATED_VISUAL_CSS.write_text(str(visual.get("css") or ""), encoding="utf-8")
+    else:
+        if required:
+            errors = "; ".join(str(item) for item in visual.get("validation_errors") or [])
+            raise SystemExit(f"agent_visual is required for provider render: {errors or 'missing'}")
+        GENERATED_VISUAL_TSX.write_text(_placeholder_agent_visual_source(), encoding="utf-8")
+        GENERATED_VISUAL_CSS.write_text("/* Agent visual not enabled for this contract render. */\n", encoding="utf-8")
+    payload["agentVisual"] = visual
+    return payload
+
+
 def latest_run_dir() -> Path:
     if not LATEST_RUN_PATH.exists():
         raise SystemExit("runtime/latest_run.txt is missing; run the data pipeline first")
@@ -109,24 +199,13 @@ def main() -> int:
             "schema_version": video_spec.get("schema_version"),
         }
     try:
-        if payload.get("storyboard"):
-            payload["storyboard"] = validate_storyboard(payload["storyboard"])
-        elif payload.get("cards"):
-            payload["storyboard"] = derive_default_storyboard(
-                display_title=str(payload.get("displayTitle") or payload.get("title") or ""),
-                summary=str(payload.get("summary") or ""),
-                audience_metric=str(payload.get("audienceMetricLine") or payload.get("metricLine") or ""),
-                evidence_level=str(payload.get("evidenceLevel") or ""),
-                url=str(payload.get("url") or ""),
-                cards=payload.get("cards") or [],
-                cta=str(payload.get("cta") or ""),
-                verification_next_step=str(payload.get("verificationNextStep") or ""),
-                footer=str(payload.get("footer") or ""),
-            )
-        else:
-            raise ValueError("render payload requires storyboard or legacy cards")
+        if not payload.get("storyboard"):
+            raise ValueError("render payload requires storyboard; legacy cards fallback is not allowed")
+        payload["storyboard"] = validate_storyboard(payload["storyboard"])
     except ValueError as exc:
         raise SystemExit(f"render payload storyboard validation failed: {exc}") from exc
+    payload = apply_video_profile(payload)
+    payload = write_agent_visual_source(payload)
     voiceover_source = run_dir / "voiceover.wav"
     if not payload.get("audioSrc"):
         raise SystemExit("render payload missing audioSrc")
@@ -159,6 +238,14 @@ def main() -> int:
                 "caption_segments": len(captions),
                 "durationInFrames": duration,
                 "fps": fps,
+                "orientation": payload.get("orientation"),
+                "width": payload.get("width"),
+                "height": payload.get("height"),
+                "video_profile": payload.get("videoProfile"),
+                "agent_visual_required": bool(payload.get("agentVisualRequired")),
+                "agent_visual_enabled": bool((payload.get("agentVisual") or {}).get("enabled")),
+                "agent_visual_source": str(GENERATED_VISUAL_TSX),
+                "agent_visual_css": str(GENERATED_VISUAL_CSS),
                 "audio_duration_sec": manifest.get("audio_duration_sec"),
                 "audio_frames": manifest.get("audio_frames"),
                 "title": payload.get("title"),

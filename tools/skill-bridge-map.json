@@ -16,6 +16,10 @@
   ],
   "skills": [
     {
+      "name": "searchpo-full-flow",
+      "description": "Visible skill wrapper for running the complete Searchpo provider/live flow."
+    },
+    {
       "name": "searchpo-main-agent",
       "description": "End-to-end Searchpo orchestration, release gates, and publish decisions."
     },
@@ -26,6 +30,14 @@
     {
       "name": "searchpo-impl-agent",
       "description": "Searchpo script execution, Remotion rendering, Gemini audit, and Douyin checks."
+    },
+    {
+      "name": "searchpo-agent-capabilities",
+      "description": "Redacted .env, provider, MCP, and side-effect capability routing for Searchpo agents."
+    },
+    {
+      "name": "searchpo-deepwiki-research",
+      "description": "DeepWiki MCP repository-intelligence workflow for Searchpo GitHub repo research."
     },
     {
       "name": "remotion-best-practices",

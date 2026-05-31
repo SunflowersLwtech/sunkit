@@ -20,12 +20,19 @@ from agent_harness.stages import PROVIDER_ENV_CONTRACT, default_stages
 from agent_harness.subjects import write_operator_topic_run
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+OPERATOR_INPUT_MESSAGE = """Searchpo now expects an operator-supplied topic or link.
+Pass --topic "..." for widesearch from a topic, or SEARCHPO_LINK/SEARCHPO_TOPIC_URL through scripts/run_e2e.sh for a canonical source boundary.
+Set SEARCHPO_ENABLE_DAILY_RADAR=1 only when you explicitly want the legacy source-registry candidate sweep."""
 
 
 def latest_run_dir() -> Path:
     if not LATEST_RUN_PATH.exists():
         raise SystemExit("runtime/latest_run.txt is missing; run data_prep/scripts/run_pipeline.py first")
     return Path(LATEST_RUN_PATH.read_text(encoding="utf-8").strip())
+
+
+def _is_http_url(value: str | None) -> bool:
+    return bool(value and value.startswith(("http://", "https://")))
 
 
 def build_agent_state(
@@ -85,6 +92,9 @@ def main() -> int:
     args = parser.parse_args()
     if not os.environ.get("SEARCHPO_EXECUTION_PROFILE") and not os.environ.get("SEARCHPO_E2E_PROFILE"):
         os.environ["SEARCHPO_EXECUTION_PROFILE"] = "provider" if args.mode == "provider" else "contract"
+    if args.topic_url and not _is_http_url(args.topic_url.strip()):
+        print("--topic-url must be an http(s) URL", file=sys.stderr)
+        return 2
 
     if args.topic:
         run_dir = write_operator_topic_run(
@@ -96,6 +106,9 @@ def main() -> int:
             run_dir=Path(args.run_dir).resolve() if args.run_dir else None,
         )
     else:
+        if not args.run_dir and os.environ.get("SEARCHPO_ENABLE_DAILY_RADAR", "0") != "1":
+            print(OPERATOR_INPUT_MESSAGE, file=sys.stderr)
+            return 2
         run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
     board = TaskBoard(run_dir / "harness_board.sqlite3")
     try:

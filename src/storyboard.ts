@@ -18,6 +18,11 @@ export const SCENE_TYPES = [
   'bullets',
   'card',
   'compare',
+  'compare_table',
+  'terminal',
+  'flow',
+  'chart',
+  'code_diff',
   'quote',
   'cta',
 ] as const;
@@ -99,8 +104,8 @@ export const normalizeStyle = (style?: StyleTokens | null): NormalizedStyle => {
 export const styleVars = (style: NormalizedStyle): CSSProperties =>
   ({'--accent': style.accent} as CSSProperties);
 
-export const canvasClassName = (style: NormalizedStyle): string =>
-  `canvas theme-${style.theme} density-${style.density} motion-${style.motion}`;
+export const canvasClassName = (style: NormalizedStyle, orientation: 'vertical' | 'horizontal' = 'vertical'): string =>
+  `canvas theme-${style.theme} density-${style.density} motion-${style.motion} aspect-${orientation}`;
 
 // Default timing share per scene type (used when the storyboard omits weight).
 export const defaultWeightFor = (type: SceneType): number => {
@@ -114,7 +119,16 @@ export const defaultWeightFor = (type: SceneType): number => {
     case 'bullets':
       return 0.2;
     case 'compare':
+    case 'compare_table':
       return 0.2;
+    case 'terminal':
+      return 0.22;
+    case 'flow':
+      return 0.22;
+    case 'chart':
+      return 0.18;
+    case 'code_diff':
+      return 0.22;
     case 'quote':
       return 0.16;
     case 'cta':
@@ -175,28 +189,65 @@ export const sceneStartBoundaries = (sceneFrames: number[], transitionFrames: nu
 
 const MAX_SCENES = 8;
 
-// Forgiving validation for agent-authored input: drop unknown scene types and
-// malformed scenes rather than throwing, so one bad scene can't kill a render.
-// Hard bounds (text length, required props) are enforced by the JSON schema and
-// the Python validator upstream; this just guards the renderer.
+const requiredSceneKeys: Record<SceneType, string[]> = {
+  statement: ['title', 'heading'],
+  context: ['text', 'summary', 'detail'],
+  stat: ['value', 'stat', 'label', 'heading'],
+  bullets: ['heading', 'title', 'items'],
+  card: ['value', 'detail'],
+  compare: ['left', 'right'],
+  compare_table: ['rows', 'items'],
+  terminal: ['lines', 'commands', 'items'],
+  flow: ['nodes', 'steps', 'items'],
+  chart: ['value', 'stat', 'points', 'items'],
+  code_diff: ['additions', 'added', 'removals', 'removed', 'items'],
+  quote: ['quote', 'text'],
+  cta: ['text'],
+};
+
+const hasRequiredSceneText = (type: SceneType, props: Record<string, unknown>): boolean =>
+  requiredSceneKeys[type].some((key) => {
+    const value = props[key];
+    if (Array.isArray(value)) {
+      return value.some((item) => String(item ?? '').trim());
+    }
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+
+// Renderer-side validation mirrors the Python contract and fails closed. Bad
+// provider scene graphs must not be silently rewritten into generic content.
 export const assertStoryboard = (input: unknown): Storyboard => {
   if (!input || typeof input !== 'object') {
     throw new Error('storyboard must be an object');
   }
   const raw = input as {version?: unknown; style?: StyleTokens; scenes?: unknown};
-  const scenesIn = Array.isArray(raw.scenes) ? raw.scenes : [];
+  if (!Array.isArray(raw.scenes)) {
+    throw new Error('storyboard.scenes must be an array');
+  }
+  if (raw.scenes.length > MAX_SCENES) {
+    throw new Error(`storyboard.scenes must contain at most ${MAX_SCENES} scenes`);
+  }
   const scenes: Scene[] = [];
-  for (const candidate of scenesIn) {
-    if (!candidate || typeof candidate !== 'object') continue;
+  for (const [index, candidate] of raw.scenes.entries()) {
+    if (!candidate || typeof candidate !== 'object') {
+      throw new Error(`storyboard scene ${index + 1} must be an object`);
+    }
     const s = candidate as {type?: unknown; props?: unknown; weight?: unknown; emphasis?: unknown};
     const type = String(s.type ?? '') as SceneType;
-    if (!(SCENE_TYPES as readonly string[]).includes(type)) continue;
-    const props = s.props && typeof s.props === 'object' ? (s.props as Record<string, unknown>) : {};
+    if (!(SCENE_TYPES as readonly string[]).includes(type)) {
+      throw new Error(`storyboard scene ${index + 1} has unknown type: ${String(s.type ?? '')}`);
+    }
+    if (!s.props || typeof s.props !== 'object') {
+      throw new Error(`storyboard scene ${index + 1} props must be an object`);
+    }
+    const props = s.props as Record<string, unknown>;
+    if (!hasRequiredSceneText(type, props)) {
+      throw new Error(`storyboard scene ${index + 1} (${type}) missing provider-authored text`);
+    }
     const weight = typeof s.weight === 'number' && Number.isFinite(s.weight) && s.weight > 0 ? s.weight : undefined;
     const emphasis =
       s.emphasis === 'low' || s.emphasis === 'high' || s.emphasis === 'normal' ? s.emphasis : undefined;
     scenes.push({type, props, weight, emphasis});
-    if (scenes.length >= MAX_SCENES) break;
   }
   if (scenes.length === 0) {
     throw new Error('storyboard requires at least one known scene block');
@@ -225,6 +276,7 @@ export type DerivableFields = {
 };
 
 export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => {
+  const hasMetricSignal = /\d/.test(data.audienceMetricLine || '');
   const scenes: Scene[] = [
     {type: 'statement', props: {kicker: '今天为什么刷到它', title: data.displayTitle, sub: data.summary}},
     {
@@ -238,7 +290,51 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
         sourceValue: data.source ? `${data.source} 已留档` : '来源已留档',
       },
     },
-    ...data.cards.map((card) => ({
+    ...(hasMetricSignal
+      ? [
+          {
+            type: 'chart' as const,
+            props: {
+              kicker: '数据先当信号看',
+              heading: '热度不是结论，但能说明关注方向',
+              label: '公开指标',
+              value: data.audienceMetricLine,
+              points: ['来源', '关注', '验证'],
+            },
+          },
+        ]
+      : []),
+    ...(data.url.includes('github.com') ? [
+      {
+        type: 'terminal' as const,
+        props: {
+          kicker: '开发者会先这样验证',
+          title: '最小上手路径',
+          prompt: '$',
+          lines: ['clone / install', 'run quick start', 'inspect examples', 'check tests'],
+        },
+      },
+      {
+        type: 'flow' as const,
+        props: {
+          kicker: '机制不要只靠文字讲',
+          heading: '把 repo 还原成一条工作流',
+          nodes: ['输入', '核心模块', '输出', '验证门槛'],
+          caption: '这类场景让 agent 用结构图解释机制，而不是堆段落。',
+        },
+      },
+      {
+        type: 'code_diff' as const,
+        props: {
+          kicker: '源码视角',
+          title: '别只复述 README',
+          filename: 'repo / docs / tests',
+          additions: ['看入口模块', '看示例输入输出', '看测试和 CI'],
+          removals: ['只看 star 数'],
+        },
+      },
+    ] : []),
+    ...data.cards.slice(0, data.url.includes('github.com') && hasMetricSignal ? 1 : data.url.includes('github.com') ? 2 : 4).map((card) => ({
       type: 'card' as const,
       props: {label: card.label, value: card.value, detail: card.detail},
     })),

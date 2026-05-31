@@ -1,7 +1,7 @@
 import './styles.css';
 import './fonts';
 import {Composition, Still} from 'remotion';
-import {type Payload, SearchpoRadar} from './Composition';
+import {normalizeDimensions, type Payload, SearchpoRadar} from './Composition';
 import {SearchpoCover} from './Cover';
 
 const requireFrameCount = (props: Partial<Payload>): number => {
@@ -27,11 +27,12 @@ export const RemotionRoot: React.FC = () => {
         id="SearchpoRadar"
         component={SearchpoRadar}
         calculateMetadata={({props}) => {
+          const dimensions = normalizeDimensions(props as Partial<Payload>);
           return {
             durationInFrames: requireFrameCount(props as Partial<Payload>),
             fps: requireFps(props as Partial<Payload>),
-            width: 1080,
-            height: 1920,
+            width: dimensions.width,
+            height: dimensions.height,
           };
         }}
         durationInFrames={360}
@@ -42,6 +43,13 @@ export const RemotionRoot: React.FC = () => {
       <Still
         id="SearchpoCover"
         component={SearchpoCover}
+        calculateMetadata={({props}) => {
+          const dimensions = normalizeDimensions(props as Partial<Payload>);
+          return {
+            width: dimensions.width,
+            height: dimensions.height,
+          };
+        }}
         width={1080}
         height={1920}
       />

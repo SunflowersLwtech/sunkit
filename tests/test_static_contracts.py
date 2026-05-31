@@ -29,7 +29,8 @@ class StaticContractTests(unittest.TestCase):
         self.assertIn("@fontsource/inter/latin-900.css", fonts)
         self.assertIn("document.fonts.ready", fonts)
         self.assertIn("TransitionSeries", composition)
-        self.assertIn("deriveStoryboardFromCards", composition)
+        self.assertIn("legacy card fallback is not allowed", composition)
+        self.assertNotIn("deriveStoryboardFromCards", composition)
 
     def test_contract_finalization_has_no_live_gate_or_live_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

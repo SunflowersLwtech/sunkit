@@ -11,6 +11,37 @@ from agent_harness.stages import build_claims_ledger, build_douyin_copy, build_m
 from scripts.content_scorer import deterministic_blocking_checks
 
 
+AGENT_VISUAL = {
+    "enabled": True,
+    "render_mode": "full_canvas",
+    "description": "定制 Remotion 视觉",
+    "component_code": "  return <AbsoluteFill className=\"agent-demo\"><div>{data.displayTitle}</div></AbsoluteFill>;",
+    "css": ".agent-demo { background: #070a10; color: #fffdf4; }",
+}
+
+STORYBOARD = {
+    "version": 1,
+    "style": {"theme": "minimal"},
+    "scenes": [
+        {"type": "statement", "props": {"title": "Demo Tool 要先看证据", "sub": "不是结论"}},
+        {"type": "context", "props": {"text": "把来源和待验证部分分开讲。"}},
+        {"type": "cta", "props": {"text": "跑通 demo 再判断"}},
+    ],
+}
+
+STRONG_REVIEW = {
+    "status": "pass",
+    "research_sufficient": True,
+    "fact_bank_status": "pass",
+    "supplemental_source_count": 2,
+    "independent_source_hosts": ["docs.example.org", "blog.example.net"],
+    "source_facts": ["description: demo"],
+    "constructive_angles": ["看问题边界"],
+    "warnings": [],
+    "errors": [],
+}
+
+
 class PostContractTests(unittest.TestCase):
     def test_claims_ledger_covers_public_fields(self) -> None:
         candidate = {
@@ -49,7 +80,7 @@ class PostContractTests(unittest.TestCase):
 
         self.assertEqual(ledger["review_status"], "contract-check-pass")
         self.assertEqual(ledger["coverage"]["missing_fields"], [])
-        self.assertEqual(ledger["coverage"]["not_applicable_fields"], ["voiceover", "cards", "storyboard"])
+        self.assertEqual(ledger["coverage"]["not_applicable_fields"], ["voiceover", "cards", "storyboard", "agent_visual"])
         self.assertNotIn("voiceover", ledger["coverage"]["required_fields"])
         self.assertNotIn("cards", ledger["coverage"]["required_fields"])
         self.assertNotIn("storyboard", ledger["coverage"]["required_fields"])
@@ -130,6 +161,8 @@ class PostContractTests(unittest.TestCase):
             polish={
                 "polished_title": "微软 MarkItDown 文档转换观察",
                 "voiceover_text": "微软 MarkItDown 是一个待验证观察稿，需要实测转换质量后再判断。",
+                "agent_visual": AGENT_VISUAL,
+                "storyboard": STORYBOARD,
                 "cards": [
                     {"label": "用户痛点", "value": "文档转换", "detail": "先看它想解决什么。"},
                     {"label": "已知证据", "value": "GitHub", "detail": "有公开仓库来源。"},
@@ -192,6 +225,8 @@ class PostContractTests(unittest.TestCase):
             polish={
                 "polished_title": "Claude Code 在 GitHub Trending 上获得关注",
                 "voiceover_text": "Claude Code 是一个待验证的终端编程工具观察稿。",
+                "agent_visual": AGENT_VISUAL,
+                "storyboard": STORYBOARD,
                 "cards": [
                     {"label": "用户痛点", "value": "终端编程", "detail": "减少工具切换。"},
                     {"label": "已知证据", "value": "GitHub Trending", "detail": "公开仓库来源。"},
@@ -235,7 +270,7 @@ class PostContractTests(unittest.TestCase):
                 {"title": "Demo Tool", "desc": "Demo Tool 观察稿", "tags": ["AI工具"]},
                 {"voiceoverText": "Demo Tool 是一个观察稿。", "cards": [{"label": "证据", "value": "来源", "detail": "待验证"}]},
                 {"evidence_summary": {"source_facts": ["description: demo"], "constructive_angles": ["看问题边界"]}},
-                {"status": "pass", "source_facts": ["description: demo"], "constructive_angles": ["看问题边界"], "warnings": [], "errors": []},
+                STRONG_REVIEW,
             )
             manifest = json.loads((post_dir / "douyin_upload_manifest.json").read_text())
             distribution_review = json.loads((post_dir / "douyin_distribution_review.json").read_text())
@@ -258,7 +293,7 @@ class PostContractTests(unittest.TestCase):
                 "tags": ["AI工具", "Demo"],
             },
             render_payload={"voiceoverText": "Demo Tool 这个说法没有官方证据。"},
-            cross_check_review={"status": "pass"},
+            cross_check_review=STRONG_REVIEW,
         )
 
         self.assertEqual(review["status"], "fail")
@@ -280,7 +315,7 @@ class PostContractTests(unittest.TestCase):
                 "tags": ["创作流程", "效率工具"],
             },
             render_payload={"voiceoverText": "创作者流程需要先看平台规则边界。"},
-            cross_check_review={"status": "pass"},
+            cross_check_review=STRONG_REVIEW,
         )
 
         self.assertEqual(review["status"], "fail")
@@ -300,12 +335,35 @@ class PostContractTests(unittest.TestCase):
                 "tags": ["AI编程", "开源"],
             },
             render_payload={"voiceoverText": "obra superpowers 是一个待验证观察稿。"},
-            cross_check_review={"status": "pass"},
+            cross_check_review=STRONG_REVIEW,
         )
 
         self.assertEqual(review["status"], "fail")
         self.assertFalse(review["checks"]["no_external_redirect_guidance"])
         self.assertFalse(review["checks"]["no_raw_public_urls"])
+
+    def test_douyin_distribution_gate_does_not_match_external_redirect_across_fields(self) -> None:
+        review = evaluate_douyin_distribution_gate(
+            candidate={
+                "candidate_id": "topic-nomad",
+                "title": "Project Nomad",
+                "canonical_url": "https://github.com/Crosstalk-Solutions/project-nomad",
+            },
+            douyin_copy={
+                "title": "Project Nomad 离线知识库观察",
+                "desc": "只按来源边界做观察，实际效果仍需验证。",
+                "tags": ["离线知识", "开源项目"],
+            },
+            render_payload={
+                "verificationNextStep": "下一步应补充真实使用记录，再判断是否值得发布。",
+                "source": "GitHub",
+                "voiceoverText": "Project Nomad 是一个待验证观察稿。",
+            },
+            cross_check_review=STRONG_REVIEW,
+        )
+
+        self.assertEqual(review["status"], "pass")
+        self.assertTrue(review["checks"]["no_external_redirect_guidance"])
 
     def test_content_scorer_blocks_candidate_mismatch_and_generic_hook(self) -> None:
         checks = deterministic_blocking_checks(
@@ -367,6 +425,25 @@ class PostContractTests(unittest.TestCase):
     def test_operator_topic_without_url_is_not_evidence_backed(self) -> None:
         with self.assertRaises(RuntimeError):
             http_source_url({"candidate_id": "topic-1", "canonical_url": "manual-topic://topic-1"})
+
+    def test_operator_topic_without_url_builds_widesearch_seed_bundle(self) -> None:
+        candidate = {
+            "candidate_id": "topic-1",
+            "input_mode": "operator_topic",
+            "selection_source": "operator_topic",
+            "title": "AI agent search strategy",
+            "summary": "Find the strongest evidence and useful angles.",
+            "canonical_url": "manual-topic://topic-1",
+        }
+        bundle = build_evidence_bundle(candidate)
+        review = cross_check_evidence(candidate, bundle)
+        self.assertEqual(bundle["source_kind"], "operator_topic_seed")
+        self.assertEqual(bundle["sources"][0]["id"], "operator_topic_seed")
+        self.assertEqual(bundle["sources"][0]["evidence_role"], "research_seed")
+        self.assertTrue(bundle["requires_widesearch"])
+        self.assertFalse(bundle["external_evidence"])
+        self.assertEqual(review["status"], "pending_research", review)
+        self.assertTrue(any("not external evidence" in warning for warning in review["warnings"]))
 
 
 if __name__ == "__main__":

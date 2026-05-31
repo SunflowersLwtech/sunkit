@@ -10,12 +10,15 @@
     "title": {"type": "string"},
     "platform_target": {"type": "string"},
     "aspect_ratio": {"type": "string"},
+    "orientation": {"enum": ["vertical", "horizontal"]},
     "width": {"type": "number"},
     "height": {"type": "number"},
     "fps": {"type": "number"},
     "durationInFrames": {"type": "number"},
     "renderer": {"type": "object"},
     "storyboard": {"type": "object"},
+    "agent_visual": {"type": "object"},
+    "video_profile": {"type": "object"},
     "scenes": {"type": "array", "minItems": 1},
     "assets": {"type": "array"}
   }

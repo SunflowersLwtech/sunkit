@@ -23,6 +23,7 @@ segment, which ``src/Captions.tsx`` renders verbatim instead of re-guessing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -93,6 +94,41 @@ def orphan_caption_texts(segments: list[dict[str, Any]], punch_words: set[str]) 
         if cjk_chars == 0 and latin_words and len(latin_words) <= 2 and len(compact) <= 24:
             orphan_segments.append(text)
     return orphan_segments
+
+
+def _is_short_cjk_orphan_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    cjk_chars = _cjk_count(compact)
+    return 0 < cjk_chars <= 2 and len(compact) <= 2
+
+
+def _merge_short_cjk_orphans_forward(
+    phrases: list[dict[str, Any]],
+    max_display_chars: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    index = 0
+    while index < len(phrases):
+        phrase = phrases[index]
+        if index + 1 < len(phrases) and _is_short_cjk_orphan_text(str(phrase.get("text") or "")):
+            next_phrase = phrases[index + 1]
+            bridge = str(phrase.get("punct") or "")
+            combined_text = f"{phrase['text']}{bridge}{next_phrase['text']}"
+            if len(combined_text) <= max_display_chars:
+                merged.append(
+                    {
+                        "text": combined_text,
+                        "punct": next_phrase.get("punct") or "",
+                        "extra_pause_weight": _pause_weight(bridge)
+                        + float(phrase.get("extra_pause_weight") or 0)
+                        + float(next_phrase.get("extra_pause_weight") or 0),
+                    }
+                )
+                index += 2
+                continue
+        merged.append(phrase)
+        index += 1
+    return merged
 
 
 def char_weight(ch: str) -> float:
@@ -213,12 +249,12 @@ def split_phrases(
         for j, chunk in enumerate(chunks):
             # Only the final chunk carries the natural trailing punctuation pause.
             phrases.append({"text": chunk, "punct": phrase["punct"] if j == len(chunks) - 1 else ""})
-    return phrases
+    return _merge_short_cjk_orphans_forward(phrases, max_display_chars)
 
 
 def phrase_weight(phrase: dict[str, Any]) -> float:
     body = sum(char_weight(c) for c in phrase["text"])
-    return max(0.5, body) + _pause_weight(phrase.get("punct") or "")
+    return max(0.5, body) + _pause_weight(phrase.get("punct") or "") + float(phrase.get("extra_pause_weight") or 0)
 
 
 def build_caption_segments(
@@ -268,6 +304,39 @@ def probe_audio_seconds(audio_path: Path) -> float | None:
     """Return audio duration in seconds, preferring ffprobe, falling back to wave."""
     if not audio_path.exists():
         return None
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def require_voiceover_audio(manifest: dict[str, Any], run_dir: Path) -> tuple[Path, float]:
+    if manifest.get("status") != "pass":
+        raise SystemExit(f"voiceover_manifest.json status is not pass: {manifest.get('status')}")
+    if manifest.get("provider") != "gemini":
+        raise SystemExit(f"voiceover_manifest.json provider must be gemini: {manifest.get('provider')}")
+    audio_path = Path(str(manifest.get("audio_path") or ""))
+    if not audio_path.is_absolute():
+        audio_path = (run_dir / audio_path).resolve()
+    if not audio_path.is_file():
+        raise SystemExit(f"voiceover audio missing: {audio_path}")
+    expected_sha = str(manifest.get("audio_sha256") or "")
+    actual_sha = sha256_file(audio_path)
+    if not expected_sha or expected_sha != actual_sha:
+        raise SystemExit("voiceover_manifest.json audio_sha256 does not match audio file")
+    probed_sec = probe_audio_seconds(audio_path)
+    if not probed_sec:
+        raise SystemExit(f"could not probe voiceover audio duration: {audio_path}")
+    manifest_sec = float(manifest.get("audio_duration_sec") or 0)
+    if manifest_sec <= 0:
+        raise SystemExit("voiceover_manifest.json missing audio_duration_sec")
+    if abs(probed_sec - manifest_sec) > 0.35:
+        raise SystemExit(f"voiceover duration mismatch: manifest={manifest_sec:.3f}s probed={probed_sec:.3f}s")
+    return audio_path, probed_sec
     try:
         proc = subprocess.run(
             [
@@ -318,9 +387,9 @@ def main() -> int:
     audio_sec: float | None = None
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        audio_sec = manifest.get("audio_duration_sec")
+        _, audio_sec = require_voiceover_audio(manifest, run_dir)
     if not audio_sec:
-        raise SystemExit("voiceover_manifest.json missing audio_duration_sec")
+        raise SystemExit("voiceover_manifest.json missing valid Gemini audio duration")
     if args.text is not None:
         text = args.text
     else:
@@ -364,7 +433,7 @@ def main() -> int:
         "created_at": utc_now(),
         "fps": args.fps,
         "audio_duration_sec": audio_sec,
-        "source": "voiceover_manifest_or_probe",
+        "source": "verified_gemini_voiceover_audio",
         "segment_count": len(segments),
         "end_frame": end_frame,
         "segments": segments,

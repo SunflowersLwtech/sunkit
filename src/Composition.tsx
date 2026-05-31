@@ -14,6 +14,7 @@ import {
 } from 'remotion';
 import {Captions, type CaptionSegment} from './Captions';
 import {useFontsReady} from './fonts';
+import {AgentVisualGenerated} from './generated/AgentVisual.generated';
 import {SceneBlock} from './scenes/SceneBlocks';
 import {
   assertStoryboard,
@@ -21,7 +22,6 @@ import {
   chooseTransitionFrames,
   computeSceneFrames,
   defaultWeightFor,
-  deriveStoryboardFromCards,
   normalizeStyle,
   sceneStartBoundaries,
   styleVars,
@@ -46,6 +46,26 @@ export type Payload = {
   metricLine: string;
   audienceMetricLine: string;
   evidenceLevel: string;
+  orientation: 'vertical' | 'horizontal';
+  aspectRatio: '9:16' | '16:9';
+  width: number;
+  height: number;
+  videoProfile: {
+    duration_seconds?: number;
+    orientation?: 'vertical' | 'horizontal';
+    aspect_ratio?: '9:16' | '16:9';
+    motion?: 'calm' | 'standard' | 'punchy';
+    animation_style?: string;
+    decision_reason?: string;
+  };
+  agentVisual?: {
+    enabled?: boolean;
+    mode?: 'react_runtime';
+    render_mode?: 'overlay' | 'full_canvas';
+    description?: string;
+    validation_errors?: string[];
+  };
+  agentVisualRequired?: boolean;
   qualityWarnings: string[];
   verificationNextStep: string;
   cards: Card[];
@@ -87,6 +107,23 @@ const requireCaptions = (captions: CaptionSegment[] | null | undefined): Caption
   return captions;
 };
 
+export const normalizeDimensions = (props: Partial<Payload>): Pick<Payload, 'orientation' | 'aspectRatio' | 'width' | 'height'> => {
+  const hintedOrientation = props.orientation === 'horizontal' || props.aspectRatio === '16:9' ? 'horizontal' : 'vertical';
+  const width = typeof props.width === 'number' && Number.isFinite(props.width) && props.width > 0
+    ? Math.round(props.width)
+    : hintedOrientation === 'horizontal' ? 1920 : 1080;
+  const height = typeof props.height === 'number' && Number.isFinite(props.height) && props.height > 0
+    ? Math.round(props.height)
+    : hintedOrientation === 'horizontal' ? 1080 : 1920;
+  const orientation = width > height ? 'horizontal' : 'vertical';
+  return {
+    orientation,
+    aspectRatio: orientation === 'horizontal' ? '16:9' : '9:16',
+    width,
+    height,
+  };
+};
+
 export const assertPayload = (props: Partial<Payload>): Payload => {
   const durationInFrames = props.durationInFrames;
   const fps = props.fps;
@@ -98,11 +135,12 @@ export const assertPayload = (props: Partial<Payload>): Payload => {
   }
 
   const cards = normalizeCards(props.cards);
-  if (!props.storyboard && cards.length === 0) {
-    throw new Error('SearchpoRadar requires either storyboard scenes or at least one legacy card.');
+  if (!props.storyboard) {
+    throw new Error('SearchpoRadar requires storyboard scenes; legacy card fallback is not allowed.');
   }
 
   const base = {
+    ...normalizeDimensions(props),
     badge: requireText(props.badge, 'badge'),
     title: requireText(props.title, 'title'),
     displayTitle: props.displayTitle?.trim() || requireText(props.title, 'title'),
@@ -114,6 +152,9 @@ export const assertPayload = (props: Partial<Payload>): Payload => {
     metricLine: requireText(props.metricLine, 'metricLine'),
     audienceMetricLine: props.audienceMetricLine?.trim() || requireText(props.metricLine, 'metricLine'),
     evidenceLevel: props.evidenceLevel?.trim() || 'source_observation_unverified',
+    videoProfile: props.videoProfile ?? {},
+    agentVisual: props.agentVisual ?? {enabled: false},
+    agentVisualRequired: Boolean(props.agentVisualRequired),
     qualityWarnings: Array.isArray(props.qualityWarnings) ? props.qualityWarnings : [],
     verificationNextStep: props.verificationNextStep?.trim() || '下一步补充证据后再判断。',
     cards,
@@ -126,19 +167,7 @@ export const assertPayload = (props: Partial<Payload>): Payload => {
     footer: requireText(props.footer, 'footer'),
   };
 
-  const storyboard = props.storyboard
-    ? assertStoryboard(props.storyboard)
-    : deriveStoryboardFromCards({
-        displayTitle: base.displayTitle,
-        summary: base.summary,
-        audienceMetricLine: base.audienceMetricLine,
-        evidenceLevel: base.evidenceLevel,
-        url: base.url,
-        cards: base.cards,
-        cta: base.cta,
-        verificationNextStep: base.verificationNextStep,
-        footer: base.footer,
-      });
+  const storyboard = assertStoryboard(props.storyboard);
 
   return {...base, storyboard};
 };
@@ -149,6 +178,7 @@ const Background: React.FC<{beam: boolean; audioPulse: number}> = ({beam, audioP
   return (
     <>
       <div className="noise" />
+      <div className="ambient-map" style={{opacity: 0.48 + audioPulse * 0.18}} />
       {beam ? (
         <div
           className="beam"
@@ -159,6 +189,19 @@ const Background: React.FC<{beam: boolean; audioPulse: number}> = ({beam, audioP
         />
       ) : null}
     </>
+  );
+};
+
+const AudioWave: React.FC<{audioPulse: number}> = ({audioPulse}) => {
+  const frame = useCurrentFrame();
+  const bars = useMemo(() => Array.from({length: 18}, (_, index) => index), []);
+  return (
+    <div className="audio-wave">
+      {bars.map((index) => {
+        const wave = interpolate(Math.sin(frame / 7 + index * 0.7), [-1, 1], [0.35, 1]);
+        return <span key={index} style={{transform: `scaleY(${0.25 + wave * 0.42 + audioPulse * 0.33})`}} />;
+      })}
+    </div>
   );
 };
 
@@ -318,20 +361,37 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
+  const useAgentVisual = data.agentVisual?.enabled === true;
 
   return (
-    <AbsoluteFill className={canvasClassName(style)} style={canvasStyle}>
+    <AbsoluteFill className={canvasClassName(style, data.orientation)} style={canvasStyle}>
       <Audio src={audioSrc} />
-      <Background audioPulse={audioPulse} beam={style.chrome.beam} />
-      {style.chrome.topbar ? <TopBar data={data} /> : null}
-      {style.chrome.progress ? <SceneProgress boundaries={boundaries} total={durationInFrames} /> : null}
+      {useAgentVisual ? (
+        <AgentVisualGenerated
+          audioPulse={audioPulse}
+          data={data}
+          durationInFrames={durationInFrames}
+          fps={fps}
+          frame={frame}
+          height={data.height}
+          progress={durationInFrames > 0 ? frame / durationInFrames : 0}
+          width={data.width}
+        />
+      ) : (
+        <>
+          <Background audioPulse={audioPulse} beam={style.chrome.beam} />
+          {style.chrome.topbar ? <TopBar data={data} /> : null}
+          {style.chrome.progress ? <SceneProgress boundaries={boundaries} total={durationInFrames} /> : null}
+          <AudioWave audioPulse={audioPulse} />
 
-      {transitionFrames > 0
-        ? renderTransitionSeries(data, sceneFrames, transitionFrames, style, audioPulse)
-        : renderPlainSeries(data, sceneFrames, style, audioPulse)}
+          {transitionFrames > 0
+            ? renderTransitionSeries(data, sceneFrames, transitionFrames, style, audioPulse)
+            : renderPlainSeries(data, sceneFrames, style, audioPulse)}
+        </>
+      )}
 
       <Captions segments={data.captions} />
-      {posterOpacity > 0 ? <AutoCoverPoster data={data} opacity={posterOpacity} /> : null}
+      {!useAgentVisual && posterOpacity > 0 ? <AutoCoverPoster data={data} opacity={posterOpacity} /> : null}
     </AbsoluteFill>
   );
 };

@@ -105,7 +105,7 @@ export const SearchpoCover: React.FC<Partial<Payload>> = (props) => {
   const metric = requireText(data.audienceMetricLine || data.metricLine, 'audienceMetricLine');
   const titlePlan = coverTitlePlan(requireText(data.displayTitle || data.title, 'displayTitle'));
   return (
-    <AbsoluteFill className="canvas cover">
+    <AbsoluteFill className={`canvas cover aspect-${data.orientation}`}>
       <div className="noise" />
       <div className="beam cover-beam" />
 

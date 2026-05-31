@@ -124,7 +124,7 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
     cross_check_review = read_json(cross_check_path) if cross_check_path.exists() else {}
     return json.dumps(
         {
-            "task": "Audit this rendered vertical searchpo video before Douyin publishing.",
+            "task": "Audit this rendered searchpo video before publishing.",
             "required_output": {
                 "verdict": "pass or fail",
                 "summary": "one sentence",
@@ -135,7 +135,7 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
                     "no_unsupported_claims": "boolean",
                     "voiceover_matches_copy": "boolean; true when voiceover and visible copy are consistent, exact wording is not required",
                     "cover_text_safe": "boolean; true when cover title and metric are fully inside the frame and readable",
-                    "douyin_safe_area": "boolean; true when captions avoid the lower platform UI obstruction area",
+                    "douyin_safe_area": "boolean; true when captions avoid the lower platform UI obstruction area for vertical Douyin output; for horizontal explainer output, true when captions remain fully readable and inside frame",
                     "no_internal_terms": "boolean; true when public copy does not expose pipeline terms",
                     "no_hype_without_evidence": "boolean; true when unverified topics are not framed as industry-changing conclusions",
                     "speech_pronunciation_safe": "boolean; true when the voiceover does not read raw slashes, URLs, or symbols",
@@ -151,6 +151,7 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
             "important": policy_get("gemini_visual_audit.important", ""),
             "selected_candidate": selected,
             "render_payload": render_payload,
+            "video_profile": render_payload.get("videoProfile") or render_payload.get("video_profile") or {},
             "evidence_bundle": evidence_bundle,
             "cross_check_review": cross_check_review,
             "deepseek_polish": {
