@@ -21,7 +21,7 @@ protocol.
 From the repository root:
 
 ```bash
-scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X
+scripts/install_skill_bundle.sh /Volumes/T7/media/X
 ```
 
 The installer keeps these as canonical or distributable surfaces:
@@ -48,16 +48,23 @@ For project-level Codex plugin recognition, the installer also writes:
 - `.agents/plugins/marketplace.json`
 - `plugins/github-repo-to-x-threads/.codex-plugin/plugin.json`
 - `plugins/github-repo-to-x-threads/skills/github-repo-to-x-threads/SKILL.md`
+- `plugins/github-repo-to-x-threads/commands/github-repo-to-x-threads.md`
 
 `plugins/github-repo-to-x-threads/` must contain real copied files, not only
 symlinks. Codex can list a symlink-only plugin but installs an empty cache.
+Codex Desktop currently does not expose packaged `commands/*.md` files as
+custom slash-menu entries; install success should be validated through plugin
+and skill loading, not by expecting `/github-repo-to-x-threads` in the picker.
+Invoke the workflow in Codex with natural language, or name the skill explicitly
+as `$github-repo-to-x-threads`.
 
 Register or refresh the project marketplace from the real project root:
 
 ```bash
-codex plugin marketplace list
-codex plugin marketplace add /Volumes/T7/media/X   # only if media-x-local is absent
-codex plugin add github-repo-to-x-threads@media-x-local
+CODEX_CLI="${CODEX_CLI_PATH:-/Applications/Codex.app/Contents/Resources/codex}"
+"$CODEX_CLI" plugin marketplace list
+"$CODEX_CLI" plugin marketplace add /Volumes/T7/media/X   # only if media-x-local is absent
+"$CODEX_CLI" plugin add github-repo-to-x-threads@media-x-local
 scripts/verify_codex_project_plugin.sh .
 ```
 
@@ -67,7 +74,8 @@ cachebuster before reinstalling:
 ```bash
 python3 /Users/chenyu/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py .
 scripts/install_skill_bundle.sh /Volumes/T7/media/X
-codex plugin add github-repo-to-x-threads@media-x-local
+CODEX_CLI="${CODEX_CLI_PATH:-/Applications/Codex.app/Contents/Resources/codex}"
+"$CODEX_CLI" plugin add github-repo-to-x-threads@media-x-local
 scripts/verify_codex_project_plugin.sh .
 ```
 
@@ -146,13 +154,13 @@ python3 -m json.tool skills/manifest.json >/dev/null
 python3 -B skills/github-repo-to-x-threads/scripts/run_repo_to_x_pack.py . \
   --run-id smoke-agent-plugin-refactor --refresh
 scripts/verify_codex_project_plugin.sh .
-scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X
-codex plugin add github-repo-to-x-threads@media-x-local
+scripts/install_skill_bundle.sh /Volumes/T7/media/X
+"${CODEX_CLI_PATH:-/Applications/Codex.app/Contents/Resources/codex}" plugin add github-repo-to-x-threads@media-x-local
 scripts/verify_codex_project_plugin.sh .
 ```
 
 Do not substitute `/tmp` or another disposable destination for the install
-verification above. If `/Users/sunfl/Documents/media/X` is not writable, report
+verification above. If `/Volumes/T7/media/X` is not writable, report
 the permission blocker; the adapter-install gate has not passed.
 
 Keep `repo-to-x-workspace/` ignored after smoke runs.

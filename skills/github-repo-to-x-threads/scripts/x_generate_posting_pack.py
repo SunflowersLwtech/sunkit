@@ -39,6 +39,8 @@ ANGLE_CONTRACT = [
     "If the mode is test_catalog, separate official release, preview, leak, rumor, tested result, and inference.",
     "If the mode is builder_resource_log, include artifact, current status, next validation, and a community loop.",
     "If the mode is product_translator_longform, separate original-source facts, interpretation, product/workflow implication, trend prediction, and user vision.",
+    "For paper-to-system, product_translator_longform, and rich repo+vision sources, prefer 8-12 substantive posts with 180-260 characters each. Use 4-6 posts only for thin sources or fast test_catalog updates.",
+    "Do not make a complex source look publish-ready by slicing it into short checklist fragments; preserve the explanation arc when evidence supports it.",
     "Post 1 must work without a title, image, or link card: topic + reason to read + evidence credibility. Do not open with a repo-note phrase.",
     "Forbidden first-post patterns: 最近看到, 值得认真看, 很有意思, quick thread, this repo is, 这个项目是, 这个库是.",
     "Use psychological triggers only when evidence supports them: cognitive conflict, curiosity gap, risk/loss, identity, or numeric anchor.",
@@ -139,7 +141,7 @@ def call_grok(api_key: str, model: str, evidence: dict[str, Any], prompt: str, t
             "If account fit is weak, produce an off-main-account recommendation or a rewrite that ties the idea to a concrete Agent reliability mechanism.",
             "The final thread must contain a named reusable asset and a specific discussion question.",
             "Credit the repo owner in evidence/metadata, but the public hook can lead with the technical thesis.",
-            "Keep posts concise; 4-7 posts is usually enough.",
+            "Use enough space for the source. For paper-to-system, product_translator_longform, or rich repo+vision posts, target 8-12 substantive posts; for simple repos or fast status updates, 4-7 can be enough.",
             "Post 1 must be a repeatable technical thesis or pain-point claim, not a repo description.",
             "Before selecting an angle, score source material richness: concrete artifact, sourced number, contrast, reader pain, caveat, source boundary.",
             "If source material is weak, say what evidence is missing instead of generating a polished but empty thread.",
@@ -147,7 +149,8 @@ def call_grok(api_key: str, model: str, evidence: dict[str, Any], prompt: str, t
             "A good hook should create tension without giving away the whole answer.",
             "Pick a creator pattern and make the hook, media plan, reusable asset, and discussion question match that pattern.",
             "Reward practical next action: the reader can try, inspect, compare, save, or adapt something after reading.",
-            "Prefer a 4-6 post thread for trending repos: thesis, mechanism, concrete example, caveat/boundary, link/attribution.",
+            "Prefer 8-12 posts for paper-to-system, product-translator, and rich technical explainers: thesis, source boundary, mechanism, example, product/workflow implication, reusable asset, caveat, link/attribution, and discussion question.",
+            "Each post should usually carry 180-260 characters when there is real substance. If several posts are under 150 characters, merge or expand them with mechanism, example, caveat, or resource value.",
             "For globally trending developer repos, a short English or bilingual hook is allowed when it improves reach, but keep the rest coherent.",
             "Every public factual claim must be backed by README, package metadata, file tree, or GitHub metadata.",
             "Label uncertainty and avoid best/first/only unless directly proven.",
@@ -260,7 +263,9 @@ def number_posts(posts: list[str]) -> list[str]:
 
 def length_label(post: str) -> str:
     length = len(post)
-    if length <= 240:
+    if length < 150:
+        return "Short"
+    if length <= 260:
         return "OK"
     if length <= 280:
         return "Tight"

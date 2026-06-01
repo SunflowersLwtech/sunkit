@@ -47,13 +47,14 @@
   as the deliverable. It is never a fallback for failed image generation and
   never makes an actual-image posting pack ready.
 - Do not validate required local adapters by installing to `/tmp` or another
-  substitute target. `scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X`
-  must succeed for that verification gate; otherwise the gate is blocked.
+  substitute target. `scripts/install_skill_bundle.sh /Volumes/T7/media/X`
+  must succeed for this checkout's verification gate; otherwise the gate is
+  blocked.
 
 ## Verification
 
 - Run Python syntax checks for scripts after editing.
 - Run a smoke `run_repo_to_x_pack.py` workspace creation before publishing packaging changes.
-- Run `scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X` when validating local Claude/Codex adapters.
+- Run `scripts/install_skill_bundle.sh /Volumes/T7/media/X` when validating local Claude/Codex adapters on this machine.
 - Validate JSON manifests after edits: `.codex-plugin/plugin.json`,
   `.claude-plugin/plugin.json`, `skillpack.json`, and `openclaw.plugin.json`.

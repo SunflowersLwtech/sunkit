@@ -27,6 +27,8 @@ Use this when the repo facts are collected but before final output.
 - The hook is specific and not clickbait.
 - Each post adds a new reason to care.
 - The thread count is adaptive to the evidence and user angle; it is not forced to exactly 8 posts.
+- Thin/fast updates can be 4-6 posts, but paper-to-system, product-translator, and rich repo+vision drafts should usually be 8-12 substantive posts.
+- If several posts are under 150 characters in a rich explainer, merge or expand them with mechanism, example, implication, resource value, or caveat before marking the pack ready.
 - Thin sections are merged or dropped; complex evidence, caveats, or user vision can add posts.
 - Technical terms are concrete enough for developers but not written like README paste.
 - Caveats make the post more credible, not weaker.

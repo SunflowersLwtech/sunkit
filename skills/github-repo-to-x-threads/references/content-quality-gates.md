@@ -142,6 +142,10 @@ Pattern fit changes the draft:
 - Asset: choose the saveable object that matches the mode, such as a quick test
   checklist, integration steps, status table, progress log template, or reading
   path.
+- Depth: thin updates can stay short, but paper-to-system,
+  product-translator, and rich repo+vision drafts usually need 8-12 substantive
+  posts. Several posts under 150 characters in a rich explainer are a revise
+  signal, not a ready signal.
 - Question: ask for a concrete test result, workflow comparison, design
   tradeoff, or beta/use-case feedback.
 

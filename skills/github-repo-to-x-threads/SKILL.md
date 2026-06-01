@@ -1,6 +1,6 @@
 ---
 name: github-repo-to-x-threads
-description: Use this skill whenever the user gives any technical input and wants Agent-engineering-positioned X/Twitter content: posts, threads, articles, launch/share posts, responsible recommendations, project/paper writeups, bug-report rewrites, profile/pinned-post positioning, social media copy, or skill improvement from evals, feedback, live metrics, or GitHub Trending experiments. Inputs can be GitHub repositories, owner/repo strings, local paths, arXiv/alphaXiv papers, blog/docs URLs, PDFs/notes, source lists, existing posting packs, raw ideas, KYC/support complaints, profile text, or prior run workspaces. This skill routes the input through an Agent engineering brand gate, collects evidence, separates verified facts from inference and user vision, drafts responsible X copy with reusable assets and concrete discussion questions, generates GPT Image 2 visual assets by default, optionally publishes through the official X API, records outcomes into local strategy memory, and can synthesize an auditable skill-evolution report plus patch plan without silently weakening claim safety.
+description: "Use this skill when the user wants Agent-engineering-positioned X/Twitter content from technical inputs including GitHub repos, owner/repo strings, local paths, arXiv/alphaXiv papers, blog/docs URLs, PDFs, notes, source lists, existing posting packs, raw ideas, KYC/support complaints, profile text, or prior run workspaces. It collects evidence, separates verified facts from inference and user vision, drafts responsible posts or threads with reusable assets and concrete discussion questions, governs GPT Image 2-style visual assets, optionally publishes through the official X API, records outcomes, and can synthesize skill-evolution reports or patch plans without weakening claim safety."
 ---
 
 # GitHub Repo to X Threads
@@ -127,7 +127,7 @@ Infer these from the prompt when possible. Ask only if the missing answer would 
 - **Brand lane**: default to the Agent engineering main account only when the
   source maps to agent reliability, build-in-public, paper-to-system, or
   embodied AI watch.
-- **Output size**: adaptive. Use as many posts as the repo evidence and user angle genuinely need. Prefer a concise 4-8 post thread for simple repos, 8-12 for rich repos or repo+vision posts, and split further only when nuance, caveats, or evidence would otherwise be lost. Do not force exactly 8 posts.
+- **Output size**: adaptive, but default richer than a summary. Use as many posts as the repo evidence and user angle genuinely need. Prefer 4-6 posts only for thin sources or fast status updates; prefer 8-12 substantive posts for repo shares, paper-to-system posts, product-translator longform, or repo+vision posts; split further only when nuance, caveats, product/workflow implications, or evidence would otherwise be lost. When the user says posts are too short or asks for longer copy, treat short fragmentary drafts as not ready unless they are intentionally a short note.
 - **Visuals**: default to 1-3 actual generated images for technical final posting packs. Use GPT Image 2 or the available built-in image generation tool unless the user explicitly says text-only, no images, prompts-only, or manual images. For professional bug reports, prefer real user-provided evidence screenshots or text-only output; do not generate fake support/KYC evidence.
 - **Final-mile preference**: default to a paste-ready posting pack, not a prose-only critique. The user should be able to publish with minimal manual cleanup.
 - **Publish mode**: default to `manual-safe`. Use `official-api-publish` only when the user explicitly wants CLI posting/uploading and has configured official X API user credentials. Never default to cookie/session/proxy-based posting services.
@@ -338,7 +338,8 @@ The structure is a thinking scaffold, not a fixed post count. Drop sections that
 Length guidance:
 
 - Keep each post short enough to paste into X comfortably.
-- For standard X accounts, aim for roughly 240-270 visible characters per post.
+- For standard X accounts, aim for roughly 180-260 visible characters per post when the source has substance; do not label repeated 130-160 character fragments as ready for rich explainers.
+- For paper-to-system, product-translator, and repo+vision posts, favor an explanation arc over compression: source boundary, mechanism, example, implication, asset, caveat, and question should all have room to breathe.
 - If a post needs more nuance, split it rather than compressing into vague language.
 - Number posts as `(1/N)`, `(2/N)`, etc. after the final post count is known. Do not lock to 8 posts before drafting and reviewing the content.
 

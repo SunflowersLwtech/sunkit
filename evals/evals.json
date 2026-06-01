@@ -126,6 +126,12 @@
       "prompt": "参考宝玉、歸藏、TestingCatalog、向阳乔木这些 AI/X 内容创作者的特点，吸收到我们的 X 内容生产 skill 里，提高内容质量，但不要模仿个人口吻。",
       "expected_output": "Distills creator examples into reusable content modes rather than impersonation: engineering mentor, demo-first tool, test catalog, builder resource log, and product translator longform; updates or references creator-style-patterns.md, content-quality-gates.md, thread-quality-checklist.md, and the model quality chain; makes generation, draft tournament, and x_eval_post reward coherent creator_pattern_fit, demo/test evidence, translation value, practical next action, and community loop while preserving claim safety, attribution boundaries, and image governance.",
       "files": []
+    },
+    {
+      "id": 22,
+      "prompt": "后面的推文要长一些。评估这个 paper-to-system posting pack：它 claim safe、hook 也可以，但 8 条总共只有 1300 字左右，很多帖只有 130-160 字，读起来像短 checklist，没有吸收产品长文转译风格。",
+      "expected_output": "Treats length/depth as a quality gate, not only a preference. Generation and draft tournament should prefer 8-12 substantive posts for paper-to-system, product_translator_longform, and rich repo+vision sources, usually 180-260 characters per post when evidence supports it. x_eval_post should mark rich but underwritten explainers as revise even if claim_safety, hook_strength, and creator_pattern_fit are high, and should suggest expanding with mechanism, example, product/workflow implication, resource value, caveat, and a concrete question.",
+      "files": []
     }
   ]
 }

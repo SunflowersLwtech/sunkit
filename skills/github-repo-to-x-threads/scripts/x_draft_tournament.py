@@ -37,6 +37,8 @@ ANGLE_CONTRACT = [
     "For test_catalog, separate official release, preview, leak, rumor, tested result, and inference.",
     "For builder_resource_log, include artifact, current status, next validation, and a community loop.",
     "For product_translator_longform, separate original-source facts, interpretation, product/workflow implication, trend prediction, and user vision.",
+    "For paper-to-system, product_translator_longform, and rich repo+vision sources, prefer 8-12 substantive posts with 180-260 characters each. Use 4-6 posts only for thin sources or fast test_catalog updates.",
+    "Do not make a complex source look publish-ready by slicing it into short checklist fragments; preserve the explanation arc when evidence supports it.",
     "The winning first post must be repeatable as a thesis. It cannot simply introduce the repo or say it is interesting.",
     "Forbidden first-post patterns: 最近看到, 值得认真看, 很有意思, quick thread, this repo is, 这个项目是, 这个库是.",
     "Use one coherent voice. Chinese is default; English is for repo names, paths, APIs, commands, or one deliberate hook line.",
@@ -133,10 +135,11 @@ def run_grok(api_key: str, model: str, pack: dict[str, Any], prompt: str, varian
             "Do not turn caveats into hype.",
             "Avoid generic openers like 'recently saw', 'worth reading', or 'interesting paper'.",
             "The winning draft should sound like a real technical reader found a non-obvious takeaway.",
-            "A shorter sharper thread can beat a complete summary.",
+            "A shorter sharper thread can beat a complete summary, but not when it erases the source's mechanism, examples, caveats, or product/workflow implication.",
             "Pick a creator pattern and make the hook, media plan, reusable asset, and discussion question match it.",
             "Reward practical next action: the reader can try, inspect, compare, save, or adapt something after reading.",
-            "Prefer 4-6 posts unless the evidence is thin; each post should add a new job: thesis, mechanism, example, caveat, link.",
+            "Prefer 8-12 posts for paper-to-system, product-translator, and rich technical explainers; use 4-6 only for thin sources or fast status updates.",
+            "Each post should usually carry 180-260 characters when there is real substance. If several posts are under 150 characters, merge or expand them with mechanism, example, caveat, or resource value.",
             "Do not remove a caveat just to make the hook cleaner.",
             "If the pack is metadata-only, do not add source-code-internal claims unless they are stated in the README or metadata.",
             "Every post must fit X length. If an example is long, compress it to the exact mechanism or split it.",
@@ -309,7 +312,9 @@ def extract_section(markdown: str, heading: str) -> str:
 
 def length_label(post: str) -> str:
     length = len(post)
-    if length <= 240:
+    if length < 150:
+        return "Short"
+    if length <= 260:
         return "OK"
     if length <= 280:
         return "Tight"

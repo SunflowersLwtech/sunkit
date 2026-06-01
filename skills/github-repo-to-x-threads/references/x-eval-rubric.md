@@ -45,6 +45,9 @@ Additional content-quality checks:
   comparisons, design tradeoffs, or beta feedback.
 - `translation_value`: complex sources become clear Chinese product/workflow
   decisions while preserving source, interpretation, and user-vision boundaries.
+- `explainer_depth`: rich paper-to-system, product-translator, and repo+vision
+  drafts use enough space for a real explanation arc instead of passing as short
+  checklist fragments.
 
 Default weighted score:
 
@@ -85,8 +88,11 @@ Recommended gates:
 - Any `account_fit < 0.55`: revise.
 - Any `creator_pattern_fit < 0.58`: revise.
 - Any `media_quality < 0.65` when images are required: regenerate or remove image references.
+- Rich explainers with many short posts, average post length below the source
+  complexity, or no mechanism/example/implication arc should revise even when
+  claim safety and hook strength are high.
 
-The harsh rule: a safe, accurate summary is not automatically ready. If it reads like a paper abstract split into numbered tweets, if the hook needs the link card to make sense, or if the draft has no inspectable example, it should go through draft tournament or rewrite.
+The harsh rule: a safe, accurate summary is not automatically ready. If it reads like a paper abstract split into numbered tweets, if the hook needs the link card to make sense, if the draft has no inspectable example, or if a complex source is compressed into skinny checklist posts, it should go through draft tournament or rewrite.
 
 ## Grok Evaluation Role
 

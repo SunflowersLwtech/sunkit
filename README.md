@@ -25,7 +25,7 @@ skills/
   github-repo-to-x-threads/    # canonical reusable skill
 .codex-plugin/plugin.json      # Codex adapter manifest
 .claude-plugin/plugin.json     # Claude plugin adapter manifest
-commands/                      # Claude slash-command adapter
+commands/                      # command source: Claude slash; packaged in Codex adapters
 runbooks/bootstrap.md          # post-scaffold runbook
 plugins/github-repo-to-x-threads/ # generated local Codex plugin adapter, ignored
 ```
@@ -48,7 +48,7 @@ Adapter metadata is thin and separate:
 ```text
 .codex-plugin/plugin.json      # Codex plugin manifest
 .claude-plugin/plugin.json     # Claude Code plugin manifest
-commands/                      # Claude plugin slash-command adapter
+commands/                      # command source: Claude slash; packaged in Codex adapters
 .claude/                       # generated local Claude adapter, ignored
 .agents/                       # generated local Codex adapter, ignored
 plugins/                       # generated local Codex marketplace plugin root, ignored
@@ -58,7 +58,7 @@ Do not install this project by copying the whole repository into `.claude/skills
 
 ## Coding Agent One-Line Config
 
-Coding agents should treat `AGENTS.md` plus `skills/github-repo-to-x-threads/SKILL.md` as the source of truth, keep generated runs/images/env files out of git, and use `scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X` only to sync local install surfaces.
+Coding agents should treat `AGENTS.md` plus `skills/github-repo-to-x-threads/SKILL.md` as the source of truth, keep generated runs/images/env files out of git, and use `scripts/install_skill_bundle.sh /Volumes/T7/media/X` only to sync local install surfaces on this machine.
 
 For a cold start, read:
 
@@ -111,13 +111,13 @@ become concrete Agent engineering failure-mode notes.
 The helper installs the canonical skill plus local adapters without committing generated outputs:
 
 ```bash
-scripts/install_skill_bundle.sh /Users/sunfl/Documents/media/X
+scripts/install_skill_bundle.sh /Volumes/T7/media/X
 ```
 
 It writes:
 
 ```text
-/Users/sunfl/Documents/media/X/
+/Volumes/T7/media/X/
   AGENTS.md
   INSTALL_FOR_AGENTS.md
   CLAUDE.md
@@ -133,7 +133,7 @@ It writes:
   .claude-plugin/plugin.json            # Claude plugin manifest
   commands/github-repo-to-x-threads.md  # Claude plugin command
   .agents/plugins/marketplace.json      # Codex project marketplace
-  plugins/github-repo-to-x-threads/     # Codex project plugin adapter
+  plugins/github-repo-to-x-threads/     # Codex project plugin adapter, including command source
   .claude/skills/github-repo-to-x-threads/  # Claude project adapter
 ```
 
@@ -175,10 +175,18 @@ the installer. Codex requires a real plugin root under
 `plugins/github-repo-to-x-threads/`; a symlink-only adapter installs as an empty
 cache.
 
+Current Codex Desktop exposes installed plugins and skills to the model, but its
+slash-command picker only lists built-in commands and model service-tier
+commands. The packaged `commands/` file is kept for adapter parity; it is not a
+guarantee that `/github-repo-to-x-threads` appears in the Codex slash menu.
+Invoke the workflow in Codex with natural language, or name the skill explicitly
+as `$github-repo-to-x-threads`.
+
 ```bash
-codex plugin marketplace list
-codex plugin marketplace add /Volumes/T7/media/X   # only if media-x-local is absent
-codex plugin add github-repo-to-x-threads@media-x-local
+CODEX_CLI="${CODEX_CLI_PATH:-/Applications/Codex.app/Contents/Resources/codex}"
+"$CODEX_CLI" plugin marketplace list
+"$CODEX_CLI" plugin marketplace add /Volumes/T7/media/X   # only if media-x-local is absent
+"$CODEX_CLI" plugin add github-repo-to-x-threads@media-x-local
 scripts/verify_codex_project_plugin.sh .
 ```
 
@@ -188,7 +196,8 @@ adapter, and reinstall:
 ```bash
 python3 /Users/chenyu/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py .
 scripts/install_skill_bundle.sh /Volumes/T7/media/X
-codex plugin add github-repo-to-x-threads@media-x-local
+CODEX_CLI="${CODEX_CLI_PATH:-/Applications/Codex.app/Contents/Resources/codex}"
+"$CODEX_CLI" plugin add github-repo-to-x-threads@media-x-local
 scripts/verify_codex_project_plugin.sh .
 ```
 
@@ -535,10 +544,10 @@ The publisher uploads registered images, attempts to set alt text, marks generat
 
 Do not use cookie replay, website automation, hidden GraphQL calls, `auth_session` services, or proxy-based third-party posting as this project's default path.
 
-When using an external bundle such as `/Users/sunfl/Documents/media/X`, you may keep local user-governed artifacts at the bundle root:
+When using an external bundle such as `/Volumes/T7/media/X`, you may keep local user-governed artifacts at the bundle root:
 
-- `/Users/sunfl/Documents/media/X/.env`
-- `/Users/sunfl/Documents/media/X/repo-to-x-workspace/`
+- `/Volumes/T7/media/X/.env`
+- `/Volumes/T7/media/X/repo-to-x-workspace/`
 
 The installer preserves these bundle-root paths. Do not commit `.env`, and do not place real env files or generated run workspaces under `skills/`.
 

@@ -48,6 +48,9 @@ community nicknames.
   `Agent`, `Skill`, `CLI`, `MCP`, `GUI`, `Codex`, and file/API names.
 - Prefer short paragraphs, numbered lists, and one useful asset over polished
   explanatory prose.
+- Do not over-compress rich explainers. For papers, product cases, English
+  source translation, or repo+vision posts, prefer an 8-12 post explanation arc
+  with substantial posts over a safe but skinny checklist.
 - Let personality show through practical judgment: a light sentence is fine,
   but the post must still teach a workflow, risk, or decision.
 - Use visuals as evidence or teaching aids. Generated images are conceptual;
@@ -178,6 +181,14 @@ Shape:
 5. concrete tool, command, GitHub repo, paper, or case;
 6. caveat: source vs interpretation vs user vision;
 7. resource links and a saveable summary.
+
+Length:
+
+- Default to 8-12 substantive posts when the source has enough evidence.
+- Aim for posts that carry one complete thought, usually 180-260 characters in
+  Chinese technical copy.
+- Merge or expand repeated posts under 150 characters unless the draft is
+  intentionally a short note.
 
 Good signals:
 

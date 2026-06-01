@@ -132,6 +132,7 @@ def prompt_flags(prompt: str) -> dict[str, bool]:
         "asks_launch": any(word in text for word in ("launch", "发布版", "我做的", "i built", "we built", "released", "ship")),
         "asks_compare": any(word in text for word in ("compare", "对比", "比较", "roundup", "候选池", "多个", "5 个")),
         "asks_article": any(word in text for word in ("article", "长文", "x article", "文章")),
+        "asks_longer": any(word in text for word in ("长一些", "更长", "展开", "详细", "longer", "more detailed", "longform")),
         "asks_builder_notes": any(word in text for word in ("我试了", "tested", "demo", "踩坑", "build notes", "build-in-public", "building in public", "mcp creator", "debug memory", "复盘")),
         "asks_profile": any(word in text for word in ("bio", "profile", "置顶", "pinned", "账号定位", "定位", "主页")),
         "asks_no_images": any(word in text for word in ("text-only", "no image", "不要配图", "不要图片", "prompts-only")),
@@ -189,7 +190,7 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
     elif "paper" in kinds:
         strategy_id = "paper_to_system"
         strategy_name = "Paper-to-system engineering thread"
-    elif flags["asks_article"]:
+    elif flags["asks_article"] or flags["asks_longer"]:
         strategy_id = "x_article"
         strategy_name = "X Article / long-form post"
     elif flags["asks_builder_notes"]:
@@ -241,9 +242,10 @@ def choose_strategy(classifications: list[dict[str, Any]], prompt: str, profile:
         "recommended_image_count": image_count,
         "thread_shape": {
             "default_posts": "adaptive",
-            "short": "1 post or 4-6 thread items for simple inputs",
-            "standard": "6-10 thread items for repo shares or paper-to-system posts",
-            "long": "10-15+ only when comparison, caveats, or evidence need space",
+            "short": "1 post or 4-6 thread items only for thin sources or fast status updates",
+            "standard": "8-12 thread items for repo shares, paper-to-system posts, and product-translator explainers",
+            "long": "12-15+ when comparison, caveats, product/workflow implications, or user vision need space",
+            "per_post_density": "prefer 180-260 characters when evidence supports explanation; merge or expand repeated posts under 150 characters",
         },
         "evidence_plan": list(dict.fromkeys(evidence_plan)),
         "claim_policy": [

@@ -308,13 +308,28 @@ def text_features(posts: list[str]) -> dict[str, Any]:
     ai_smoothness_count = len(ritual_transition_phrases) + max(0, len(thesis_markers) - 2) + int(plain_language_gap)
     all_caps_words = re.findall(r"\b[A-Z]{4,}\b", full)
     total_chars = sum(lengths)
+    avg_post_chars = total_chars / len(posts) if posts else 0.0
+    short_post_count = sum(1 for length in lengths if length < 150)
+    rich_explainer = (
+        len(posts) >= 6
+        and (
+            len(product_translator_markers) >= 2
+            or len(material_markers) >= 16
+            or len(example_markers) >= 10
+        )
+    )
+    explainer_depth_gap = int(rich_explainer and (total_chars < 1600 or avg_post_chars < 175 or short_post_count >= 3))
     return {
         "post_count": len(posts),
         "lengths": lengths,
         "total_chars": total_chars,
+        "avg_post_chars": avg_post_chars,
         "max_length": max(lengths) if lengths else 0,
         "over_280_count": sum(1 for length in lengths if length > 280),
         "under_45_count": sum(1 for length in lengths if length < 45),
+        "short_post_count": short_post_count,
+        "rich_explainer_count": int(rich_explainer),
+        "explainer_depth_gap_count": explainer_depth_gap,
         "url_count": len(urls),
         "root_url_count": len(re.findall(r"https?://\S+", first)),
         "hashtag_count": len(hashtags),
@@ -494,6 +509,8 @@ def deterministic_scores(
         structure_fit -= 0.1
     elif features["post_count"] < 4 and features["total_chars"] < 420:
         structure_fit -= 0.08
+    if features.get("explainer_depth_gap_count"):
+        structure_fit -= 0.16
     if features["hashtag_count"] > 2:
         structure_fit -= 0.12
     if features["mention_count"] > 4:
@@ -576,6 +593,8 @@ def deterministic_scores(
         asset_value += 0.06
     if not features["asset_marker_count"]:
         asset_value -= 0.12
+    if features.get("explainer_depth_gap_count"):
+        asset_value -= 0.08
 
     emotion_control = 0.82
     emotion_control -= min(0.30, features["emotion_term_count"] * 0.06)
@@ -632,8 +651,11 @@ def deterministic_scores(
         features["demo_evidence_marker_count"]
         or features["status_boundary_marker_count"]
         or features["builder_log_marker_count"]
+        or features["product_translator_marker_count"]
     ):
         creator_pattern_fit -= 0.08
+    if features.get("explainer_depth_gap_count"):
+        creator_pattern_fit -= 0.10
     if features["tested_claim_marker_count"] and not (
         features["example_marker_count"] or features["material_marker_count"]
     ):
@@ -714,12 +736,14 @@ def grok_eval(
             "Penalize drafts that mix creator modes incoherently or copy a specific creator's identity, catchphrases, emoji habits, or community nicknames.",
             "Penalize 'tested' or 'demo' claims without real test details, screenshot/video plan, or a clear not-tested boundary.",
             "Penalize product-translation posts that blur original source facts, interpretation, trend prediction, and user vision.",
+            "Penalize paper-to-system, product-translator, or rich technical explainers that are safe but underwritten: many short posts, weak explanation arc, or average post length far below the available substance.",
             "Reward source-material richness: inspectable artifacts, sourced numbers, contrast, reader pain, and real caveats.",
             "Reward content that supports Agent reliability, build-in-public, paper-to-system, or embodied AI watch.",
             "Reward concrete technical value, bookmark value, high-quality media, and responsible attribution.",
             "Reward a memorable thesis that a technical reader could repeat after reading the thread.",
             "Reward coherent creator patterns: engineering mentor, demo-first tool, test catalog, builder resource log, or product translator longform.",
             "Reward Chinese technical translation that turns complex sources into product/workflow decisions with resource links and caveats.",
+            "Reward longer, substantive Chinese technical explainers when the source has enough evidence: 8-12 posts, clear source boundary, mechanism, product/workflow implication, reusable asset, caveat, and concrete question.",
             "Reward practical next action and a community loop that invites useful test results, workflow comparisons, or design tradeoffs.",
             "Do not recommend unsafe manipulation or clickbait.",
         ],
@@ -903,6 +927,8 @@ def rule_top_fixes(features: dict[str, Any], scores: dict[str, float], text_only
         fixes.append("Add a community loop: ask for a concrete test result, workflow comparison, design tradeoff, or beta feedback.")
     if features.get("post_count", 0) < 4 and features.get("total_chars", 0) < 420:
         fixes.append("Expand only if there is new substance: mechanism, example, caveat, or link.")
+    if features.get("explainer_depth_gap_count"):
+        fixes.append("Expand rich paper/product/repo explainers instead of shipping short fragments: target 8-12 substantive posts with mechanism, example, implication, resource value, caveat, and question.")
     if features.get("over_280_count"):
         fixes.append("Split any post over 280 characters before marking the pack ready.")
     if not text_only_eval and scores.get("media_quality", 1) < 0.65:

@@ -333,7 +333,7 @@ def derive_rules(rows: list[dict[str, Any]]) -> list[str]:
     rules = [
         "Run text-only angle tournaments before image generation for trending repos; most quality failures are copy-angle failures, not asset failures.",
         "Use the first post to make one repeatable technical claim; move repo attribution and metadata into later posts or evidence.",
-        "Prefer 4-6 dense posts for trending repos; long completeness-oriented threads tend to read like README summaries.",
+        "For thin trending repos, 4-6 dense posts can be enough; for rich repos, papers, or repo+vision angles, prefer 8-12 substantive posts and avoid README-summary completeness.",
     ]
     weak_hook_count = 0
     for row in rows:

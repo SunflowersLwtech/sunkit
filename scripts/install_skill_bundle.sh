@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <bundle-root>" >&2
-  echo "Example: $0 /Users/sunfl/Documents/media/X" >&2
+  echo "Example: $0 /Volumes/T7/media/X" >&2
   exit 2
 fi
 
@@ -29,6 +29,7 @@ runbook_dir="$bundle_root/runbooks"
 codex_project_plugins_dir="$bundle_root/.agents/plugins"
 codex_project_marketplace="$codex_project_plugins_dir/marketplace.json"
 codex_project_plugin_root="$bundle_root/plugins/$skill_name"
+codex_project_command_dir="$codex_project_plugin_root/commands"
 
 codex_user_skill_dir="${AGENTS_HOME:-$HOME/.agents}/skills/$skill_name"
 codex_legacy_skill_dir="${CODEX_HOME:-$HOME/.codex}/skills/$skill_name"
@@ -107,6 +108,7 @@ mkdir -p \
   "$codex_project_plugins_dir" \
   "$codex_project_plugin_root/.codex-plugin" \
   "$codex_project_plugin_root/skills" \
+  "$codex_project_command_dir" \
   "$plugin_command_dir" \
   "$claude_project_command_dir" \
   "$shared_skill_dir" \
@@ -123,6 +125,7 @@ copy_file_if_different "$source_root/skills/manifest.json" "$shared_skill_dir/ma
 copy_file_if_different "$source_root/.codex-plugin/plugin.json" "$bundle_root/.codex-plugin/plugin.json"
 copy_file_if_different "$source_root/.codex-plugin/plugin.json" "$codex_project_plugin_root/.codex-plugin/plugin.json"
 copy_dir_if_different "$source_root/skills" "$codex_project_plugin_root/skills"
+copy_file_if_different "$source_root/commands/$skill_name.md" "$codex_project_command_dir/$skill_name.md"
 copy_file_if_different "$source_root/.claude-plugin/plugin.json" "$bundle_root/.claude-plugin/plugin.json"
 copy_file_if_different "$source_root/commands/$skill_name.md" "$plugin_command_dir/$skill_name.md"
 copy_file_if_different "$source_root/commands/$skill_name.md" "$claude_project_command_dir/$skill_name.md"
