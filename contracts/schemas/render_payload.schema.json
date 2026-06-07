@@ -95,7 +95,7 @@
         "style": {
           "type": "object",
           "properties": {
-            "theme": {"enum": ["radar", "minimal", "editorial"]},
+            "theme": {"enum": ["radar", "minimal", "editorial", "engineering"]},
             "density": {"enum": ["minimal", "standard", "rich"]},
             "motion": {"enum": ["calm", "standard", "punchy"]},
             "accent": {"type": "string", "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"},
@@ -112,12 +112,12 @@
         "scenes": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 8,
+          "maxItems": 24,
           "items": {
             "type": "object",
             "required": ["type", "props"],
             "properties": {
-              "type": {"enum": ["statement", "context", "stat", "bullets", "card", "compare", "compare_table", "terminal", "flow", "chart", "code_diff", "quote", "cta"]},
+              "type": {"enum": ["statement", "context", "stat", "bullets", "card", "compare", "compare_table", "terminal", "flow", "chart", "code_diff", "code_block", "node_graph", "decision_table", "act_card", "closing", "quote", "cta"]},
               "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
               "emphasis": {"enum": ["low", "normal", "high"]},
               "props": {"type": "object"}

@@ -15,6 +15,15 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DOUYIN_WIDTH = 1080
+DOUYIN_HEIGHT = 1920
+PUBLISHABLE_LAYOUTS = {
+    "vertical": {"width": 1080, "height": 1920, "aspect_ratio": "9:16"},
+    "horizontal": {"width": 1920, "height": 1080, "aspect_ratio": "16:9"},
+}
+TOOL_FALLBACKS = {
+    "ffprobe": ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"],
+}
 
 
 def utc_now() -> str:
@@ -34,7 +43,7 @@ def sha256_file(path: Path) -> str:
 
 
 def probe(video: Path) -> dict[str, Any]:
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = shutil.which("ffprobe") or next((path for path in TOOL_FALLBACKS["ffprobe"] if Path(path).is_file()), None)
     if not ffprobe:
         raise RuntimeError("ffprobe is required for render metadata verification")
     proc = subprocess.run(
@@ -119,6 +128,12 @@ def main() -> int:
     compatible_pixel_formats = {"yuv420p", "yuvj420p"}
 
     if video.is_file():
+        expected_layout = PUBLISHABLE_LAYOUTS.get(expected_orientation)
+        if not expected_layout or expected_width != expected_layout["width"] or expected_height != expected_layout["height"]:
+            errors.append(
+                "Searchpo publishable render must target either vertical 1080x1920 or horizontal 1920x1080; "
+                f"props requested {expected_width}x{expected_height} ({expected_orientation})"
+            )
         if video_stream.get("width") != expected_width or video_stream.get("height") != expected_height:
             errors.append(f"Expected {expected_width}x{expected_height}, got {video_stream.get('width')}x{video_stream.get('height')}")
         if video_stream.get("codec_name") != "h264":

@@ -8,10 +8,14 @@ import {
   Audio,
   interpolate,
   Series,
+  spring,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import {slide} from '@remotion/transitions/slide';
+import {HexGrid} from './components/VFX';
+import {CinematicOverlay} from './CinematicOverlay';
 import {Captions, type CaptionSegment} from './Captions';
 import {useFontsReady} from './fonts';
 import {AgentVisualGenerated} from './generated/AgentVisual.generated';
@@ -63,7 +67,12 @@ export type Payload = {
     mode?: 'react_runtime';
     render_mode?: 'overlay' | 'full_canvas';
     description?: string;
+    module_code?: string;
+    component_code?: string;
+    css?: string;
     validation_errors?: string[];
+    chapter_bridge?: boolean;
+    motion_profile?: string;
   };
   premiumDirectorSpec?: unknown;
   visualRecipe?: unknown;
@@ -179,6 +188,11 @@ const Background: React.FC<{beam: boolean; audioPulse: number}> = ({beam, audioP
   const sweep = interpolate(frame % 150, [0, 150], [-45, 125]);
   return (
     <>
+      <AbsoluteFill className="composition-root">
+      <div className="composition-bg">
+        <HexGrid />
+      </div>
+      </AbsoluteFill>
       <div className="noise" />
       <div className="ambient-map" style={{opacity: 0.48 + audioPulse * 0.18}} />
       {beam ? (
@@ -251,6 +265,140 @@ const SceneProgress: React.FC<{boundaries: number[]; total: number}> = ({boundar
   );
 };
 
+const sceneText = (props: Record<string, unknown>, keys: string[], fallback = '', max = 96): string => {
+  for (const key of keys) {
+    const value = props[key];
+    if (typeof value === 'string' && value.trim()) {
+      const clean = value.replace(/\s+/g, ' ').trim();
+      return fitText(clean, max);
+    }
+  }
+  return fitText(fallback.replace(/\s+/g, ' ').trim(), max);
+};
+
+const sceneList = (value: unknown, fallback: string[], max = 4, itemMax = 42): string[] => {
+  const raw = Array.isArray(value) ? value : fallback;
+  const items = raw
+    .map((item) => fitText(String(item ?? '').replace(/\s+/g, ' ').trim(), itemMax))
+    .filter(Boolean)
+    .slice(0, max);
+  return items.length > 0 ? items : fallback.slice(0, max);
+};
+
+const sceneTypeLabel = (type: string): string => {
+  const labels: Record<string, string> = {
+    statement: '开场判断',
+    context: '背景边界',
+    stat: '数据观察',
+    bullets: '要点拆解',
+    card: '证据卡',
+    compare: '对照取舍',
+    compare_table: '对照表',
+    terminal: '终端验证',
+    flow: '机制流',
+    chart: '指标图',
+    code_diff: '代码差异',
+    code_block: '代码片段',
+    node_graph: '架构图',
+    decision_table: '决策表',
+    act_card: '章节卡',
+    quote: '来源摘录',
+    cta: '验证动作',
+    closing: '收束结论',
+  };
+  return labels[type] ?? '章节';
+};
+
+const currentSceneIndex = (frame: number, boundaries: number[], total: number): number => {
+  if (boundaries.length === 0 || total <= 0) {
+    return 0;
+  }
+  let active = 0;
+  for (let index = 0; index < boundaries.length; index += 1) {
+    if (frame >= boundaries[index]) {
+      active = index;
+    }
+  }
+  return Math.min(active, boundaries.length - 1);
+};
+
+const ProviderChapterBridge: React.FC<{
+  data: Payload;
+  boundaries: number[];
+  total: number;
+  style: ReturnType<typeof normalizeStyle>;
+  audioPulse: number;
+}> = ({data, boundaries, total, style, audioPulse}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const sceneIndex = currentSceneIndex(frame, boundaries, total);
+  const scene = data.storyboard.scenes[sceneIndex] ?? data.storyboard.scenes[0];
+  if (!scene) {
+    return null;
+  }
+  const start = boundaries[sceneIndex] ?? 0;
+  const end = sceneIndex + 1 < boundaries.length ? boundaries[sceneIndex + 1] : total;
+  const localFrame = Math.max(0, frame - start);
+  const localProgress = Math.min(1, Math.max(0, localFrame / Math.max(1, end - start)));
+  const enter = spring({frame: localFrame, fps, config: {damping: 18, stiffness: 120}});
+  const exit = interpolate(localProgress, [0.84, 1], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const palette = ['#ffd60a', '#72e7ff', '#ff8a5b', '#9cffd0', '#c7a6ff'];
+  const accent = sceneIndex === 0 ? style.accent : palette[sceneIndex % palette.length];
+  const isVertical = data.height >= data.width;
+  const side = isVertical ? 34 : 52;
+  const heading = sceneText(scene.props, ['kicker', 'title', 'heading', 'label'], sceneTypeLabel(scene.type), 28);
+
+  return (
+    <AbsoluteFill style={{zIndex: 4, pointerEvents: 'none'}}>
+      <div style={{
+        position: 'absolute',
+        top: isVertical ? 42 : 34,
+        right: side,
+        width: isVertical ? 312 : 380,
+        minHeight: isVertical ? 58 : 54,
+        borderRadius: 18,
+        padding: '10px 14px',
+        background: 'rgba(12, 19, 30, 0.42)',
+        border: `1px solid ${accent}80`,
+        boxShadow: `0 16px 40px rgba(0,0,0,0.18), 0 0 ${10 + audioPulse * 10}px ${accent}26`,
+        opacity: enter * exit * 0.82,
+        transform: `translateY(${Math.round((1 - enter) * -14 + Math.sin(frame / 22) * 2)}px)`,
+      }}>
+        <div style={{display: 'grid', gridTemplateColumns: 'auto 1fr', alignItems: 'center', gap: 10}}>
+          <div style={{width: 34, height: 34, borderRadius: 999, background: accent, color: '#172235', display: 'grid', placeItems: 'center', fontSize: 15, fontWeight: 960}}>
+            {sceneIndex + 1}
+          </div>
+          <div style={{minWidth: 0}}>
+            <div style={{fontSize: 11, color: 'rgba(255,253,244,0.58)', fontWeight: 900, textTransform: 'uppercase'}}>
+              chapter / {data.storyboard.scenes.length}
+            </div>
+            <div style={{fontSize: 15, color: 'rgba(255,253,244,0.86)', fontWeight: 900, lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+              {heading}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        position: 'absolute',
+        left: side,
+        top: isVertical ? 172 : 116,
+        display: 'grid',
+        gridTemplateRows: `repeat(${data.storyboard.scenes.length}, 13px)`,
+        gap: 8,
+        opacity: 0.5,
+      }}>
+        {data.storyboard.scenes.map((item, index) => {
+          const hot = index === sceneIndex;
+          return (
+            <div key={`${item.type}-${index}`} style={{width: hot ? 28 : 12, height: 12, borderRadius: 999, background: hot ? accent : 'rgba(255,253,244,0.34)', transform: `scale(${hot ? 1 + audioPulse * 0.1 : 1})`}} />
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 const renderPlainSeries = (
   data: Payload,
   sceneFrames: number[],
@@ -298,7 +446,7 @@ const renderTransitionSeries = (
       children.push(
         <TransitionSeries.Transition
           key={`transition-${index}`}
-          presentation={fade({shouldFadeOutExitingScene: true})}
+          presentation={slide({direction: 'from-right'})}
           timing={linearTiming({durationInFrames: transitionFrames})}
         />,
       );
@@ -364,22 +512,17 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
     extrapolateRight: 'clamp',
   });
   const useAgentVisual = data.agentVisual?.enabled === true;
+  const isOverlay = useAgentVisual && data.agentVisual?.render_mode === 'overlay';
+  const showCinematicOverlay = !useAgentVisual && style.theme !== 'engineering';
+  const showProviderChapterBridge =
+    useAgentVisual &&
+    !isOverlay &&
+    data.agentVisual?.chapter_bridge === true;
 
   return (
     <AbsoluteFill className={canvasClassName(style, data.orientation)} style={canvasStyle}>
       <Audio src={audioSrc} />
-      {useAgentVisual ? (
-        <AgentVisualGenerated
-          audioPulse={audioPulse}
-          data={data}
-          durationInFrames={durationInFrames}
-          fps={fps}
-          frame={frame}
-          height={data.height}
-          progress={durationInFrames > 0 ? frame / durationInFrames : 0}
-          width={data.width}
-        />
-      ) : (
+      {(!useAgentVisual || isOverlay) && (
         <>
           <Background audioPulse={audioPulse} beam={style.chrome.beam} />
           {style.chrome.topbar ? <TopBar data={data} /> : null}
@@ -391,9 +534,31 @@ export const SearchpoRadar: React.FC<Partial<Payload>> = (props) => {
             : renderPlainSeries(data, sceneFrames, style, audioPulse)}
         </>
       )}
+      {useAgentVisual && (
+        <AgentVisualGenerated
+          audioPulse={audioPulse}
+          data={data}
+          durationInFrames={durationInFrames}
+          fps={fps}
+          frame={frame}
+          height={data.height}
+          progress={durationInFrames > 0 ? frame / durationInFrames : 0}
+          width={data.width}
+        />
+      )}
+      {showProviderChapterBridge ? (
+        <ProviderChapterBridge
+          audioPulse={audioPulse}
+          boundaries={boundaries}
+          data={data}
+          style={style}
+          total={durationInFrames}
+        />
+      ) : null}
 
-      <Captions segments={data.captions} />
       {!useAgentVisual && posterOpacity > 0 ? <AutoCoverPoster data={data} opacity={posterOpacity} /> : null}
+      {showCinematicOverlay ? <CinematicOverlay /> : null}
+      <Captions segments={data.captions} />
     </AbsoluteFill>
   );
 };

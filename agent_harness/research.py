@@ -9,10 +9,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 from agent_harness.core import utc_now, write_json
-from agent_harness.evidence import cross_check_evidence, extract_text, sha256_text
+from agent_harness.evidence import build_github_repo_context, cross_check_evidence, extract_text, sha256_text
 from agent_harness.policy import policy_format, policy_get
 from agent_harness.service_artifacts import (
     build_fact_bank_artifact,
@@ -215,6 +215,10 @@ def _topic_terms(candidate: dict[str, Any]) -> list[str]:
         "analysis",
         "and",
         "api",
+        "article",
+        "articles",
+        "blog",
+        "blogs",
         "com",
         "docs",
         "for",
@@ -222,6 +226,7 @@ def _topic_terms(candidate: dict[str, Any]) -> list[str]:
         "github",
         "http",
         "https",
+        "id",
         "into",
         "official",
         "org",
@@ -404,17 +409,32 @@ def _snippet(text: str, limit: int = 220) -> str:
     return compact[: limit - 1].rstrip() + "..."
 
 
+def _label_from_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host == "github.com" and len(parts) >= 2:
+        return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    query_id = (parse_qs(parsed.query).get("id") or [""])[0].strip()
+    if query_id and re.fullmatch(r"[A-Za-z0-9._-]{3,120}", query_id):
+        return query_id.replace("_", " ").strip()
+    if parts:
+        return parts[-1].replace("-", " ").replace("_", " ").strip() or host
+    return host
+
+
 def _topic_label(candidate: dict[str, Any]) -> str:
     title = str(candidate.get("title") or "").strip()
+    canonical_url = str(candidate.get("canonical_url") or "").strip()
     parsed = urlparse(title)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
-        parts = [part for part in parsed.path.split("/") if part]
         host = parsed.netloc.lower().removeprefix("www.")
-        if host == "github.com" and len(parts) >= 2:
-            return f"{parts[0]}/{parts[1].removesuffix('.git')}"
-        if parts:
-            return parts[-1].replace("-", " ").replace("_", " ").strip() or host
-        return host
+        canonical_label = _label_from_url(canonical_url)
+        if canonical_label and _normalize_url(title) != _normalize_url(canonical_url):
+            return canonical_label
+        return _label_from_url(title) or host
     return title or "Searchpo topic"
 
 
@@ -556,7 +576,9 @@ def _merge_research(
     supplemental: list[dict[str, Any]],
     fact_bank: dict[str, Any],
     research_brief: dict[str, Any],
+    research_supplemental: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    research_supplemental = research_supplemental if research_supplemental is not None else supplemental
     sources = [*(bundle.get("sources") or []), *supplemental]
     combined_text = "\n".join(str(source.get("excerpt") or source.get("json") or "") for source in sources)
     evidence_summary = dict(bundle.get("evidence_summary") or {})
@@ -591,8 +613,8 @@ def _merge_research(
     enriched["research"] = {
         "status": "pending_cross_check",
         "fact_bank_status": fact_bank.get("status") or "missing",
-        "supplemental_source_count": len(supplemental),
-        "independent_source_hosts": sorted({str(source.get("host") or "") for source in supplemental if source.get("host")}),
+        "supplemental_source_count": len(research_supplemental),
+        "independent_source_hosts": sorted({str(source.get("host") or "") for source in research_supplemental if source.get("host")}),
     }
     return enriched
 
@@ -672,6 +694,8 @@ def run_research_enrichment(
     url_selection = _select_urls(search_outputs, candidate, strategy)
     selected_urls = url_selection.selected_urls
     supplemental: list[dict[str, Any]] = []
+    anysearch_supplemental: list[dict[str, Any]] = []
+    repo_context: dict[str, Any] | None = None
     extract_errors: list[str] = []
     dropped_urls = list(url_selection.dropped_urls)
     for idx, url in enumerate(selected_urls, start=1):
@@ -705,17 +729,36 @@ def run_research_enrichment(
             )
             continue
         supplemental.append(artifact)
+        anysearch_supplemental.append(artifact)
+        if not repo_context and str(artifact.get("host") or "").lower() == "github.com":
+            repo_context = build_github_repo_context(url, timeout=timeout)
+            if repo_context:
+                for source in repo_context.get("sources") or []:
+                    if isinstance(source, dict):
+                        supplemental.append(source)
+
+    bundle_with_repo_context = dict(evidence_bundle)
+    if repo_context:
+        bundle_with_repo_context["repo_context"] = repo_context
 
     preliminary_bundle = _merge_research(
         candidate,
-        evidence_bundle,
+        bundle_with_repo_context,
         supplemental,
         {"source_backed_facts": []},
         {"angle": "", "visual_opportunities": []},
+        research_supplemental=anysearch_supplemental,
     )
     fact_bank = _fact_bank(candidate, preliminary_bundle, supplemental)
     research_brief = _research_brief(candidate, fact_bank, supplemental)
-    enriched_bundle = _merge_research(candidate, evidence_bundle, supplemental, fact_bank, research_brief)
+    enriched_bundle = _merge_research(
+        candidate,
+        bundle_with_repo_context,
+        supplemental,
+        fact_bank,
+        research_brief,
+        research_supplemental=anysearch_supplemental,
+    )
     review = _enriched_cross_check(candidate, enriched_bundle, fact_bank)
 
     research_record = {
@@ -729,9 +772,17 @@ def run_research_enrichment(
         "selected_urls": selected_urls,
         "dropped_urls": dropped_urls,
         "extract_errors": extract_errors,
-        "supplemental_source_count": len(supplemental),
-        "independent_source_hosts": sorted({str(source.get("host") or "") for source in supplemental if source.get("host")}),
+        "supplemental_source_count": len(anysearch_supplemental),
+        "independent_source_hosts": sorted({str(source.get("host") or "") for source in anysearch_supplemental if source.get("host")}),
+        "supporting_source_count": len(supplemental) - len(anysearch_supplemental),
         "commands": commands,
+        "repo_context": {
+            "status": (repo_context or {}).get("status"),
+            "repo": (repo_context or {}).get("repo"),
+            "fact_count": len((repo_context or {}).get("facts") or []),
+            "source_count": len((repo_context or {}).get("sources") or []),
+            "errors": (repo_context or {}).get("errors") or [],
+        } if repo_context else None,
         "status": "pass" if review.get("status") == "pass" else "fail",
     }
     strategy["candidate_url_count"] = len(url_selection.candidate_urls)
@@ -742,6 +793,8 @@ def run_research_enrichment(
     write_json(run_dir / "fact_bank.json", fact_bank)
     write_json(run_dir / "topic_brief.json", research_brief)
     write_json(run_dir / "research_brief.json", research_brief)
+    if repo_context:
+        write_json(run_dir / "repo_context.json", repo_context)
     write_source_map(run_dir, enriched_bundle)
     write_json(run_dir / "evidence_bundle.json", enriched_bundle)
     write_json(run_dir / "cross_check_review.json", review)

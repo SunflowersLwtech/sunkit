@@ -10,7 +10,18 @@ if [[ -z "$INPUT" || ! -f "$INPUT" ]]; then
   exit 1
 fi
 
-if ! command -v ffmpeg &>/dev/null; then
+FFMPEG_BIN="${FFMPEG_BIN:-}"
+if [[ -z "$FFMPEG_BIN" ]]; then
+  if command -v ffmpeg &>/dev/null; then
+    FFMPEG_BIN="$(command -v ffmpeg)"
+  elif [[ -x /opt/homebrew/bin/ffmpeg ]]; then
+    FFMPEG_BIN="/opt/homebrew/bin/ffmpeg"
+  elif [[ -x /usr/local/bin/ffmpeg ]]; then
+    FFMPEG_BIN="/usr/local/bin/ffmpeg"
+  fi
+fi
+
+if [[ -z "$FFMPEG_BIN" || ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg not found; audio normalization is required" >&2
   exit 1
 fi
@@ -51,7 +62,7 @@ if [[ "$TTS_VOLUME_GAIN_DB" != "0" && "$TTS_VOLUME_GAIN_DB" != "0.0" ]]; then
 fi
 FILTER_CHAIN="$(IFS=,; echo "${FILTERS[*]}")"
 
-ffmpeg -y -i "$INPUT" \
+"$FFMPEG_BIN" -y -i "$INPUT" \
   -af "$FILTER_CHAIN" \
   -ar "$TARGET_SAMPLE_RATE" -ac 1 -c:a pcm_s16le \
   "$OUTPUT" 2>/dev/null

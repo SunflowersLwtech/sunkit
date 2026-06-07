@@ -1,267 +1,160 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mxfile host="drawio" version="30.0.4">
   <diagram id="searchpo-main-agent-architecture" name="Main Agent Architecture">
-    <mxGraphModel dx="1860" dy="1420" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1450" math="0" shadow="0">
+    <mxGraphModel dx="1900" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1400" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="2" value="Searchpo Agent Runtime：三代理协作，以 searchpo-main-agent 为决策中心" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#1f2937;" vertex="1" parent="1">
-          <mxGeometry x="470" y="20" width="960" height="50" as="geometry" />
+        <mxCell id="2" value="Searchpo Ideal Agent Runtime" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=30;fontStyle=1;fontColor=#111827;" vertex="1" parent="1">
+          <mxGeometry x="490" y="24" width="920" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="A high-ambition planning agent delegates evidence discovery and execution, then verifies artifact truth before release." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#4b5563;" vertex="1" parent="1">
+          <mxGeometry x="470" y="70" width="960" height="30" as="geometry" />
         </mxCell>
 
-        <mxCell id="3" value="入口与桥接层" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="60" y="90" width="510" height="250" as="geometry" />
+        <mxCell id="10" value="1. Intent Intake" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#9ca3af;fontStyle=1;fontSize=15;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="150" width="350" height="300" as="geometry" />
         </mxCell>
-        <mxCell id="4" value="用户 / Operator&#xa;固定链接、主题、发布请求" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="3">
-          <mxGeometry x="30" y="52" width="160" height="66" as="geometry" />
+        <mxCell id="11" value="User gives a link, topic, or publish request" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9ca3af;fontSize=13;spacing=10;" vertex="1" parent="10">
+          <mxGeometry x="42" y="58" width="266" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="5" value="/searchpo-full-flow&#xa;commands/searchpo-full-flow.md" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="3">
-          <mxGeometry x="230" y="52" width="240" height="66" as="geometry" />
-        </mxCell>
-        <mxCell id="6" value="Bridge Metadata&#xa;tools/skill-bridge-map.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="3">
-          <mxGeometry x="30" y="148" width="200" height="72" as="geometry" />
-        </mxCell>
-        <mxCell id="7" value="Claude / Codex Mirrors&#xa;.claude/* .codex/* ~/.codex/*" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="3">
-          <mxGeometry x="270" y="148" width="200" height="72" as="geometry" />
+        <mxCell id="12" value="Main converts intent into a run-scoped objective, success bar, and side-effect tier" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9ca3af;fontSize=13;spacing=10;" vertex="1" parent="10">
+          <mxGeometry x="42" y="158" width="266" height="92" as="geometry" />
         </mxCell>
 
-        <mxCell id="8" value="选题与证据边界" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="620" y="90" width="560" height="250" as="geometry" />
+        <mxCell id="20" value="2. Main Agent: Task-Plan Owner" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontStyle=1;fontSize=15;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="520" y="130" width="860" height="380" as="geometry" />
         </mxCell>
-        <mxCell id="9" value="Source Input&#xa;daily radar / SEARCHPO_LINK / SEARCHPO_TOPIC_URL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="8">
-          <mxGeometry x="30" y="52" width="230" height="66" as="geometry" />
+        <mxCell id="21" value="&lt;b&gt;searchpo-main-agent&lt;/b&gt;&#xa;&#xa;Writes an ambitious task plan, not a checklist of scripts.&#xa;&#xa;Defines: topic angle, evidence bar, content depth, video ambition, release gates, and recovery path." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#2563eb;fontSize=15;fontStyle=1;spacing=14;" vertex="1" parent="20">
+          <mxGeometry x="40" y="62" width="350" height="210" as="geometry" />
         </mxCell>
-        <mxCell id="10" value="Canonical URL Detail&#xa;primary evidence + repo README/API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="8">
-          <mxGeometry x="300" y="52" width="230" height="66" as="geometry" />
+        <mxCell id="22" value="Planning Contract&#xa;&#xa;What must be true before copy, media, and publish may happen." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#60a5fa;fontSize=13;spacing=10;" vertex="1" parent="20">
+          <mxGeometry x="450" y="62" width="170" height="104" as="geometry" />
         </mxCell>
-        <mxCell id="11" value="Research + CrossCheck Gate&#xa;primary + 2 supplemental sources must pass" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="8">
-          <mxGeometry x="320" y="145" width="190" height="82" as="geometry" />
+        <mxCell id="23" value="Delegation Contract&#xa;&#xa;Who owns each task, what artifact proves completion, and which gate blocks progress." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#60a5fa;fontSize=13;spacing=10;" vertex="1" parent="20">
+          <mxGeometry x="650" y="62" width="170" height="132" as="geometry" />
         </mxCell>
-        <mxCell id="12" value="Research Artifacts&#xa;AnySearch + FactBank + TopicBrief" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="8">
-          <mxGeometry x="30" y="152" width="230" height="66" as="geometry" />
+        <mxCell id="24" value="Verification Contract&#xa;&#xa;Main decides pass/fail from run artifacts, not from agent claims." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#60a5fa;fontSize=13;spacing=10;" vertex="1" parent="20">
+          <mxGeometry x="450" y="216" width="170" height="104" as="geometry" />
         </mxCell>
-
-        <mxCell id="13" value="&lt;b&gt;searchpo-main-agent&lt;/b&gt;&#xa;Team lead / runtime orchestrator&#xa;&#xa;Owns main_task_plan.json&#xa;Assigns research + implementation tasks&#xa;Interprets release gates&#xa;Final publish / no-publish decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#1d4ed8;fontColor=#111827;fontSize=14;fontStyle=1;shadow=1;glass=0;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="720" y="430" width="460" height="220" as="geometry" />
-        </mxCell>
-        <mxCell id="72" value="&lt;b&gt;searchpo-research-agent&lt;/b&gt;&#xa;Research teammate&#xa;&#xa;Runs vendored AnySearch&#xa;Writes source_map / fact_bank / topic_brief&#xa;Strengthens cross_check_review.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#111827;fontSize=13;fontStyle=1;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="1290" y="360" width="390" height="150" as="geometry" />
-        </mxCell>
-        <mxCell id="14" value="&lt;b&gt;searchpo-impl-agent&lt;/b&gt;&#xa;Implementation teammate&#xa;&#xa;Runs scripts, providers, render, audit, upload/check&#xa;Returns exact artifacts + gate status&#xa;Never owns release decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#111827;fontSize=13;fontStyle=1;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="1290" y="540" width="390" height="160" as="geometry" />
+        <mxCell id="25" value="Recovery Contract&#xa;&#xa;Failed gates become targeted follow-up tasks, not silent fallbacks." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#60a5fa;fontSize=13;spacing=10;" vertex="1" parent="20">
+          <mxGeometry x="650" y="216" width="170" height="104" as="geometry" />
         </mxCell>
 
-        <mxCell id="15" value="策略、技能与合同边界" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="60" y="410" width="520" height="280" as="geometry" />
+        <mxCell id="30" value="3. Research Agent Boundary" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontStyle=1;fontSize=15;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="560" width="520" height="360" as="geometry" />
         </mxCell>
-        <mxCell id="16" value="skills/RESOLVER.md&#xa;routes to main / research / impl / remotion / check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12;" vertex="1" parent="15">
-          <mxGeometry x="30" y="52" width="215" height="70" as="geometry" />
+        <mxCell id="31" value="&lt;b&gt;searchpo-research-agent&lt;/b&gt;&#xa;&#xa;Owns source discovery and evidence sufficiency. It does not write publish copy, render media, or make release decisions." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#16a34a;fontSize=14;fontStyle=1;spacing=12;" vertex="1" parent="30">
+          <mxGeometry x="40" y="58" width="440" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="17" value="config/searchpo_policy.json&#xa;keywords, copy rules, scoring, prompts, quality gates" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12;" vertex="1" parent="15">
-          <mxGeometry x="275" y="52" width="215" height="70" as="geometry" />
+        <mxCell id="32" value="Canonical Boundary&#xa;primary URL, repo/API/README, official docs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#86efac;fontSize=13;spacing=8;" vertex="1" parent="30">
+          <mxGeometry x="40" y="202" width="130" height="86" as="geometry" />
         </mxCell>
-        <mxCell id="18" value="Storyboard Contract&#xa;agent_harness/storyboard.py&#xa;src/storyboard.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12;" vertex="1" parent="15">
-          <mxGeometry x="30" y="158" width="215" height="78" as="geometry" />
+        <mxCell id="33" value="Independent Search&#xa;AnySearch extracts, supplemental sources, contradictions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#86efac;fontSize=13;spacing=8;" vertex="1" parent="30">
+          <mxGeometry x="195" y="202" width="130" height="86" as="geometry" />
         </mxCell>
-        <mxCell id="19" value="Safety Rules&#xa;no mocks / no silent media&#xa;live upload requires explicit request&#xa;submitted is not success" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="15">
-          <mxGeometry x="275" y="158" width="215" height="78" as="geometry" />
-        </mxCell>
-
-        <mxCell id="20" value="实现与外部执行栈" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="1230" y="710" width="590" height="450" as="geometry" />
-        </mxCell>
-        <mxCell id="21" value="DeepSeek V4 Pro&#xa;scripts/deepseek_polish.py&#xa;script + scene plan + video_spec" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="30" y="52" width="245" height="68" as="geometry" />
-        </mxCell>
-        <mxCell id="22" value="Gemini 3.5 Flash&#xa;scripts/content_scorer.py&#xa;quality + groundedness" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="315" y="52" width="245" height="68" as="geometry" />
-        </mxCell>
-        <mxCell id="23" value="Gemini 3.1 Flash TTS&#xa;scripts/gemini_tts.py&#xa;voiceover + loudness" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="30" y="150" width="245" height="68" as="geometry" />
-        </mxCell>
-        <mxCell id="24" value="Remotion 4.0&#xa;src/storyboard.ts + scenes&#xa;cover + captions, 1080x1920 CRF 18" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="315" y="150" width="245" height="68" as="geometry" />
-        </mxCell>
-        <mxCell id="25" value="Video Quality Loop&#xa;deterministic + Gemini audits&#xa;captions / black / silence / contrast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="30" y="250" width="245" height="78" as="geometry" />
-        </mxCell>
-        <mxCell id="26" value="Douyin Adapter Gate&#xa;scripts/douyin_upload_check.sh&#xa;contract-check or live" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="315" y="250" width="245" height="78" as="geometry" />
-        </mxCell>
-        <mxCell id="27" value="runtime/social-auto-upload&#xa;runtime/live-upload.lock&#xa;live needs remote identity" style="rounded=1;dashed=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="315" y="358" width="245" height="66" as="geometry" />
-        </mxCell>
-        <mxCell id="28" value="Script Command Surface&#xa;npm run e2e:provider / lambda / live&#xa;stage scripts use runtime/latest_run.txt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="20">
-          <mxGeometry x="30" y="358" width="245" height="66" as="geometry" />
+        <mxCell id="34" value="Evidence Pack&#xa;facts, source map, topic brief, cross-check verdict" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#86efac;fontSize=13;spacing=8;" vertex="1" parent="30">
+          <mxGeometry x="350" y="202" width="130" height="86" as="geometry" />
         </mxCell>
 
-        <mxCell id="29" value="运行时事实与产物" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="640" y="720" width="530" height="450" as="geometry" />
+        <mxCell id="40" value="4. Implementation Agent Boundary" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#f97316;fontStyle=1;fontSize=15;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="560" width="620" height="360" as="geometry" />
         </mxCell>
-        <mxCell id="30" value="harness_board.sqlite3&#xa;stage tasks, events, gates" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;" vertex="1" parent="29">
-          <mxGeometry x="30" y="52" width="220" height="78" as="geometry" />
+        <mxCell id="41" value="&lt;b&gt;searchpo-impl-agent&lt;/b&gt;&#xa;&#xa;Owns provider calls, React/CSS authoring, Remotion execution, audits, and publish checks. It returns artifacts and gate status only." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f97316;fontSize=14;fontStyle=1;spacing=12;" vertex="1" parent="40">
+          <mxGeometry x="45" y="58" width="530" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="31" value="main_task_plan.json&#xa;agent_run.json&#xa;harness_state.json" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;" vertex="1" parent="29">
-          <mxGeometry x="282" y="52" width="210" height="78" as="geometry" />
+        <mxCell id="42" value="Content + Visual Generation&#xa;long-form script, custom React/CSS, storyboard intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#fdba74;fontSize=13;spacing=8;" vertex="1" parent="40">
+          <mxGeometry x="45" y="198" width="170" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="32" value="Research Evidence&#xa;anysearch_research.json&#xa;fact_bank / topic_brief / source_map&#xa;cross_check_review.json" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;" vertex="1" parent="29">
-          <mxGeometry x="30" y="162" width="220" height="80" as="geometry" />
+        <mxCell id="43" value="Execution Loop&#xa;TTS chunks, captions, render, repair, rerender" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#fdba74;fontSize=13;spacing=8;" vertex="1" parent="40">
+          <mxGeometry x="230" y="198" width="160" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="33" value="Render Payload&#xa;video_spec -> render_payload&#xa;validated storyboard&#xa;cards compatibility only" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;" vertex="1" parent="29">
-          <mxGeometry x="282" y="162" width="210" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="34" value="Publishable Media&#xa;video/final.mp4&#xa;cover/final.jpg" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;" vertex="1" parent="29">
-          <mxGeometry x="30" y="282" width="220" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="35" value="Final Truth&#xa;artifact_manifest.json&#xa;delivery_package.json&#xa;run_final.json written last" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;fontStyle=1;" vertex="1" parent="29">
-          <mxGeometry x="282" y="270" width="210" height="104" as="geometry" />
+        <mxCell id="44" value="Delivery Evidence&#xa;media identity, visual audits, publish-check evidence" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#fdba74;fontSize=13;spacing=8;" vertex="1" parent="40">
+          <mxGeometry x="405" y="198" width="170" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="36" value="执行档位与成功标准" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;container=1;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="520" y="1210" width="900" height="180" as="geometry" />
+        <mxCell id="50" value="Research Barrier" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=14;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="805" y="625" width="290" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="37" value="Contract&#xa;npm run e2e&#xa;no provider / media / publish" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12;" vertex="1" parent="36">
-          <mxGeometry x="30" y="58" width="190" height="84" as="geometry" />
+        <mxCell id="51" value="Implementation Loop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f97316;fontSize=14;fontStyle=1;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="780" y="800" width="340" height="92" as="geometry" />
         </mxCell>
-        <mxCell id="38" value="Provider&#xa;npm run e2e:provider&#xa;local final media + audits" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="36">
-          <mxGeometry x="250" y="58" width="190" height="84" as="geometry" />
-        </mxCell>
-        <mxCell id="39" value="Lambda&#xa;npm run e2e:lambda&#xa;Remotion Lambda/S3 render" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="36">
-          <mxGeometry x="470" y="58" width="190" height="84" as="geometry" />
-        </mxCell>
-        <mxCell id="40" value="Live&#xa;npm run e2e:live&#xa;remote Douyin identity verified&#xa;submitted alone fails" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;fontStyle=1;" vertex="1" parent="36">
-          <mxGeometry x="690" y="58" width="180" height="84" as="geometry" />
+        <mxCell id="52" value="Release Gate" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;fontSize=14;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="805" y="965" width="290" height="120" as="geometry" />
         </mxCell>
 
-        <mxCell id="41" value="request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="3" source="4" target="5">
+        <mxCell id="60" value="Runtime Memory + Artifact Truth" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;fontStyle=1;fontSize=15;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="610" y="1185" width="680" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="61" value="Task board + state" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#64748b;fontSize=13;" vertex="1" parent="60">
+          <mxGeometry x="40" y="50" width="145" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="62" value="Evidence pack" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#64748b;fontSize=13;" vertex="1" parent="60">
+          <mxGeometry x="205" y="50" width="145" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="63" value="Media + audit identity" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#64748b;fontSize=13;" vertex="1" parent="60">
+          <mxGeometry x="370" y="50" width="145" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="64" value="Final truth" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontSize=13;fontStyle=1;" vertex="1" parent="60">
+          <mxGeometry x="535" y="50" width="105" height="52" as="geometry" />
+        </mxCell>
+
+        <mxCell id="70" value="Target Behavior" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#111827;fontColor=#ffffff;fontSize=14;fontStyle=1;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="70" y="985" width="520" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="71" value="Main asks for a meaningful video, not a fixed template. Research proves what can be said. Impl chooses duration, orientation, custom animation, and execution strategy. Main releases only when evidence, media, and publish truth agree." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;fontColor=#ffffff;fontSize=14;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1030" width="480" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="80" value="Non-Goals / Hard Boundaries" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1f2;strokeColor=#e11d48;fontColor=#111827;fontSize=14;fontStyle=1;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="985" width="520" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="81" value="No mocks. No silent media. No fallback publish truth. No implementation before evidence sufficiency. No release decision by research or implementation agents." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#fda4af;fontColor=#111827;fontSize=14;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="1030" width="480" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="100" value="intent" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#64748b;endArrow=block;endFill=1;" edge="1" parent="1" source="12" target="21">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="42" value="sync" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="3" source="6" target="7">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="43" value="shared command surface" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.25;entryY=0;entryDx=0;entryDy=0;fontSize=11;" edge="1" parent="1" source="5" target="13">
+        <mxCell id="101" value="delegates source search" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#2563eb;endArrow=block;endFill=1;" edge="1" parent="1" source="21" target="31">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="410" y="380" />
-              <mxPoint x="835" y="380" />
+              <mxPoint x="380" y="400" />
+              <mxPoint x="330" y="400" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="44" value="agent / skill definitions available to runtime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.25;fontSize=11;" edge="1" parent="1" source="7" target="13">
+        <mxCell id="102" value="evidence pack" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#16a34a;endArrow=block;endFill=1;" edge="1" parent="1" source="34" target="50">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="103" value="barrier verdict" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#d97706;endArrow=block;endFill=1;" edge="1" parent="1" source="50" target="21">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="610" y="275" />
-              <mxPoint x="680" y="485" />
+              <mxPoint x="950" y="585" />
+              <mxPoint x="730" y="585" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="45" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="8" source="9" target="10">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="46" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="8" source="10" target="11">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="47" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;fontSize=11;" edge="1" parent="8" source="11" target="12">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="48" value="passed evidence boundary" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="1" source="11" target="13">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="49" value="routing" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.25;entryX=0;entryY=0.55;fontSize=11;" edge="1" parent="1" source="16" target="13">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="50" value="policy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.75;fontSize=11;" edge="1" parent="1" source="17" target="13">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="73" value="assign research" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.2;entryX=0;entryY=0.45;fontSize=12;fontStyle=1;strokeColor=#1d4ed8;" edge="1" parent="1" source="13" target="72">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="74" value="source artifacts + gate status" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.8;entryX=1;entryY=0.6;fontSize=11;strokeColor=#82b366;" edge="1" parent="1" source="72" target="13">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="75" value="writes research truth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;entryX=0.5;entryY=0;fontSize=11;strokeColor=#82b366;" edge="1" parent="1" source="72" target="32">
+        <mxCell id="104" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#2563eb;endArrow=block;endFill=1;" edge="1" parent="1" source="21" target="41">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="1210" y="475" />
-              <mxPoint x="1210" y="690" />
-              <mxPoint x="750" y="690" />
+              <mxPoint x="1160" y="350" />
+              <mxPoint x="1555" y="350" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="51" value="assign implementation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;fontSize=12;fontStyle=1;strokeColor=#1d4ed8;" edge="1" parent="1" source="13" target="14">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="52" value="artifacts + gate status" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;entryX=1;entryY=0.75;fontSize=12;strokeColor=#82b366;" edge="1" parent="1" source="14" target="13">
+        <mxCell id="106" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#f97316;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="51" target="41">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="1235" y="690" />
-              <mxPoint x="1180" y="595" />
+              <mxPoint x="1230" y="846" />
+              <mxPoint x="1230" y="615" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="53" value="executes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=1;entryY=0.5;fontSize=11;" edge="1" parent="1" source="14" target="28">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1760" y="620" />
-              <mxPoint x="1760" y="1100" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="54" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="20" source="21" target="22">
+        <mxCell id="107" value="verified media + audits" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#f97316;endArrow=block;endFill=1;" edge="1" parent="1" source="51" target="52">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="55" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="20" source="22" target="23">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="438" y="135" />
-              <mxPoint x="153" y="135" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="56" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="20" source="23" target="24">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="59" value="live only after explicit request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="20" source="26" target="27">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="60" value="plan + board state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;strokeColor=#1d4ed8;" edge="1" parent="1" source="13" target="31">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="62" value="validated storyboard contract" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=11;" edge="1" parent="1" source="18" target="33">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="63" value="bind final media" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.4;entryX=1;entryY=0.4;fontSize=11;" edge="1" parent="1" source="24" target="34">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="64" value="audit + publish artifacts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=1;entryX=1;entryY=0.9;fontSize=11;" edge="1" parent="1" source="26" target="35">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1545" y="1050" />
-              <mxPoint x="1132" y="1050" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="65" value="verify final truth before decision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;entryX=0.7;entryY=1;fontSize=11;strokeColor=#d6b656;fontStyle=1;" edge="1" parent="1" source="35" target="13">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1027" y="700" />
-              <mxPoint x="1042" y="700" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="66" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="1" source="35" target="38">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="67" value="no final media" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;dashed=1;" edge="1" parent="1" source="32" target="37">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="68" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;" edge="1" parent="1" source="34" target="39">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="69" value="post_publish_verification.json" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;strokeColor=#b85450;fontStyle=1;" edge="1" parent="1" source="27" target="40">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="71" value="hard stop rules" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0.15;entryY=1;fontSize=11;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="19" target="13">
+        <mxCell id="108" value="release / no-release decision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;strokeColor=#dc2626;endArrow=block;endFill=1;" edge="1" parent="1" source="52" target="64">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
       </root>

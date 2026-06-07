@@ -37,6 +37,7 @@ DISMISSIVE_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?:需要|需|要)验证可用性"), "需要看清可用条件"),
     (re.compile(r"(?:需要|需|要)验证效果"), "需要用可观察指标判断效果"),
     (re.compile(r"(?:需要|需|要)验证结果"), "需要用可观察指标判断结果"),
+    (re.compile(r"(?:需要|需|要)验证"), "需要按证据边界判断"),
     (re.compile(r"需要自己去试"), "需要按适用场景评估"),
     (re.compile(r"verify it yourself", re.I), "use the evaluation framework"),
     (re.compile(r"you verify it yourself", re.I), "use the evaluation framework"),

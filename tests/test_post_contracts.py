@@ -7,7 +7,15 @@ from pathlib import Path
 
 from agent_harness.douyin_distribution import evaluate_douyin_distribution_gate
 from agent_harness.evidence import build_evidence_bundle, cross_check_evidence, http_source_url
-from agent_harness.stages import build_claims_ledger, build_douyin_copy, build_main_task_plan, build_video_payload, public_content_preflight_text, write_post_artifacts
+from agent_harness.stages import (
+    _public_candidate_title,
+    build_claims_ledger,
+    build_douyin_copy,
+    build_main_task_plan,
+    build_video_payload,
+    public_content_preflight_text,
+    write_post_artifacts,
+)
 from scripts.content_scorer import deterministic_blocking_checks
 
 
@@ -16,7 +24,7 @@ AGENT_VISUAL = {
     "render_mode": "full_canvas",
     "description": "定制 Remotion 视觉",
     "component_code": "  return <AbsoluteFill className=\"agent-demo\"><div>{data.displayTitle}</div></AbsoluteFill>;",
-    "css": ".agent-demo { background: #070a10; color: #fffdf4; }",
+    "css": ".agent-demo { background: #18466a; color: #fffdf4; }",
 }
 
 STORYBOARD = {
@@ -155,15 +163,18 @@ class PostContractTests(unittest.TestCase):
                 "select_candidate",
                 "subject_detail_fetch",
                 "research_enrichment",
-                "cross_check",
+                "research_barrier",
+                "content_plan",
                 "publish_package",
                 "content_preflight",
             ],
         )
         provider_tasks = {task["id"]: task for task in build_main_task_plan(candidate, include_providers=True)["ordered_tasks"]}
         self.assertEqual(provider_tasks["research_enrichment"]["owner"], "searchpo-research-agent")
+        self.assertEqual(provider_tasks["research_barrier"]["owner"], "searchpo-main-agent")
+        self.assertEqual(provider_tasks["content_improvement_loop"]["owner"], "searchpo-impl-agent")
         self.assertIn("content_improvement_loop", provider_task_ids)
-        self.assertIn("remotion_render_payload", provider_task_ids)
+        self.assertIn("render_payload", provider_task_ids)
         self.assertIn("final_verification", provider_task_ids)
         self.assertNotIn("remotion_render", contract_task_ids)
 
@@ -231,6 +242,28 @@ class PostContractTests(unittest.TestCase):
         self.assertNotIn("https://", public_text)
         self.assertNotIn("github.com", public_text)
         self.assertNotIn("operator_topic", public_text)
+
+    def test_social_topic_uses_canonical_label_for_candidate_boundary(self) -> None:
+        candidate = {
+            "candidate_id": "topic-1",
+            "input_mode": "operator_topic",
+            "selection_source": "operator_topic",
+            "title": "https://x.com/omarsar0/status/2058208914148389083?s=46",
+            "canonical_url": "https://github.com/D4Vinci/Scrapling",
+        }
+
+        self.assertEqual(_public_candidate_title(candidate), "D4Vinci/Scrapling")
+
+    def test_operator_blog_url_uses_query_id_for_candidate_boundary(self) -> None:
+        candidate = {
+            "candidate_id": "topic-1",
+            "input_mode": "operator_topic",
+            "selection_source": "operator_topic",
+            "title": "https://qwen.ai/blog?id=qwen3.7-plus",
+            "canonical_url": "https://qwen.ai/blog?id=qwen3.7-plus",
+        }
+
+        self.assertEqual(_public_candidate_title(candidate), "qwen3.7 plus")
 
     def test_daily_radar_uses_public_source_label(self) -> None:
         candidate = {
@@ -388,6 +421,46 @@ class PostContractTests(unittest.TestCase):
 
         self.assertEqual(review["status"], "pass")
         self.assertTrue(review["checks"]["no_external_redirect_guidance"])
+
+    def test_public_preflight_ignores_provider_metadata_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            post_dir = Path(tmp) / "post"
+            post_dir.mkdir()
+            (post_dir / "douyin_desc.txt").write_text("Demo Tool 只按来源边界观察。", encoding="utf-8")
+            text = public_content_preflight_text(
+                {"voiceoverText": "Demo Tool 是一个待验证观察稿。"},
+                {
+                    "polished_title": "Demo Tool 观察",
+                    "voiceover_text": "Demo Tool 先看证据边界。",
+                    "initial_error": "DeepSeek candidate contains unsupported claim terms: ['第一']",
+                },
+                post_dir,
+            )
+
+        self.assertNotIn("第一", text)
+        self.assertIn("Demo Tool", text)
+
+    def test_public_preflight_includes_agent_visual_visible_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            post_dir = Path(tmp) / "post"
+            post_dir.mkdir()
+            (post_dir / "douyin_desc.txt").write_text("Demo Tool 只按来源边界观察。", encoding="utf-8")
+            text = public_content_preflight_text(
+                {
+                    "voiceoverText": "Demo Tool 是一个待验证观察稿。",
+                    "orientation": "vertical",
+                    "agentVisual": {
+                        "enabled": True,
+                        "render_mode": "full_canvas",
+                        "description": "Demo Tool 来源层可视化",
+                        "visible_text": ["VISIBLE_AGENT_VISUAL_CLAIM"],
+                    },
+                },
+                {},
+                post_dir,
+            )
+
+        self.assertIn("VISIBLE_AGENT_VISUAL_CLAIM", text)
 
     def test_content_scorer_blocks_candidate_mismatch_and_generic_hook(self) -> None:
         checks = deterministic_blocking_checks(

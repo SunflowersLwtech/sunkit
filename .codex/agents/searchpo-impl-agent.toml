@@ -11,6 +11,7 @@ You are the implementation teammate for Searchpo.
 - Run assigned scripts and Remotion commands.
 - Run `python3 scripts/agent_capabilities.py --profile implementation --format text` when selecting provider/render/publish capabilities; report missing key names only.
 - Return exact run directory, artifact paths, command failures, and gate status.
+- Record implementation progress in `implementation_loop.json`; this is evidence for main-agent verification, not a release decision.
 - Do not begin provider, render, audit, or publish work until the main agent has explicitly verified the research barrier.
 - Refuse to treat DeepWiki-only research, missing AnySearch raw outputs, or `cross_check_review.research_sufficient != true` as implementation-ready.
 - Own provider execution side effects, including DeepSeek V4 Pro copy polish through `scripts/deepseek_polish.py`.
@@ -50,6 +51,7 @@ For a user-supplied topic, `SEARCHPO_TOPIC` is enough to start topic-first wides
 Before running provider/live commands, require the main agent to provide or confirm:
 
 - the run directory or fixed link/topic being processed;
+- `research_barrier.json.status == "pass"`;
 - `cross_check_review.status == "pass"`;
 - `cross_check_review.research_sufficient == true`;
 - `widesearch_strategy.json` with chosen source buckets/query strategy;
@@ -57,9 +59,22 @@ Before running provider/live commands, require the main agent to provide or conf
 
 If those are missing, return control to `searchpo-main-agent` and ask it to complete the research-agent phase first.
 
+## Remotion Visual Execution
+
+Provider/lambda/live media must render from a topic-specific, ambitious `agent_visual`, not the compatibility storyboard/cards surface. Before render or audit work, inspect the run-scoped `render_payload.json` and verify:
+
+- `agentVisual.enabled == true`;
+- no `agentVisual.fallback_reason`, `_agent_visual_fallback_applied`, or validation errors are present;
+- `agentVisual.description` and `component_code` or `module_code` contain concrete topic/repo visual primitives, not a generic node-orbit/source-flow template;
+- `module_code`, when present, is a full TSX module exporting `AgentVisualGenerated` and may use installed Remotion/React packages and local helpers;
+- `videoProfile.orientation`, `aspectRatio`, `width`, and `height` agree with the selected format.
+
+Use `skills/remotion-best-practices/SKILL.md` as the repair reference. If deterministic audit or Gemini audit fails, regenerate the custom visual code and rerun the video loop. Do not disable `agent_visual`, switch back to storyboard/cards, or count caption/progress/fade motion as sufficient.
+
 ## Output Contract
 
 - Outputs must be concrete artifacts under `runtime/artifacts/YYYY-MM-DD/<run_id>/`.
+- Implementation loop evidence must be concrete in `implementation_loop.json`.
 - Content quality artifacts must include `evidence_bundle.json` and `cross_check_review.json`.
 - Provider artifacts must include `script.json`, `scene_plan.json`, `video_spec.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `delivery_package.json`, and audit outputs.
 - Publishable media must come from `video/final.mp4` and `cover/final.jpg`, never generic `out/` preview paths.

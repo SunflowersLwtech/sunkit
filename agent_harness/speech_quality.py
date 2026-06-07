@@ -11,12 +11,20 @@ from agent_harness.subjects import is_operator_topic
 
 REPO_SLUG_RE = re.compile(r"(?<![\w:/.@-])([A-Za-z0-9_.-]{2,})/([A-Za-z0-9_.-]{2,})(?![\w/.-])")
 URL_RE = re.compile(r"https?://[^\s，。！？；;]+", re.I)
+DOMAIN_RE = re.compile(r"(?<![A-Za-z0-9_@:/.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9_@/.-])")
 RAW_SLASH_RE = re.compile(r"\b[A-Za-z0-9_.-]{2,}/[A-Za-z0-9_.-]{2,}\b")
+CODE_PATH_RE = re.compile(r"(?<![\w@:/.-])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.(?:py|ts|tsx|js|mdx|md|json|yaml|yml))(?![\w/.-])")
+CODE_FILE_RE = re.compile(r"(?<![\w@:/.-])([A-Za-z_][A-Za-z0-9_]*\.(?:py|ts|tsx|js|mdx|md|json|yaml|yml))(?![\w/.-])")
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 SPOKEN_TOKEN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaffA-Za-z0-9]")
 SNAKE_CASE_INTERNAL_RE = re.compile(r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+)+\b")
 CLOSING_PUNCTUATION = set("/|,，;；。.!?！？:：)]}）】》”’、")
 OPENING_PUNCTUATION = set("([{（【《“‘")
+SNAKE_CASE_SPEECH_REPLACEMENTS = {
+    "user_id": "用户 ID",
+    "agent_id": "Agent ID",
+    "run_id": "运行 ID",
+}
 
 
 def bounded_text(value: Any, limit: int) -> str:
@@ -34,6 +42,43 @@ def normalize_repo_slashes_for_speech(text: str) -> str:
     return REPO_SLUG_RE.sub(repl, text)
 
 
+def _naturalize_code_file(value: str) -> str:
+    file_name = value.rsplit("/", 1)[-1]
+    stem, _, ext = file_name.rpartition(".")
+    stem = stem or file_name
+    if stem == "__init__":
+        stem_text = "初始化"
+    else:
+        stem_text = stem.replace("_", " ")
+    ext_text = {
+        "py": "Python 文件",
+        "ts": "TypeScript 文件",
+        "tsx": "TSX 文件",
+        "js": "JavaScript 文件",
+        "mdx": "MDX 文档",
+        "md": "Markdown 文档",
+        "json": "JSON 文件",
+        "yaml": "YAML 文件",
+        "yml": "YAML 文件",
+    }.get(ext.lower(), "文件")
+    return f"{stem_text} {ext_text}"
+
+
+def normalize_code_paths_for_speech(text: str) -> str:
+    def path_repl(match: re.Match[str]) -> str:
+        path = match.group(1)
+        parts = path.split("/")
+        folders = [part.replace("_", " ") for part in parts[:-1] if part]
+        file_text = _naturalize_code_file(parts[-1])
+        if not folders:
+            return file_text
+        return " 的 ".join(folders) + f" 里的 {file_text}"
+
+    clean = CODE_PATH_RE.sub(path_repl, text)
+    clean = CODE_FILE_RE.sub(lambda match: _naturalize_code_file(match.group(1)), clean)
+    return clean
+
+
 def normalize_voiceover_text(text: str) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
 
@@ -44,7 +89,11 @@ def normalize_voiceover_text(text: str) -> str:
         return "输入输出"
 
     clean = re.sub(r"(?<![A-Za-z])I\s*[/，,／]\s*O(?![A-Za-z])", normalize_io, clean, flags=re.I)
+    clean = normalize_code_paths_for_speech(clean)
+    for token, replacement in SNAKE_CASE_SPEECH_REPLACEMENTS.items():
+        clean = re.sub(rf"\b{re.escape(token)}\b", replacement, clean, flags=re.I)
     clean = URL_RE.sub(lambda m: m.group(0).replace("https://", "").replace("http://", "").replace("/", " 的 "), clean)
+    clean = DOMAIN_RE.sub(lambda m: " 点 ".join(part for part in m.group(0).split(".") if part), clean)
     clean = normalize_repo_slashes_for_speech(clean)
     clean = re.sub(r"(?<=\w)\.sh\b", " shell 脚本", clean)
     clean = clean.replace("@", " at ")
@@ -68,7 +117,7 @@ def chinese_ratio(text: str) -> float:
 
 def has_raw_speech_symbols(text: str) -> bool:
     lowered = str(text or "").lower()
-    return bool(RAW_SLASH_RE.search(lowered) or URL_RE.search(lowered) or " slash " in f" {lowered} ")
+    return bool(RAW_SLASH_RE.search(lowered) or URL_RE.search(lowered) or DOMAIN_RE.search(lowered) or " slash " in f" {lowered} ")
 
 
 def evidence_level_for_candidate(candidate: dict[str, Any]) -> str:
@@ -257,7 +306,8 @@ def evaluate_quality_gate(
     for card in render_payload.get("cards") or []:
         public_fields.extend([card.get("label"), card.get("value"), card.get("detail")])
     public_fields.extend(storyboard_text_items(render_payload.get("storyboard")))
-    public_fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")))
+    orientation = render_payload.get("orientation") or "vertical"
+    public_fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual"), orientation))
     public_text = " ".join(str(item or "") for item in public_fields)
     combined_text = f"{public_text} {voiceover}"
 

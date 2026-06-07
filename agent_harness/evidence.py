@@ -134,6 +134,187 @@ def http_source_url(candidate: dict[str, Any]) -> str:
     return url
 
 
+def _qwen_blog_article_path(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc.lower().removeprefix("www.") != "qwen.ai" or parsed.path.rstrip("/") != "/blog":
+        return ""
+    path = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", path):
+        return ""
+    return path
+
+
+def _qwen_blog_api_url(path: str) -> str:
+    return "https://qwen.ai/api/v2/article/?" + urllib.parse.urlencode(
+        {"language": "en-US", "path": path, "type": "qwen_ai"}
+    )
+
+
+def _qwen_blog_source_artifact(source_id: str, fetched: dict[str, Any], canonical_url: str) -> dict[str, Any]:
+    raw_text = str(fetched.get("text") or "")
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Qwen article API returned invalid JSON") from exc
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    content = str(data.get("content") or "")
+    extracted = extract_text(content, "text/html")
+    text = extracted["text"]
+    title = str(data.get("title") or extracted["title"] or "").strip()
+    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    description = str(extra.get("description") or extracted["description"] or "").strip()
+    if not text and description:
+        text = description
+    if not title:
+        raise RuntimeError("Qwen article API response missing article title")
+    if not text:
+        raise RuntimeError("Qwen article API response missing article content")
+    return {
+        "id": source_id,
+        "type": "qwen_blog_api",
+        "url": canonical_url,
+        "api_url": fetched.get("url"),
+        "status": fetched.get("status"),
+        "content_type": fetched.get("content_type"),
+        "sha256": fetched.get("sha256"),
+        "title": title,
+        "description": description,
+        "text_chars": len(text),
+        "excerpt": text[:2500],
+        "json": {
+            "success": payload.get("success"),
+            "request_id": payload.get("request_id"),
+            "id": data.get("id"),
+            "type": data.get("type"),
+            "title": title,
+            "extra": extra,
+            "content_sha256": sha256_text(content),
+        },
+        "captured_at": utc_now(),
+    }
+
+
+def _fetch_qwen_blog_source(url: str, fetcher: FetchFn, timeout: float) -> dict[str, Any] | None:
+    path = _qwen_blog_article_path(url)
+    if not path:
+        return None
+    fetched = fetcher(_qwen_blog_api_url(path), {"Accept": "application/json"}, timeout)
+    return _qwen_blog_source_artifact("primary_url", fetched, url)
+
+
+def x_status_id(url: str) -> str | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc.lower() not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    for index, part in enumerate(parts):
+        if part == "status" and index + 1 < len(parts):
+            status_id = parts[index + 1]
+            if re.fullmatch(r"\d{6,30}", status_id):
+                return status_id
+    return None
+
+
+def _x_api_url(status_id: str) -> str:
+    params = urllib.parse.urlencode(
+        {
+            "tweet.fields": "author_id,created_at,public_metrics,entities,attachments,conversation_id,possibly_sensitive,lang,note_tweet",
+            "expansions": "author_id,attachments.media_keys",
+            "user.fields": "username,name,verified,description,public_metrics",
+            "media.fields": "url,width,height,type",
+        }
+    )
+    return f"https://api.twitter.com/2/tweets/{status_id}?{params}"
+
+
+def _x_bearer_token() -> str:
+    return _env_value("X_BEARER_TOKEN") or _env_value("TWITTER_BEARER_TOKEN")
+
+
+def _x_expanded_urls(tweet: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    entity_sets = [
+        ((tweet.get("entities") or {}).get("urls") or []),
+        (((tweet.get("note_tweet") or {}).get("entities") or {}).get("urls") or []),
+    ]
+    for items in entity_sets:
+        for item in items:
+            expanded = str(item.get("expanded_url") or item.get("url") or "").strip()
+            if expanded:
+                urls.append(expanded)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in urls:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
+
+
+def _x_media_urls(payload: dict[str, Any]) -> list[str]:
+    media = ((payload.get("includes") or {}).get("media") or [])
+    return [str(item.get("url") or "").strip() for item in media if str(item.get("url") or "").strip()]
+
+
+def _x_author(payload: dict[str, Any]) -> dict[str, Any]:
+    users = ((payload.get("includes") or {}).get("users") or [])
+    return users[0] if users and isinstance(users[0], dict) else {}
+
+
+def _x_source_artifact(source_id: str, fetched: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    raw_text = str(fetched.get("text") or "")
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("X status API returned invalid JSON") from exc
+    tweet = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    if not tweet:
+        raise RuntimeError("X status API response missing data")
+    author = _x_author(payload)
+    username = str(author.get("username") or "").strip()
+    display_name = str(author.get("name") or "").strip()
+    note_text = str(((tweet.get("note_tweet") or {}).get("text") or tweet.get("text") or "")).strip()
+    expanded_urls = _x_expanded_urls(tweet)
+    media_urls = _x_media_urls(payload)
+    lines = [
+        f"X status by @{username} ({display_name})" if username or display_name else "X status",
+        f"Created at: {tweet.get('created_at')}" if tweet.get("created_at") else "",
+        note_text,
+        "Expanded URLs: " + ", ".join(expanded_urls) if expanded_urls else "",
+        "Media URLs: " + ", ".join(media_urls) if media_urls else "",
+    ]
+    excerpt = "\n".join(line for line in lines if line).strip()
+    title = str(candidate.get("title") or "").strip() or (f"X status by @{username}" if username else "X status")
+    return {
+        "id": source_id,
+        "type": "x_status_api",
+        "url": str(candidate.get("canonical_url") or fetched.get("url") or ""),
+        "status": fetched.get("status"),
+        "content_type": fetched.get("content_type"),
+        "sha256": fetched.get("sha256"),
+        "title": title,
+        "description": note_text[:420],
+        "text_chars": len(excerpt),
+        "excerpt": excerpt[:2500],
+        "json": payload,
+        "captured_at": utc_now(),
+    }
+
+
+def _fetch_x_status_source(url: str, candidate: dict[str, Any], fetcher: FetchFn, timeout: float) -> tuple[dict[str, Any], list[str]] | None:
+    status_id = x_status_id(url)
+    if not status_id:
+        return None
+    token = _x_bearer_token()
+    if not token:
+        raise RuntimeError("X status URL requires X_BEARER_TOKEN or TWITTER_BEARER_TOKEN for primary evidence fetch")
+    fetched = fetcher(_x_api_url(status_id), {"Authorization": f"Bearer {token}", "Accept": "application/json"}, timeout)
+    source = _x_source_artifact("primary_url", fetched, candidate)
+    expanded_urls = _x_expanded_urls(source["json"].get("data") or {})
+    expanded_urls.extend(_x_media_urls(source["json"]))
+    return source, expanded_urls
+
+
 def _is_operator_topic_seed(candidate: dict[str, Any]) -> bool:
     manual_scheme = str(policy_get("subject_inputs.operator_topic.manual_url_scheme", "manual-topic://"))
     url = str(candidate.get("canonical_url") or "")
@@ -259,6 +440,179 @@ def _repo_facts(repo_json: dict[str, Any]) -> list[str]:
     return facts
 
 
+def _repo_context_fact_from_source(path: str, text: str) -> list[str]:
+    facts: list[str] = []
+    compact = re.sub(r"\s+", " ", text).strip()
+    if not compact:
+        return facts
+    if path.endswith("__init__.py"):
+        exported = sorted(set(re.findall(r"\b(MemoryClient|AsyncMemoryClient|Memory|AsyncMemory)\b", text)))
+        if exported:
+            facts.append(f"{path} exports API surface: {', '.join(exported)}")
+    if path.endswith("memory/main.py"):
+        if re.search(r"class\s+Memory\b", text):
+            facts.append(f"{path} defines the core Memory engine")
+        if "vector_store" in text and "embedder" in text and "llm" in text:
+            facts.append(f"{path} wires embedder, vector store, LLM, history, and optional reranking components")
+        if re.search(r"def\s+add\b", text) and re.search(r"def\s+search\b", text):
+            facts.append(f"{path} contains add/search flows for writing and retrieving memories")
+        if all(token in text for token in ["user_id", "agent_id", "run_id"]):
+            facts.append(f"{path} scopes memory operations by user_id, agent_id, or run_id")
+    if path.endswith("utils/factory.py"):
+        providers = [
+            item
+            for item in ["qdrant", "chroma", "pgvector", "milvus", "pinecone", "redis", "elasticsearch", "supabase", "weaviate", "faiss"]
+            if re.search(rf"['\"]{re.escape(item)}['\"]", text, re.I)
+        ]
+        if providers:
+            facts.append(f"{path} exposes vector-store/provider factory options: {', '.join(providers[:10])}")
+    if path.endswith("server/main.py"):
+        routes = sorted(set(re.findall(r"@app\.(?:get|post|put|delete)\(\s*['\"]([^'\"]+)['\"]", text)))
+        if routes:
+            facts.append(f"{path} exposes REST routes including {', '.join(routes[:8])}")
+    if path.endswith("open-source/overview.mdx") and ("library" in compact.lower() or "self-host" in compact.lower()):
+        facts.append(f"{path} documents open-source deployment modes and control boundaries")
+    return facts
+
+
+def build_github_repo_context(
+    url: str,
+    *,
+    fetcher: FetchFn = fetch_url,
+    timeout: float = 25.0,
+    source_id_prefix: str = "github_repo_context",
+) -> dict[str, Any] | None:
+    repo = github_repo(url)
+    if not repo:
+        return None
+    owner, name = repo
+    sources: list[dict[str, Any]] = []
+    facts: list[str] = []
+    errors: list[str] = []
+
+    def fetch_source(source_id: str, source_type: str, source_url: str, headers: dict[str, str] | None, *, json_source: bool = False) -> dict[str, Any] | None:
+        try:
+            fetched = fetcher(source_url, headers, timeout)
+            return _json_source_artifact(source_id, source_type, fetched) if json_source else _source_artifact(source_id, source_type, fetched)
+        except Exception as exc:
+            errors.append(f"{source_id}: {exc}")
+            return None
+
+    repo_source = fetch_source(
+        f"{source_id_prefix}_api",
+        "github_repo_api",
+        f"https://api.github.com/repos/{owner}/{name}",
+        {"Accept": "application/vnd.github+json"},
+        json_source=True,
+    )
+    default_branch = "main"
+    if repo_source:
+        sources.append(repo_source)
+        repo_json = repo_source.get("json") or {}
+        default_branch = str(repo_json.get("default_branch") or default_branch)
+        facts.extend(_repo_facts(repo_json))
+
+    readme_source = fetch_source(
+        f"{source_id_prefix}_readme",
+        "github_readme",
+        f"https://api.github.com/repos/{owner}/{name}/readme",
+        {"Accept": "application/vnd.github.raw"},
+    )
+    if readme_source:
+        sources.append(readme_source)
+        excerpt = str(readme_source.get("excerpt") or "")
+        title = readme_source.get("title") or f"{owner}/{name} README"
+        facts.append(f"README: {title or excerpt[:140]}")
+
+    contents_source = fetch_source(
+        f"{source_id_prefix}_root_contents",
+        "github_root_contents",
+        f"https://api.github.com/repos/{owner}/{name}/contents?ref={default_branch}",
+        {"Accept": "application/vnd.github+json"},
+        json_source=True,
+    )
+    if contents_source:
+        sources.append(contents_source)
+        items = contents_source.get("json") or []
+        if isinstance(items, list):
+            names = [str(item.get("name")) for item in items if isinstance(item, dict) and item.get("name")]
+            if names:
+                preferred = [
+                    "mem0",
+                    "mem0-ts",
+                    "server",
+                    "openmemory",
+                    "evaluation",
+                    "examples",
+                    "docs",
+                    "cookbooks",
+                    "tests",
+                    "cli",
+                ]
+                ordered = [name for name in preferred if name in names]
+                ordered.extend(name for name in names if name not in ordered)
+                facts.append(f"repo root includes: {', '.join(ordered[:12])}")
+
+    candidate_paths = [
+        f"{name}/__init__.py",
+        f"{name}/memory/main.py",
+        f"{name}/utils/factory.py",
+        "server/main.py",
+        "docs/open-source/overview.mdx",
+    ]
+    def fetch_raw_file_source(source_id: str, path: str) -> tuple[dict[str, Any], str] | None:
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{name}/{default_branch}/{urllib.parse.quote(path, safe='/')}"
+        try:
+            fetched = fetcher(raw_url, {"Accept": "text/plain,*/*;q=0.1"}, timeout)
+            return _source_artifact(source_id, "github_source_file", fetched), str(fetched.get("text") or "")
+        except Exception as raw_exc:
+            try:
+                api_url = f"https://api.github.com/repos/{owner}/{name}/contents/{path}?ref={default_branch}"
+                fetched = fetcher(api_url, {"Accept": "application/vnd.github.raw"}, timeout)
+                return _source_artifact(source_id, "github_source_file", fetched), str(fetched.get("text") or "")
+            except Exception as api_exc:
+                errors.append(f"{source_id}: raw fetch failed: {raw_exc}; contents API failed: {api_exc}")
+                return None
+
+    for path in candidate_paths:
+        fetched_source = fetch_raw_file_source(
+            f"{source_id_prefix}_{re.sub(r'[^a-zA-Z0-9]+', '_', path).strip('_')}",
+            path,
+        )
+        if not fetched_source:
+            continue
+        source, raw_text = fetched_source
+        if not source:
+            continue
+        sources.append(source)
+        facts.extend(_repo_context_fact_from_source(path, raw_text))
+
+    seen: set[str] = set()
+    unique_facts = []
+    for fact in facts:
+        clean = re.sub(r"\s+", " ", str(fact)).strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            unique_facts.append(clean)
+
+    return {
+        "schema_version": 1,
+        "created_at": utc_now(),
+        "repo": f"{owner}/{name}",
+        "url": f"https://github.com/{owner}/{name}",
+        "default_branch": default_branch,
+        "sources": sources,
+        "facts": unique_facts[:20],
+        "visual_brief": [
+            "Use repo/code-aware visuals: file tree, SDK/API call path, memory write/read pipeline, and deployment/adoption boundaries.",
+            "Show concrete source paths instead of generic source hosts.",
+            "For memory projects, separate write path, retrieval path, scope boundary, and storage/provider choices.",
+        ],
+        "errors": errors[:12],
+        "status": "pass" if len(unique_facts) >= 4 else "partial",
+    }
+
+
 def _terms(candidate: dict[str, Any]) -> list[str]:
     values = [candidate.get("title"), candidate.get("entity_key"), candidate.get("canonical_url")]
     terms: list[str] = []
@@ -282,8 +636,22 @@ def build_evidence_bundle(candidate: dict[str, Any], fetcher: FetchFn = fetch_ur
         return _operator_topic_seed_bundle(candidate)
     url = http_source_url(candidate)
     sources: list[dict[str, Any]] = []
-    primary = fetcher(url, None, timeout)
-    sources.append(_source_artifact("primary_url", "primary_page", primary))
+    source_kind = "web_url"
+    canonical_detail_method = "http_fetch"
+    expanded_urls: list[str] = []
+    qwen_blog_source = _fetch_qwen_blog_source(url, fetcher, timeout)
+    if qwen_blog_source:
+        sources.append(qwen_blog_source)
+        source_kind = "qwen_blog_api"
+        canonical_detail_method = "qwen_article_api"
+    elif x_status_source := _fetch_x_status_source(url, candidate, fetcher, timeout):
+        primary_source, expanded_urls = x_status_source
+        sources.append(primary_source)
+        source_kind = "x_status_api"
+        canonical_detail_method = "x_api_v2_status_lookup"
+    else:
+        primary = fetcher(url, None, timeout)
+        sources.append(_source_artifact("primary_url", "primary_page", primary))
     repo = github_repo(url)
     repo_facts: list[str] = []
     if repo:
@@ -319,7 +687,9 @@ def build_evidence_bundle(candidate: dict[str, Any], fetcher: FetchFn = fetch_ur
         "created_at": utc_now(),
         "selected_candidate_id": candidate.get("candidate_id"),
         "canonical_url": url,
-        "source_kind": "github_repo" if repo else "web_url",
+        "source_kind": "github_repo" if repo else source_kind,
+        "canonical_detail_method": "github_api_and_readme" if repo else canonical_detail_method,
+        "expanded_urls": expanded_urls,
         "sources": sources,
         "source_count": len(sources),
         "combined_text_sha256": sha256_text(combined_text),

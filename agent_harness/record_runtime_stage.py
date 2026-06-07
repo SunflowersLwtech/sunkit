@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.core import Artifact, Gate, TaskBoard
+from agent_harness.runtime_contracts import canonical_owner
 
 
 def parse_artifact(value: str) -> Artifact:
@@ -45,13 +46,14 @@ def main() -> int:
     root_task_id = agent_run["root_task_id"]
     board = TaskBoard(run_dir / "harness_board.sqlite3")
     try:
-        task_id = board.create_task(args.name, args.title, args.owner, root_task_id)
-        board.set_status(task_id, "running", args.owner, {"details": args.details})
+        owner = canonical_owner(args.owner)
+        task_id = board.create_task(args.name, args.title, owner, root_task_id)
+        board.set_status(task_id, "running", owner, {"details": args.details})
         for artifact_value in args.artifact:
             board.artifact(task_id, parse_artifact(artifact_value))
         for gate_value in args.gate:
             board.gate(task_id, parse_gate(gate_value))
-        board.set_status(task_id, args.status, args.owner, {"details": args.details})
+        board.set_status(task_id, args.status, owner, {"details": args.details})
         agent_run["board_snapshot"] = board.snapshot(root_task_id)
         agent_run_path.write_text(json.dumps(agent_run, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"task_id": task_id, "stage": args.name, "status": args.status}, ensure_ascii=False, indent=2))

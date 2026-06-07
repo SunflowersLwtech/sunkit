@@ -15,11 +15,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.core import HarnessContext, StageResult, SyncHarness, TaskBoard, utc_now, write_json
+from agent_harness.runtime_contracts import HARNESS_ACTOR, IMPL_AGENT, MAIN_AGENT, RESEARCH_AGENT
 from agent_harness.side_effect_tiers import side_effect_axes
 from agent_harness.stages import PROVIDER_ENV_CONTRACT, default_stages
 from agent_harness.subjects import write_operator_topic_run
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+DELEGATION_MODES = ("single_harness", "manual_fallback", "spawned_subagents")
+DELEGATION_AGENTS = (HARNESS_ACTOR, MAIN_AGENT, RESEARCH_AGENT, IMPL_AGENT)
 OPERATOR_INPUT_MESSAGE = """Searchpo now expects an operator-supplied topic or link.
 Pass --topic "..." for widesearch from a topic, or SEARCHPO_LINK/SEARCHPO_TOPIC_URL through scripts/run_e2e.sh for a canonical source boundary.
 Set SEARCHPO_ENABLE_DAILY_RADAR=1 only when you explicitly want the legacy source-registry candidate sweep."""
@@ -42,6 +45,10 @@ def build_agent_state(
     stage_results: list[StageResult],
     selected_candidate: dict[str, Any],
     mode: str,
+    delegation: dict[str, Any],
+    *,
+    resume_from: int,
+    stop_after: str | None,
 ) -> dict[str, Any]:
     env_profile = os.environ.get("SEARCHPO_EXECUTION_PROFILE") or os.environ.get("SEARCHPO_E2E_PROFILE")
     default_profile = "provider" if mode.startswith("searchpo-provider") else "contract"
@@ -54,9 +61,12 @@ def build_agent_state(
         "run_dir": str(run_dir),
         "board_db": str(board.db_path),
         "root_task_id": root_task_id,
-        "main_agent": "claude_main_agent",
-        "research_agent": "searchpo-research-agent",
-        "impl_agent": "claude_impl_agent",
+        "main_agent": MAIN_AGENT,
+        "research_agent": RESEARCH_AGENT,
+        "impl_agent": IMPL_AGENT,
+        "delegation": delegation,
+        "resume_from": resume_from,
+        "stop_after": stop_after,
         "loop": [
             {"step": result.step, "status": "pass" if result.status == "completed" else result.status, "details": result.details}
             for result in stage_results
@@ -67,6 +77,28 @@ def build_agent_state(
         "subject_selection_source": selected_candidate.get("selection_source") or "candidate_shortlist",
         "provider_env_contract": PROVIDER_ENV_CONTRACT,
         "board_snapshot": board.snapshot(root_task_id),
+    }
+
+
+def build_delegation_record(args: argparse.Namespace) -> dict[str, Any]:
+    mode = str(args.delegation_mode)
+    executor = str(args.delegation_agent or HARNESS_ACTOR)
+    proof = str(args.delegation_proof or "").strip()
+    if mode == "spawned_subagents" and not proof:
+        raise SystemExit("--delegation-proof is required when --delegation-mode=spawned_subagents")
+    if mode != "spawned_subagents" and proof:
+        raise SystemExit("--delegation-proof is only valid with --delegation-mode=spawned_subagents")
+    return {
+        "schema_version": 1,
+        "mode": mode,
+        "executor": executor,
+        "proof": proof or None,
+        "owner_labels_are_execution_proof": False,
+        "proof_artifact": "agent_run.json#delegation",
+        "contract": (
+            "spawned_subagents requires host subagent proof; manual_fallback and single_harness "
+            "must not be reported as real agent-team execution."
+        ),
     }
 
 
@@ -89,7 +121,31 @@ def main() -> int:
         default=0,
         help="Resume from stage index N (0-based). Stages before N are skipped if previously completed.",
     )
+    parser.add_argument(
+        "--stop-after",
+        choices=[stage.name for stage in default_stages(include_providers=True)],
+        help="Stop after the named harness stage, preserving harness_state.json for a later --resume-from.",
+    )
+    parser.add_argument(
+        "--delegation-mode",
+        choices=DELEGATION_MODES,
+        default=os.environ.get("SEARCHPO_DELEGATION_MODE", "single_harness"),
+        help="Record how this invocation was executed; owner labels alone never prove spawned subagents.",
+    )
+    parser.add_argument(
+        "--delegation-agent",
+        choices=DELEGATION_AGENTS,
+        default=os.environ.get("SEARCHPO_DELEGATION_AGENT", HARNESS_ACTOR),
+        help="Record the host-side executor for this invocation.",
+    )
+    parser.add_argument(
+        "--delegation-proof",
+        default=os.environ.get("SEARCHPO_DELEGATION_PROOF", ""),
+        help="Host subagent/thread identifier proving spawned_subagents mode.",
+    )
     args = parser.parse_args()
+    delegation = build_delegation_record(args)
+    os.environ["SEARCHPO_DELEGATION_MODE"] = delegation["mode"]
     if not os.environ.get("SEARCHPO_EXECUTION_PROFILE") and not os.environ.get("SEARCHPO_E2E_PROFILE"):
         os.environ["SEARCHPO_EXECUTION_PROFILE"] = "provider" if args.mode == "provider" else "contract"
     if args.topic_url and not _is_http_url(args.topic_url.strip()):
@@ -113,7 +169,12 @@ def main() -> int:
     board = TaskBoard(run_dir / "harness_board.sqlite3")
     try:
         context = HarnessContext(root_dir=ROOT, run_dir=run_dir, board=board)
-        result = SyncHarness(default_stages(include_providers=args.mode == "provider")).run(context, resume_from=args.resume_from)
+        context.state["delegation"] = delegation
+        result = SyncHarness(default_stages(include_providers=args.mode == "provider")).run(
+            context,
+            resume_from=args.resume_from,
+            stop_after=args.stop_after,
+        )
         selected_candidate = context.state["selected_candidate"]
         agent_state = build_agent_state(
             run_dir,
@@ -122,15 +183,22 @@ def main() -> int:
             result.stage_results,
             selected_candidate,
             f"searchpo-{args.mode}-script-flow",
+            delegation,
+            resume_from=args.resume_from,
+            stop_after=args.stop_after,
         )
         write_json(run_dir / "agent_run.json", agent_state)
         output = {
             "run_dir": str(run_dir),
             "selected_candidate_id": selected_candidate["candidate_id"],
-            "post_dir": str(context.state["post_dir"]),
             "board_db": str(board.db_path),
             "agent_run": str(run_dir / "agent_run.json"),
+            "delegation_mode": delegation["mode"],
         }
+        if context.state.get("post_dir"):
+            output["post_dir"] = str(context.state["post_dir"])
+        if args.stop_after:
+            output["stopped_after"] = args.stop_after
         render_payload_path = run_dir / "render_payload.json"
         if render_payload_path.exists():
             output["render_payload"] = str(render_payload_path)
@@ -144,6 +212,10 @@ def main() -> int:
             ("delivery_package", "delivery_package.json"),
             ("analytics_feedback", "analytics_feedback.json"),
             ("environment_manifest", "environment_manifest.json"),
+            ("main_task_plan", "main_task_plan.json"),
+            ("runtime_contract", "runtime_contract.json"),
+            ("research_barrier", "research_barrier.json"),
+            ("implementation_loop", "implementation_loop.json"),
         ]:
             artifact_path = run_dir / filename
             if artifact_path.exists():

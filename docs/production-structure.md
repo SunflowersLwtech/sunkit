@@ -5,7 +5,7 @@
 ## Runtime Boundary
 
 ```text
-data_prep/link input -> evidence fetch -> TopicBrief/FactBank -> Script/ScenePlan -> VideoSpec -> render/Remotion -> artifact binding -> QA -> DeliveryPackage -> Douyin contract/live gate -> run_final.json
+intent intake -> evidence fetch -> TopicBrief/FactBank -> research_barrier.json -> runtime_contract.json -> Script/ScenePlan -> VideoSpec -> implementation_loop.json -> render/Remotion -> artifact binding -> QA -> Douyin contract/live gate -> release_gate.json -> DeliveryPackage -> run_final.json
 ```
 
 Default local operation is `npm run e2e`:
@@ -44,6 +44,8 @@ The runtime records three separate axes:
 | `scripts/` | Thin operational entrypoints and CI guards | Side-effecting scripts must be explicit in name or profile. |
 | `docs/` | Human operating contracts | Governance, runbooks, retention, env ownership. |
 | `.claude/` | Project agent instructions | Mirrors command tiers and live-publish guard. |
+| `runtime/artifacts/YYYY-MM-DD/<run_id>/` | Run-scoped truth | Board DB, evidence, contracts, final media, gates, and `RUN.md`. |
+| `out/previews/YYYY-MM-DD/<run_id>/...` | Render preview scratch | Attempt/manual local/lambda renders only; never publish from here. |
 | `runtime/`, `out/`, `public/generated/` | Ignored generated state | Do not commit. |
 
 ## Final Truth
@@ -52,12 +54,17 @@ The runtime records three separate axes:
 
 Every provider/lambda/live E2E run that reaches final verification writes:
 
+- `runtime_contract.json`: planning, delegation, verification, and recovery contracts for the run.
+- `research_barrier.json`: main-agent decision that implementation may start only after source artifacts prove sufficiency.
+- `implementation_loop.json`: implementation-agent evidence for provider, media-contract, render/audit, and delivery phases.
+- `release_gate.json`: main-agent release/no-release verdict from final artifact and publish evidence.
 - `artifact_manifest.json`: selected subject, render props hash, final MP4 hash, cover hash, execution profile, render mode, and publish mode.
 - `run_final.json`: final board snapshot plus artifact, audit, execution profile, render mode, and publish status.
 - `video/final.mp4` and `cover/final.jpg`: the only files allowed as publish input.
 - `delivery_package.json`: delivery-facing package that binds final media, cover, captions, source map, metadata, render log, and artifact hashes.
+- `RUN.md`: human-readable index of the final decision, key evidence, media, audits, and preview scratch paths.
 
-`out/` files are preview outputs only. A publish adapter must reject them even if the filename looks current.
+`out/` files are preview outputs only. New renders use `out/previews/YYYY-MM-DD/<run_id>/attempt-XX/<backend>/` or `manual/<backend>/` so scratch media stays grouped by run. A publish adapter must reject `out/` even if the filename looks current.
 
 No production gate may pass by substituting mock provider output, silent audio, skipped ffmpeg/tesseract checks, manual env-based remote identity, or stale/generic media paths.
 

@@ -73,6 +73,13 @@ def _maybe_read(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _relative_display(path: Path, run_dir: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(run_dir.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def _selected_candidate(run_dir: Path) -> dict[str, Any]:
     return _maybe_read(run_dir / "selected_candidate.json")
 
@@ -153,6 +160,29 @@ def create_or_update_artifact_manifest(
         "cover_bytes": cover["bytes"],
         "preview_video_path": str(rendered_video.resolve()),
         "preview_cover_path": str(rendered_cover.resolve()),
+        "artifact_layout": {
+            "publishable": {
+                "video": str(FINAL_VIDEO_REL),
+                "cover": str(FINAL_COVER_REL),
+                "manifest": "artifact_manifest.json",
+                "delivery": "delivery_package.json",
+                "final_truth": "run_final.json",
+            },
+            "preview": {
+                "video": _relative_display(rendered_video, run_dir),
+                "cover": _relative_display(rendered_cover, run_dir),
+                "policy": "preview files are scratch inputs for artifact binding; publish adapters must use publishable paths",
+            },
+            "optimization": {
+                "video_attempts": "optimization/video/attempt-XX/",
+                "content_attempts": "optimization/content/attempt-XX/",
+            },
+            "post": {
+                "douyin_manifest": "post/douyin_upload_manifest.json",
+                "douyin_check": "post/douyin_upload_check.json",
+                "post_publish_verification": "post/post_publish_verification.json",
+            },
+        },
     }
     manifest["publish_hash"] = sha256_text(
         json.dumps(
@@ -269,12 +299,19 @@ def validate_upload_identity(
     return errors, checks
 
 
-def publish_conflict_errors(board_snapshot: dict[str, Any], publish_mode: str) -> list[str]:
+def publish_conflict_errors(
+    board_snapshot: dict[str, Any],
+    publish_mode: str,
+    *,
+    allow_live_upgrade: bool = False,
+) -> list[str]:
     gates = board_snapshot.get("gates") or []
     gate_names = {str(gate.get("name") or "") for gate in gates}
     errors: list[str] = []
     contract_names = {"douyin_contract_check_passed", "douyin_contract_gate"}
     live_names = {"explicit_live_publish_gate", "douyin_live_publish_gate"}
+    if allow_live_upgrade and publish_mode == "live" and gate_names & live_names:
+        return errors
     if gate_names & contract_names and gate_names & live_names:
         errors.append("same run contains both contract and live publish gates")
     if publish_mode == "contract-check" and gate_names & live_names:

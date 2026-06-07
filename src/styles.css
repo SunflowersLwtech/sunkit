@@ -27,6 +27,35 @@
   background: #080b10;
 }
 
+/* ---------- engineering theme (SightLine-style) ----------
+ * Dark technical canvas, monospace type, no decorative gradients. The visual
+ * language is carried by code/node-graph/decision-table scenes themselves
+ * rather than by background atmosphere. Designed for technical-product demo
+ * videos where the content is an architecture diagram or a snippet, not a
+ * consumer-friendly story.
+ */
+.theme-engineering {
+  --accent: #f59e0b;
+  --surface: rgba(31, 41, 55, 0.92);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(31, 41, 55, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --glass-glow: rgba(245, 158, 11, 0.14);
+  --shadow-premium: 0 12px 32px rgba(0, 0, 0, 0.6);
+  background: #1f2937;
+  color: #e8e8e8;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+}
+
+.theme-engineering .noise,
+.theme-engineering .ambient-map,
+.theme-engineering .beam,
+.theme-engineering .audio-wave,
+.theme-engineering .topbar,
+.theme-engineering .progress-row {
+  display: none !important;
+}
+
 .noise {
   position: absolute;
   inset: 0;
@@ -390,6 +419,13 @@ h1 {
   backdrop-filter: blur(10px);
 }
 
+.bullet-row-active {
+  border-color: color-mix(in srgb, var(--accent) 58%, rgba(255, 255, 255, 0.18));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, rgba(10, 14, 20, 0.72)), rgba(10, 14, 20, 0.68));
+  box-shadow: var(--shadow-premium), 0 0 42px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
 .bullet-row span {
   color: var(--accent);
   font-size: 34px;
@@ -417,6 +453,12 @@ h1 {
   background: var(--glass-bg);
   box-shadow: var(--shadow-premium);
   backdrop-filter: blur(12px);
+}
+
+.compare-grid > div.compare-active {
+  border-color: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, 0.18));
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 16%, rgba(10, 14, 20, 0.76)), rgba(10, 14, 20, 0.66));
+  box-shadow: var(--shadow-premium), 0 0 46px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .compare-grid span {
@@ -528,6 +570,9 @@ h1 {
   display: grid;
   grid-template-columns: 44px 1fr;
   gap: 16px;
+  min-height: 46px;
+  border-radius: 12px;
+  padding: 4px 10px;
 }
 
 .terminal-line span {
@@ -536,6 +581,16 @@ h1 {
 
 .terminal-line code {
   color: #d7f9ff;
+}
+
+.terminal-line-active {
+  background: rgba(114, 231, 255, 0.12);
+  box-shadow: 0 0 28px rgba(114, 231, 255, 0.12);
+}
+
+.terminal-cursor {
+  color: #ffd60a;
+  font-weight: 950;
 }
 
 .terminal-status {
@@ -556,16 +611,53 @@ h1 {
 }
 
 .flow-diagram {
+  position: relative;
+  display: grid;
+  align-items: center;
+  width: min(100%, 1040px);
+  min-height: 250px;
+  padding: 50px 34px 34px;
+}
+
+.flow-steps {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  width: min(100%, 1040px);
-  padding: 34px;
 }
 
 .flow-step {
   display: contents;
+}
+
+.flow-rail {
+  position: absolute;
+  left: 68px;
+  right: 68px;
+  top: 42px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: visible;
+}
+
+.flow-rail-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #72e7ff, var(--accent), #ff2d55);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.flow-packet {
+  position: absolute;
+  top: -15px;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: var(--accent);
+  box-shadow: 0 0 32px color-mix(in srgb, var(--accent) 44%, transparent);
 }
 
 .flow-node {
@@ -578,6 +670,14 @@ h1 {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(114, 231, 255, 0.08));
+}
+
+.flow-node-active {
+  border-color: color-mix(in srgb, var(--accent) 58%, rgba(255, 255, 255, 0.16));
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 56%),
+    linear-gradient(155deg, rgba(255, 255, 255, 0.16), rgba(114, 231, 255, 0.12));
+  box-shadow: 0 0 42px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .flow-node span {
@@ -664,10 +764,22 @@ h1 {
   filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 45%, transparent));
 }
 
+.chart-scan-line {
+  stroke: rgba(255, 214, 10, 0.56);
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 14px rgba(255, 214, 10, 0.42));
+}
+
 .chart-dot {
   fill: #72e7ff;
   stroke: #071018;
   stroke-width: 4;
+}
+
+.chart-dot-active {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 16px color-mix(in srgb, var(--accent) 60%, transparent));
 }
 
 .chart-svg text {
@@ -705,6 +817,11 @@ h1 {
   border-radius: 6px;
   font-size: 28px;
   line-height: 1.22;
+}
+
+.diff-row-active {
+  box-shadow: 0 0 30px rgba(114, 231, 255, 0.14);
+  outline: 2px solid rgba(114, 231, 255, 0.22);
 }
 
 .diff-row + .diff-row {
@@ -746,6 +863,11 @@ h1 {
   min-height: 86px;
   padding: 18px 24px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.compare-table-row-active {
+  background: color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.05));
+  box-shadow: inset 6px 0 0 var(--accent);
 }
 
 .compare-table-row span {
@@ -1150,4 +1272,405 @@ h1 {
 
 .aspect-horizontal .cover-source strong {
   max-width: 980px;
+}
+
+/* ---------- engineering-theme scenes ---------- */
+
+/* ACT label - "ACT 1 — THE ENGINE" tag, top-left of every engineering scene */
+.act-tag {
+  position: absolute;
+  top: 72px;
+  left: 64px;
+  z-index: 4;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+}
+
+.theme-engineering .scene-code-block,
+.theme-engineering .scene-node-graph,
+.theme-engineering .scene-decision-table,
+.theme-engineering .scene-act-card,
+.theme-engineering .scene-closing {
+  padding: 0 !important;
+  gap: 0 !important;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.act-tag-num {
+  color: var(--accent);
+}
+
+.act-tag-name {
+  color: #555;
+}
+
+/* code_block scene — IDE-like code window with line-by-line highlight */
+.scene-code-block {
+  align-items: center;
+  justify-content: center;
+}
+
+.code-window {
+  width: min(94%, 1480px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: #1f2937;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.code-tab {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 22px;
+  background: #263449;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: #888;
+  font-size: 15px;
+}
+
+.code-tab-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.55);
+}
+
+.code-tab strong {
+  color: #e8e8e8;
+  font-weight: 600;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.code-body {
+  margin: 0;
+  padding: 26px 22px 28px;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 18px;
+  line-height: 1.7;
+  color: #c9c9c9;
+  overflow: hidden;
+}
+
+.code-line {
+  display: flex;
+  gap: 22px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  white-space: pre;
+}
+
+.code-line-num {
+  color: #444;
+  user-select: none;
+  min-width: 28px;
+  text-align: right;
+}
+
+.code-line-active {
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.code-line-active .code-line-num {
+  color: var(--accent);
+}
+
+.code-line-active code {
+  color: #fff;
+}
+
+/* feature caption — centered card at bottom of an engineering scene */
+.feature-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 560px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 760px;
+  text-align: center;
+}
+
+.feature-caption strong {
+  font-size: 26px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.2px;
+}
+
+.feature-caption span {
+  font-size: 16px;
+  color: #777;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+/* node_graph scene — circular hub-and-spoke architecture diagram */
+.scene-node-graph {
+  align-items: center;
+  justify-content: center;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.scene-node-graph .node-graph-svg {
+  margin: auto;
+  max-height: 60vh;
+}
+
+.node-graph-svg {
+  width: min(94%, 1200px);
+  height: auto;
+}
+
+.node-graph-svg .center-ring {
+  fill: #263449;
+  stroke: var(--accent);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.32));
+}
+
+.node-graph-svg .center-title {
+  fill: var(--accent);
+  font-size: 22px;
+  font-weight: 700;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.node-graph-svg .center-sub {
+  fill: #666;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.node-graph-svg .spoke {
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 1.5;
+}
+
+.node-graph-svg .node-ring {
+  fill: #1f2937;
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1.5;
+}
+
+.node-graph-svg .node-ring-active {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.55));
+}
+
+.node-graph-svg .node-title {
+  fill: #e8e8e8;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.node-graph-svg .node-sub {
+  fill: #888;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+/* decision_table scene — rule-to-category grid */
+.scene-decision-table {
+  align-items: center;
+  justify-content: center;
+  padding: 64px !important;
+  gap: 28px !important;
+}
+
+.scene-decision-table h2 {
+  max-width: 1240px;
+  margin: 0;
+  color: #fff;
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.decision-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 32px;
+  width: min(100%, 1240px);
+  align-items: start;
+}
+
+.decision-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.decision-col-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.decision-rule {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  background: #1f2937;
+  color: #c9c9c9;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.decision-rule-tag {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.decision-cat {
+  position: relative;
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--cat-color, #f59e0b);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #1f2937;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.decision-cat-sub {
+  display: block;
+  margin-top: 4px;
+  color: #888;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.4px;
+}
+
+/* act_card scene — momentary banner between engineering acts */
+.scene-act-card {
+  align-items: center;
+  justify-content: center;
+}
+
+.act-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 38px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(31, 41, 55, 0.88);
+  backdrop-filter: blur(20px);
+  text-align: center;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+}
+
+.act-card-eyebrow {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+}
+
+.act-card-title {
+  font-size: 38px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0;
+}
+
+.act-card-detail {
+  font-size: 16px;
+  color: #888;
+  max-width: 600px;
+  line-height: 1.4;
+}
+
+/* closing scene — minimal wordmark reveal */
+.scene-closing {
+  align-items: center;
+  justify-content: center;
+}
+
+.closing-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.closing-wordmark {
+  font-size: 110px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0;
+  line-height: 1;
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+}
+
+.closing-sub {
+  font-size: 22px;
+  color: #888;
+  font-weight: 400;
+  letter-spacing: 0.4px;
+}
+
+.closing-built {
+  margin-top: 36px;
+  font-size: 14px;
+  color: #555;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+/* horizontal overrides for engineering theme (16:9) */
+.aspect-horizontal.theme-engineering .act-tag {
+  top: 48px;
+  left: 60px;
+}
+
+.aspect-horizontal.theme-engineering .feature-caption {
+  bottom: 180px;
+  max-width: 920px;
+}
+
+.aspect-horizontal.theme-engineering .decision-grid {
+  grid-template-columns: 1.6fr 1fr;
+  max-width: 1380px;
+}
+
+.aspect-horizontal.theme-engineering .node-graph-svg {
+  width: min(80%, 900px);
 }

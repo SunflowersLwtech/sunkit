@@ -1274,6 +1274,107 @@ const MemoryMechanismDiagram: React.FC<{
   );
 };
 
+const WorkflowLinearFlow: React.FC<{
+  model: ShowcaseModel;
+  scene: ShowcaseScene;
+  frame: number;
+  localFrame: number;
+  fps: number;
+  sceneFrames: number;
+  compact?: boolean;
+}> = ({model, scene, frame, localFrame, fps, sceneFrames, compact}) => {
+  const draw = interpolate(localFrame, [14, sceneFrames * 0.76], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const scan = interpolate((frame % 132) / 132, [0, 1], [-120, 680]);
+  const activeLine = Math.min(3, Math.floor(interpolate(localFrame, [32, 138], [0, 4], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})));
+  const steps = [
+    {label: '静态 prompt', detail: '一次输入', tone: palette.cyan, x: 52, y: 88},
+    {label: coreLabelFor(model, 12), detail: '调度 Claude', tone: scene.tone, x: 288, y: 190},
+    {label: guardLabelFor(model, 12), detail: '检查结果', tone: palette.coral, x: 92, y: 330},
+    {label: metricLabelFor(model, 12), detail: '重跑或合并', tone: palette.amber, x: 332, y: 458},
+  ];
+  const terminalLines = ['while task_open:', '  claude.run(task)', '  gate.check(result)', '  retry() or merge_pr()'];
+  return (
+    <div style={{position: 'relative', height: compact ? 690 : 620, minHeight: 0, overflow: 'visible'}}>
+      <svg width="100%" height="100%" viewBox="0 0 640 660" style={{position: 'absolute', inset: 0, overflow: 'visible'}}>
+        <defs>
+          <linearGradient id="workflowLinearPath" x1="0" x2="1">
+            <stop offset="0%" stopColor={palette.cyan} />
+            <stop offset="42%" stopColor={scene.tone} />
+            <stop offset="70%" stopColor={palette.coral} />
+            <stop offset="100%" stopColor={palette.amber} />
+          </linearGradient>
+          <radialGradient id="workflowLinearGlow" cx="52%" cy="45%" r="64%">
+            <stop offset="0%" stopColor={scene.tone} stopOpacity="0.34" />
+            <stop offset="100%" stopColor="transparent" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <ellipse cx="330" cy="320" rx="280" ry="230" fill="url(#workflowLinearGlow)" />
+        <path d="M116 154 C220 96 304 132 354 224 C404 316 212 286 176 396 C146 488 312 530 480 518" fill="none" stroke="rgba(255,250,240,0.13)" strokeWidth="26" strokeLinecap="round" />
+        <path d="M116 154 C220 96 304 132 354 224 C404 316 212 286 176 396 C146 488 312 530 480 518" fill="none" stroke="url(#workflowLinearPath)" strokeWidth="8" strokeLinecap="round" strokeDasharray="1120" strokeDashoffset={1120 * (1 - draw)} />
+        <path d={`M${scan} 54 L${scan + 100} 94 L${scan - 112} 620 L${scan - 218} 584 Z`} fill={`${scene.tone}17`} stroke={`${scene.tone}3d`} strokeWidth="2" opacity="0.58" />
+      </svg>
+      {steps.map((step, index) => {
+        const enter = spring({frame: localFrame - index * 15, fps, config: {damping: 22, stiffness: 118}});
+        const hot = draw * steps.length > index + 0.45;
+        return (
+          <div
+            key={step.label}
+            style={{
+              position: 'absolute',
+              left: step.x,
+              top: step.y,
+              width: index === 1 ? 232 : 206,
+              minHeight: 104,
+              padding: '16px 18px',
+              borderRadius: 24,
+              background: hot ? step.tone : 'rgba(8,17,29,0.72)',
+              border: `1px solid ${step.tone}`,
+              color: hot ? palette.dark : palette.ivory,
+              boxShadow: `0 26px 70px rgba(0,0,0,0.28), 0 0 70px ${step.tone}24`,
+              opacity: soft(enter, 0.72),
+              transform: `translateY(${(1 - enter) * 18 + Math.sin(frame / 76 + index) * 4}px) scale(${hot ? 1.035 : 0.98})`,
+            }}
+          >
+            <div style={{fontSize: 15, fontWeight: 980, opacity: 0.78}}>{index === 0 ? 'input' : index === 1 ? 'loop' : index === 2 ? 'gate' : 'output'}</div>
+            <div style={{marginTop: 8, fontSize: 27, lineHeight: 1.0, fontWeight: 990, overflowWrap: 'anywhere'}}>{step.label}</div>
+            <div style={{marginTop: 8, fontSize: 16, lineHeight: 1.12, fontWeight: 780, color: hot ? '#30485c' : palette.mist}}>{step.detail}</div>
+          </div>
+        );
+      })}
+      <div
+        style={{
+          position: 'absolute',
+          left: compact ? 48 : 78,
+          right: compact ? 44 : 78,
+          bottom: compact ? 20 : 8,
+          minHeight: 148,
+          borderRadius: 22,
+          background: 'rgba(5,11,19,0.78)',
+          border: `1px solid ${scene.tone}76`,
+          boxShadow: `0 30px 86px rgba(0,0,0,0.34), 0 0 72px ${scene.tone}18`,
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{height: 36, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', borderBottom: '1px solid rgba(255,250,240,0.12)'}}>
+          {[palette.coral, palette.amber, palette.green].map((color) => <span key={color} style={{width: 9, height: 9, borderRadius: 99, background: color}} />)}
+          <span style={{marginLeft: 8, color: palette.mist, fontSize: 15, fontWeight: 900, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'}}>loop-controller.ts</span>
+        </div>
+        <div style={{padding: '14px 18px', fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'}}>
+          {terminalLines.map((line, index) => {
+            const visible = index <= activeLine;
+            return (
+              <div key={line} style={{height: 25, color: visible ? (index === activeLine ? palette.ivory : palette.mist) : 'transparent', fontSize: 18, fontWeight: index === activeLine ? 900 : 760}}>
+                {visible ? line : '.'}
+                {visible && index === activeLine ? <span style={{color: scene.tone}}>_</span> : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const HeroScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: number; localFrame: number; fps: number; sceneFrames: number; width: number; height: number}> = ({
   model,
   scene,
@@ -1326,6 +1427,46 @@ const HeroScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
           }}
         >
           <MemoryCoreHeroObject model={model} scene={scene} frame={frame} localFrame={localFrame} fps={fps} sceneFrames={sceneFrames} />
+        </div>
+      </div>
+    );
+  }
+  if (!isHorizontal && !searchMode) {
+    const callouts = ['调度 Claude', '检查结果', '失败重跑'];
+    return (
+      <div style={{position: 'absolute', inset: 0, padding: '150px 58px 610px'}}>
+        <div style={{position: 'relative', zIndex: 2}}>
+          <div style={{fontSize: 18, color: scene.tone, fontWeight: 950}}>先看两个画面</div>
+          <div style={{marginTop: 14, fontSize: 42, lineHeight: 1.02, color: palette.ivory, fontWeight: 990, textShadow: '0 16px 60px rgba(0,0,0,0.38)'}}>
+            Prompt 变成循环控制
+          </div>
+          <div style={{marginTop: 18, display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+            {callouts.map((item, index) => {
+              const enter = spring({frame: localFrame - index * 8, fps, config: {damping: 22, stiffness: 118}});
+              return (
+                <span
+                  key={item}
+                  style={{
+                    display: 'inline-block',
+                    padding: '8px 12px',
+                    borderRadius: 999,
+                    background: index === 1 ? scene.tone : 'rgba(255,250,240,0.10)',
+                    color: index === 1 ? palette.dark : palette.ivory,
+                    border: `1px solid ${index === 1 ? scene.tone : 'rgba(255,250,240,0.18)'}`,
+                    fontSize: 18,
+                    fontWeight: 900,
+                    opacity: soft(enter, 0.68),
+                    transform: `translateY(${(1 - enter) * 12}px)`,
+                  }}
+                >
+                  {item}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{marginTop: 36}}>
+          <WorkflowLinearFlow model={model} scene={scene} frame={frame} localFrame={localFrame} fps={fps} sceneFrames={sceneFrames} compact />
         </div>
       </div>
     );
@@ -1464,6 +1605,21 @@ const MechanismScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; fram
           <div style={{marginTop: 20, fontSize: 25, lineHeight: 1.16, color: palette.mist, fontWeight: 720}}>
             {clean(model.arc.architecture_position || model.metric, 102)}
           </div>
+        </div>
+      </div>
+    );
+  }
+  if (!isHorizontal && !searchMode) {
+    return (
+      <div style={{position: 'absolute', inset: 0, padding: '150px 58px 610px'}}>
+        <div style={{position: 'relative', zIndex: 2}}>
+          <div style={{fontSize: 18, color: scene.tone, fontWeight: 950}}>机制展开</div>
+          <div style={{marginTop: 14, fontSize: 39, lineHeight: 1.04, color: palette.ivory, fontWeight: 980}}>
+            {clean(model.arc.mechanism || '循环调度、检查、失败重跑', 54)}
+          </div>
+        </div>
+        <div style={{marginTop: 28}}>
+          <WorkflowLinearFlow model={model} scene={scene} frame={frame} localFrame={localFrame + 18} fps={fps} sceneFrames={sceneFrames} compact />
         </div>
       </div>
     );
@@ -2270,7 +2426,7 @@ export const ShowcaseDirectorVisual: React.FC<AgentVisualProps & {spec?: Premium
   return (
     <AbsoluteFill style={{overflow: 'hidden', color: palette.ivory, background: palette.ink}}>
       <CinematicBackdrop frame={frame} width={width} height={height} activeScene={activeScene} progress={progress} />
-      {width > height ? null : <StageTitle model={model} activeScene={activeScene} frame={frame} width={width} height={height} />}
+      {width > height ? <StageTitle model={model} activeScene={activeScene} frame={frame} width={width} height={height} /> : null}
       <div
         style={{
           position: 'absolute',

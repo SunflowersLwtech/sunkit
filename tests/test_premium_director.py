@@ -349,7 +349,7 @@ class PremiumDirectorTests(unittest.TestCase):
             old_render = video_loop.render_attempt
             old_audit = video_loop.audit_attempt
 
-            def fake_render(run_dir_arg: Path, attempt_dir: Path, attempt: int, render_mode: str) -> dict[str, Any]:
+            def fake_render(run_dir_arg: Path, attempt_dir: Path, attempt: int, render_mode: str, publish_mode: str = "contract-check") -> dict[str, Any]:
                 return {"video_path": str(attempt_dir / "rendered_video.mp4"), "cover_path": str(attempt_dir / "rendered_cover.jpg")}
 
             def fake_audit(run_dir_arg: Path, attempt_dir: Path, attempt: int, video_path: Path) -> dict[str, Any]:

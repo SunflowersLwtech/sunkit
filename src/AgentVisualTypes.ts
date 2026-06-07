@@ -1,4 +1,3 @@
-import type {ReactNode} from 'react';
 import type {Payload} from './Composition';
 
 export type AgentVisualProps = {
@@ -10,5 +9,4 @@ export type AgentVisualProps = {
   height: number;
   progress: number;
   audioPulse: number;
-  captions?: ReactNode;
 };

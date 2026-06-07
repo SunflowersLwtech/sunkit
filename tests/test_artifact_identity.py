@@ -11,6 +11,7 @@ from agent_harness.artifact_identity import (
     validate_upload_identity,
     write_json,
 )
+from agent_harness.artifact_paths import preview_output_paths
 
 
 class ArtifactIdentityTests(unittest.TestCase):
@@ -20,9 +21,8 @@ class ArtifactIdentityTests(unittest.TestCase):
             run_dir = root / "runtime" / "artifacts" / "2026-05-31" / "run-abc"
             post_dir = run_dir / "post"
             post_dir.mkdir(parents=True)
-            video_preview = root / "out" / "run-abc-searchpo-radar.mp4"
-            cover_preview = root / "out" / "run-abc-searchpo-cover.jpg"
-            video_preview.parent.mkdir()
+            video_preview, cover_preview = preview_output_paths(root, run_dir, backend="local", attempt=1)
+            video_preview.parent.mkdir(parents=True)
             video_preview.write_bytes(b"video-bytes")
             cover_preview.write_bytes(b"cover-bytes")
             write_json(run_dir / "selected_candidate.json", {"candidate_id": "cand-1", "title": "Demo", "canonical_url": "https://example.com"})
@@ -63,6 +63,8 @@ class ArtifactIdentityTests(unittest.TestCase):
             self.assertTrue(manifest["scene_plan_sha256"])
             self.assertTrue(manifest["video_spec_sha256"])
             self.assertTrue(manifest["publish_hash"])
+            self.assertEqual(manifest["artifact_layout"]["publishable"]["video"], "video/final.mp4")
+            self.assertIn("out/previews", manifest["artifact_layout"]["preview"]["video"])
             upload_manifest = __import__("json").loads((post_dir / "douyin_upload_manifest.json").read_text())
             self.assertEqual(upload_manifest["manifest_status"], "artifact-bound")
             self.assertEqual(upload_manifest["execution_profile"], "provider")
@@ -113,6 +115,8 @@ class ArtifactIdentityTests(unittest.TestCase):
             ]
         }
         self.assertTrue(publish_conflict_errors(snapshot, "contract-check"))
+        self.assertTrue(publish_conflict_errors(snapshot, "live"))
+        self.assertEqual(publish_conflict_errors(snapshot, "live", allow_live_upgrade=True), [])
 
 
 if __name__ == "__main__":

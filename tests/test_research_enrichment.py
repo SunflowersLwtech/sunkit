@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_harness.evidence import build_evidence_bundle
 from agent_harness.research import (
@@ -185,6 +186,37 @@ class ResearchEnrichmentTests(unittest.TestCase):
             self.assertEqual(enriched["source_count"], 5)
             self.assertEqual(review["status"], "pass")
 
+    def test_repo_context_sources_do_not_count_as_anysearch_supplements(self) -> None:
+        candidate = {"candidate_id": "cand-1", "title": "Demo Tool", "canonical_url": "https://example.com/demo-tool"}
+        bundle = build_evidence_bundle(candidate, fetcher=primary_fetch)
+        runner = FakeAnySearchRunner(
+            "https://github.com/acme/demo\n",
+            {"https://github.com/acme/demo": extract_text_for("github.com")},
+        )
+        repo_context = {
+            "status": "pass",
+            "repo": "acme/demo",
+            "facts": ["README: Demo provides a CLI for inspecting logs."],
+            "sources": [
+                {"id": "github_repo_context_api", "type": "github_repo_api", "host": "github.com", "url": "https://api.github.com/repos/acme/demo", "excerpt": "Trace inspection tool"},
+                {"id": "github_repo_context_readme", "type": "github_readme", "host": "github.com", "url": "https://api.github.com/repos/acme/demo/readme", "excerpt": "Demo provides a CLI"},
+            ],
+            "errors": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with patch("agent_harness.research.build_github_repo_context", return_value=repo_context):
+                with self.assertRaises(RuntimeError):
+                    run_research_enrichment(run_dir, candidate, bundle, runner=runner)
+            review = json.loads((run_dir / "cross_check_review.json").read_text())
+            research = json.loads((run_dir / "anysearch_research.json").read_text())
+            enriched = json.loads((run_dir / "evidence_bundle.json").read_text())
+
+        self.assertFalse(review["research_sufficient"])
+        self.assertEqual(review["supplemental_source_count"], 1)
+        self.assertEqual(research["supporting_source_count"], 2)
+        self.assertGreaterEqual(enriched["source_count"], 4)
+
     def test_github_url_title_uses_repo_label_and_skips_primary_adjacent_urls(self) -> None:
         candidate = {
             "candidate_id": "cand-1",
@@ -223,6 +255,30 @@ class ResearchEnrichmentTests(unittest.TestCase):
             self.assertEqual(research["widesearch_strategy"]["subject_kind"], "github_repo")
             self.assertTrue(any(item["reason"] == "primary_or_adjacent_host" for item in research["dropped_urls"]))
             self.assertTrue(review["research_sufficient"])
+
+    def test_social_url_title_uses_canonical_repo_label_for_search(self) -> None:
+        candidate = {
+            "candidate_id": "cand-1",
+            "title": "https://x.com/omarsar0/status/2058208914148389083?s=46",
+            "canonical_url": "https://github.com/acme/demo",
+        }
+        strategy = build_widesearch_strategy(candidate)
+
+        self.assertEqual(strategy["topic_label"], "acme/demo")
+        self.assertIn("acme/demo", strategy["search_queries"][0])
+        self.assertNotIn("2058208914148389083", " ".join(strategy["search_queries"]))
+
+    def test_query_id_link_uses_specific_label_for_search(self) -> None:
+        candidate = {
+            "candidate_id": "cand-1",
+            "title": "https://qwen.ai/blog?id=qwen3.7-plus",
+            "canonical_url": "https://qwen.ai/blog?id=qwen3.7-plus",
+        }
+        strategy = build_widesearch_strategy(candidate)
+
+        self.assertEqual(strategy["topic_label"], "qwen3.7-plus")
+        self.assertIn("qwen3.7-plus", strategy["search_queries"][0])
+        self.assertNotIn("blog official", strategy["search_queries"][0])
 
     def test_operator_topic_without_url_uses_topic_seed_then_widesearch(self) -> None:
         candidate = {
