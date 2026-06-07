@@ -1,7 +1,7 @@
 ---
 name: searchpo-impl-agent
 description: Use when implementing or running searchpo provider scripts, Remotion rendering, Gemini visual audit, and Douyin publish/check commands.
-version: 1.1.0
+version: 1.2.0
 triggers:
   - "run searchpo scripts"
   - "provider scripts"
@@ -55,18 +55,44 @@ Runtime axes are recorded separately in generated JSON: `execution_profile=contr
 
 Before provider/live commands, require main-agent confirmation that:
 
+- `research_barrier.json.status == "pass"`;
 - `cross_check_review.status == "pass"`;
 - `cross_check_review.research_sufficient == true`;
 - `widesearch_strategy.json` records the selected source buckets/query plan;
 - `anysearch_research.json` includes search and extract commands;
 - raw AnySearch search/extract outputs exist under `research/anysearch_raw/` when a run directory exists.
 
-If this is not true, return control to `searchpo-main-agent`; implementation must not run in parallel with research.
+If this is not true, return control to `searchpo-main-agent`; implementation must not run in parallel with research. Implementation progress is recorded in `implementation_loop.json`; it is evidence for the main agent, not a release decision.
+
+## agent_visual quality duty
+
+Provider/lambda/live media must render from a topic-specific, richly animated `agent_visual`. The provider may choose either Douyin vertical `9:16` or horizontal `16:9` when the topic justifies it; do not force every publishable run into the short vertical radar format. Before render or audit work, inspect the run-scoped `render_payload.json` and verify:
+
+- `agentVisual.enabled == true`;
+- no `agentVisual.fallback_reason`, `_agent_visual_fallback_applied`, or validation errors are present;
+- `videoProfile.orientation`, `aspectRatio`, `width`, and `height` agree: vertical means `9:16`/`1080x1920`, horizontal means `16:9`/`1920x1080`;
+- duration is chosen by the model for the current topic; `180s+` is not a default target, it is only the long-form quality threshold once the model chooses that runtime;
+- videos at or above 180 seconds have a chaptered storyboard with enough scene beats for the runtime, not 3-7 short scenes stretched over a long narration;
+- `agentVisual.description` and `component_code` or `module_code` contain topic-specific visual primitives such as terminal, code, diff, file tree, architecture flow, chart, matrix, timeline, table, graph, product UI, or node flow;
+- the code does not rely on `data.cards`, `safeCards`, captions/subtitles, full `data.summary`, or internal evidence metadata as the main visual surface.
+
+Use `skills/remotion-best-practices/SKILL.md` section `Writing Richly Animated agent_visual TSX Components` as the repair template. A good repair regenerates `agent_visual.module_code` or `agent_visual.component_code/css` with four motion layers: spring entrance, staggered child reveals, continuous central idle movement, and audio-reactive emphasis. Prefer `module_code` for ambitious visuals because it can be a complete TSX module with imports and a named `AgentVisualGenerated` export.
+
+If deterministic audit fails for sparse central motion, static central content, opening motion, cards-only visuals, safe-area intrusion, `agent_visual` compile errors, or `agent_visual` layout errors, regenerate the custom TSX/CSS and rerun the video loop. Do not disable `agent_visual`, switch back to storyboard/cards, or treat caption/progress/fade motion as sufficient.
+
+When reporting visual quality work, name the actual evidence:
+
+- `visual_audit_deterministic.json.motion_check.active_pair_ratio`;
+- `visual_audit_deterministic.json.motion_check.max_static_seconds`;
+- `visual_audit_deterministic.json.motion_check.opening_active`;
+- `render_payload.json.agentVisual.description`.
 
 Stage commands:
 
 ```bash
-python3 agent_harness/run_agent_loop.py --topic "指定主题" --topic-url "https://..." --topic-summary "可选上下文"
+python3 agent_harness/run_agent_loop.py --topic "指定主题" --topic-url "https://..." --topic-summary "可选上下文" --stop-after research_enrichment
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 4 --stop-after main_task_plan
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 5
 SEARCHPO_ENABLE_DAILY_RADAR=1 python3 data_prep/scripts/run_pipeline.py  # legacy source-registry candidate sweep only
 python3 agent_harness/run_agent_loop.py --mode provider  # requires explicit run_dir unless SEARCHPO_ENABLE_DAILY_RADAR=1
 # DeepSeek/content scoring are normally run by ContentImproveLoopStage.
@@ -75,6 +101,8 @@ python3 scripts/video_quality_loop.py "$(cat runtime/latest_run.txt)" --executio
 bash scripts/douyin_upload_check.sh "$(cat runtime/latest_run.txt)"
 python3 scripts/finalize_run.py "$(cat runtime/latest_run.txt)" --publish-mode contract-check
 ```
+
+When the current host actually spawned this implementation agent, pass `--delegation-mode spawned_subagents --delegation-agent searchpo-impl-agent --delegation-proof "<host-subagent-id>"`. If not, leave the default `single_harness` or use `manual_fallback` and report that honestly.
 
 Policy source:
 
@@ -102,7 +130,7 @@ python3 agent_harness/run_agent_loop.py --mode provider --resume-from 4
 11. **PublishPackage** — 生成抖音发布包
 12. **ContentPreflight** — cross-check + 安全词 + 语义连贯性审查
 13. **VideoQualityLoop** — 每轮 render + metadata + deterministic audit + Gemini visual audit；只 promotion 通过的 attempt
-14. **FinalizeRun** — 写入 `delivery_package.json`，再写 `run_final.json` 作为最终 truth
+14. **FinalizeRun** — main agent 写入 `release_gate.json` 和 `delivery_package.json`，再写 `run_final.json` 作为最终 truth
 
 ## Rules
 

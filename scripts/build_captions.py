@@ -54,6 +54,9 @@ DEFAULT_TAIL_SEC = 0.18
 DEFAULT_MAX_SEG_CHARS = 24.0
 DEFAULT_MAX_DISPLAY_CHARS = 36
 _LATIN_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'/-]*")
+_STANDALONE_METRIC_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)?%?$")
+_STANDALONE_TECH_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+._-]*(?:[._-]\d|\d)[A-Za-z0-9+._-]*$")
+_STANDALONE_TECH_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9+._-]{4,}$")
 
 
 def utc_now() -> str:
@@ -87,10 +90,16 @@ def orphan_caption_texts(segments: list[dict[str, Any]], punch_words: set[str]) 
             continue
         compact = re.sub(r"\s+", "", text)
         cjk_chars = _cjk_count(compact)
+        if _STANDALONE_METRIC_RE.fullmatch(compact) or _STANDALONE_TECH_TOKEN_RE.fullmatch(compact):
+            continue
+        if cjk_chars == 0 and "-" in compact and 8 <= len(compact) <= 36:
+            continue
         if 0 < cjk_chars <= 2 and len(compact) <= 2:
             orphan_segments.append(text)
             continue
         latin_words = _LATIN_WORD_RE.findall(text)
+        if cjk_chars == 0 and len(latin_words) == 1 and _STANDALONE_TECH_NAME_RE.fullmatch(compact):
+            continue
         if cjk_chars == 0 and latin_words and len(latin_words) <= 2 and len(compact) <= 24:
             orphan_segments.append(text)
     return orphan_segments
@@ -125,6 +134,20 @@ def _merge_short_cjk_orphans_forward(
                     }
                 )
                 index += 2
+                continue
+        if merged and _is_short_cjk_orphan_text(str(phrase.get("text") or "")):
+            previous = merged[-1]
+            bridge = str(previous.get("punct") or "")
+            combined_text = f"{previous['text']}{bridge}{phrase['text']}"
+            if len(combined_text) <= max_display_chars:
+                merged[-1] = {
+                    "text": combined_text,
+                    "punct": phrase.get("punct") or "",
+                    "extra_pause_weight": _pause_weight(bridge)
+                    + float(previous.get("extra_pause_weight") or 0)
+                    + float(phrase.get("extra_pause_weight") or 0),
+                }
+                index += 1
                 continue
         merged.append(phrase)
         index += 1
@@ -304,6 +327,35 @@ def probe_audio_seconds(audio_path: Path) -> float | None:
     """Return audio duration in seconds, preferring ffprobe, falling back to wave."""
     if not audio_path.exists():
         return None
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(audio_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        value = proc.stdout.strip()
+        if proc.returncode == 0 and value:
+            return float(value)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    try:
+        with wave.open(str(audio_path), "rb") as wav:
+            frames = wav.getnframes()
+            rate = wav.getframerate() or 1
+            return frames / float(rate)
+    except (wave.Error, OSError):
+        return None
 
 
 def sha256_file(path: Path) -> str:
@@ -337,35 +389,6 @@ def require_voiceover_audio(manifest: dict[str, Any], run_dir: Path) -> tuple[Pa
     if abs(probed_sec - manifest_sec) > 0.35:
         raise SystemExit(f"voiceover duration mismatch: manifest={manifest_sec:.3f}s probed={probed_sec:.3f}s")
     return audio_path, probed_sec
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(audio_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        value = proc.stdout.strip()
-        if proc.returncode == 0 and value:
-            return float(value)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        pass
-    try:
-        with wave.open(str(audio_path), "rb") as wav:
-            frames = wav.getnframes()
-            rate = wav.getframerate() or 1
-            return frames / float(rate)
-    except (wave.Error, OSError):
-        return None
 
 
 def latest_run_dir() -> Path:

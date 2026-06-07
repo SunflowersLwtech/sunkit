@@ -6,8 +6,8 @@
   "scripts": {
     "e2e": "SEARCHPO_E2E_PROFILE=contract SEARCHPO_AGENT_MODE=contract SEARCHPO_REMOTION_RENDER_MODE=local SEARCHPO_DOUYIN_CHECK_LEVEL=manifest bash scripts/run_e2e.sh",
     "e2e:topic": "SEARCHPO_E2E_PROFILE=contract SEARCHPO_AGENT_MODE=contract SEARCHPO_REMOTION_RENDER_MODE=local SEARCHPO_DOUYIN_CHECK_LEVEL=manifest bash scripts/run_e2e.sh",
-    "e2e:link": "SEARCHPO_E2E_PROFILE=provider SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=local SEARCHPO_DOUYIN_CHECK_LEVEL=adapter bash scripts/run_e2e.sh",
-    "e2e:provider": "SEARCHPO_E2E_PROFILE=provider SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=local SEARCHPO_DOUYIN_CHECK_LEVEL=adapter bash scripts/run_e2e.sh",
+    "e2e:link": "SEARCHPO_E2E_PROFILE=provider SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=lambda SEARCHPO_DOUYIN_CHECK_LEVEL=adapter bash scripts/run_e2e.sh",
+    "e2e:provider": "SEARCHPO_E2E_PROFILE=provider SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=lambda SEARCHPO_DOUYIN_CHECK_LEVEL=adapter bash scripts/run_e2e.sh",
     "e2e:lambda": "SEARCHPO_E2E_PROFILE=lambda SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=lambda SEARCHPO_DOUYIN_CHECK_LEVEL=adapter bash scripts/run_e2e.sh",
     "e2e:live": "SEARCHPO_E2E_PROFILE=live SEARCHPO_AGENT_MODE=provider SEARCHPO_REMOTION_RENDER_MODE=lambda SEARCHPO_DOUYIN_CHECK_LEVEL=adapter SEARCHPO_DOUYIN_LIVE=1 bash scripts/run_e2e.sh",
     "data": "python3 data_prep/scripts/run_pipeline.py",

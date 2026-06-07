@@ -1,5 +1,7 @@
+import React from 'react';
 import {fitTextOnNLines} from '@remotion/layout-utils';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+import {seededRandom, useContinuousPulse, useFloat} from '../utils/kinetics';
 import {FONT_FAMILY} from '../fonts';
 import type {NormalizedStyle, Scene} from '../storyboard';
 import type {Payload} from '../Composition';
@@ -42,12 +44,25 @@ const optionalText = (props: Record<string, unknown>, keys: string[], fallback =
   return text({}, [], fallback, max);
 };
 
-const list = (value: unknown, fallback: string[], max = 4): string[] => {
+const list = (value: unknown, fallback: string[], max = 4, itemMax = 58): string[] => {
   const raw = Array.isArray(value) ? value : fallback;
-  return raw
-    .map((item) => text({item}, ['item'], '', 58))
+  const items = raw
+    .map((item) => text({item}, ['item'], '', itemMax))
     .filter(Boolean)
     .slice(0, max);
+  return items.length > 0 ? items : fallback.slice(0, max);
+};
+
+const codeLines = (value: unknown, fallback: string[], max = 14): string[] => {
+  const raw = Array.isArray(value) ? value : fallback;
+  const items = raw
+    .map((item) => {
+      const clean = String(item ?? '').replace(/\s+$/g, '');
+      return clean.length > 88 ? `${clean.slice(0, 87).trimEnd()}...` : clean;
+    })
+    .filter((item) => item.trim())
+    .slice(0, max);
+  return items.length > 0 ? items : fallback.slice(0, max);
 };
 
 const numericSeries = (value: unknown, fallback: number[]): number[] => {
@@ -87,7 +102,7 @@ const fitLines = (value: string, maxLines: number, maxBoxWidth: number, maxFontS
 const useEnter = (delay = 0) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  return spring({frame: frame - delay, fps, config: {damping: 18, stiffness: 110}});
+  return spring({frame: frame - delay, fps, config: {damping: 12, stiffness: 100}});
 };
 
 const Kicker: React.FC<{children: string; tone?: 'cyan' | 'red'}> = ({children, tone}) => (
@@ -98,13 +113,25 @@ const Kicker: React.FC<{children: string; tone?: 'cyan' | 'red'}> = ({children, 
 
 const StatementScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
+  const floatY = useFloat(0.03, 6);
   const title = text(scene.props, ['title'], data.displayTitle, 68);
   const sub = optionalText(scene.props, ['sub', 'subtitle', 'detail'], data.summary, 110);
   const titleFit = fitLines(title, 3, 900, 96);
+
+  // Create deterministic background dots
+  const dots = React.useMemo(() => Array.from({length: 12}).map((_, i) => ({
+    x: seededRandom(i) * 1920,
+    y: seededRandom(i + 100) * 1080,
+    size: 2 + seededRandom(i + 200) * 4,
+  })), []);
+
   return (
     <AbsoluteFill className="scene scene-hook scene-statement" style={{opacity: enter}}>
+      {dots.map((dot, i) => (
+        <div key={i} style={{position: 'absolute', left: dot.x, top: dot.y, width: dot.size, height: dot.size, borderRadius: '50%', background: 'rgba(255,255,255,0.05)'}} />
+      ))}
       <Kicker>{text(scene.props, ['kicker'], '今天为什么刷到它', 18)}</Kicker>
-      <h1 style={{fontSize: titleFit.fontSize, transform: `translateY(${interpolate(enter, [0, 1], [48, 0])}px)`}}>
+      <h1 style={{fontSize: titleFit.fontSize, transform: `translateY(${interpolate(enter, [0, 1], [48, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}) + floatY}px)`}}>
         {titleFit.lines.map((line, index) => (
           <span className="fit-line" key={`${line}-${index}`}>
             {line}
@@ -118,12 +145,13 @@ const StatementScene: React.FC<SceneBlockProps> = ({scene, data}) => {
 
 const ContextScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
   const enter = useEnter(2);
+  const pulse = useContinuousPulse(0.04, 0.4, 1.0);
   const overview = text(scene.props, ['text', 'summary', 'detail'], data.summary, 128);
   const fit = fitLines(overview, 4, 900, 56);
   return (
     <AbsoluteFill className="scene scene-overview scene-context" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '一句话看懂', 18)}</Kicker>
-      <p className="overview-text" style={{fontSize: fit.fontSize, transform: `translateY(${interpolate(enter, [0, 1], [36, 0])}px)`}}>
+      <p className="overview-text" style={{fontSize: fit.fontSize, transform: `translateY(${interpolate(enter, [0, 1], [36, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}px)`}}>
         {fit.lines.map((line, index) => (
           <span className="fit-line" key={`${line}-${index}`}>
             {line}
@@ -133,7 +161,7 @@ const ContextScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
       <div className="signal-row">
         <div
           className="signal-pill"
-          style={{boxShadow: `0 0 ${18 + audioPulse * 34}px rgba(255, 214, 10, 0.28)`}}
+          style={{boxShadow: `0 0 ${18 + audioPulse * 34}px rgba(255, 214, 10, ${0.28 * pulse})`}}
         >
           <span>{text(scene.props, ['metric', 'value'], data.audienceMetricLine, 28)}</span>
           <small>{text(scene.props, ['metricNote', 'note'], data.evidenceLevel.includes('unverified') ? '证据边界' : '实时信号', 18)}</small>
@@ -166,18 +194,33 @@ const StatScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
 
 const BulletsScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const items = list(scene.props.items, data.cards.map((card) => card.value), 4);
+  const activeIndex = items.length > 0 ? Math.floor(frame / Math.max(18, fps * 0.9)) % items.length : 0;
   return (
     <AbsoluteFill className="scene scene-bullets" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '拆成几步看', 18)}</Kicker>
       <h2>{text(scene.props, ['heading', 'title'], data.displayTitle, 56)}</h2>
       <div className="bullet-list">
-        {items.map((item, index) => (
-          <div className="bullet-row" key={`${item}-${index}`} style={{transform: `translateX(${interpolate(enter, [0, 1], [36 - index * 6, 0])}px)`}}>
-            <span>{String(index + 1).padStart(2, '0')}</span>
-            <strong>{item}</strong>
-          </div>
-        ))}
+        {items.map((item, index) => {
+          const itemEnter = spring({frame: frame - 8 - index * 7, fps, config: {damping: 12, stiffness: 100}});
+          const active = index === activeIndex;
+          const drift = Math.sin(frame / 13 + index) * (active ? 8 : 3);
+          return (
+            <div
+              className={`bullet-row${active ? ' bullet-row-active' : ''}`}
+              key={`${item}-${index}`}
+              style={{
+                opacity: itemEnter,
+                transform: `translateX(${(1 - itemEnter) * (42 - index * 5) + drift}px) scale(${active ? 1.025 : 1})`,
+              }}
+            >
+              <span>{String(index + 1).padStart(2, '0')}</span>
+              <strong>{item}</strong>
+            </div>
+          );
+        })}
       </div>
     </AbsoluteFill>
   );
@@ -185,16 +228,26 @@ const BulletsScene: React.FC<SceneBlockProps> = ({scene, data}) => {
 
 const CardScene: React.FC<SceneBlockProps> = ({scene, data, index}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
   const accent = CARD_ACCENTS[index % CARD_ACCENTS.length];
   const label = text(scene.props, ['label'], data.cards[index]?.label || '证据', 18);
   const value = text(scene.props, ['value'], data.cards[index]?.value || data.displayTitle, 48);
   const detail = optionalText(scene.props, ['detail'], data.cards[index]?.detail || data.summary, 120);
+  const floatY = Math.sin(frame / 18 + index) * 12;
+  const scan = (frame * 2 + index * 31) % 140;
   return (
     <AbsoluteFill className="scene scene-card" style={{opacity: enter}}>
       <div className="card-index" style={{color: accent}}>
         {String(index + 1).padStart(2, '0')}
       </div>
-      <div className="big-card" style={{borderLeftColor: accent, transform: `translateX(${interpolate(enter, [0, 1], [40, 0])}px)`}}>
+      <div
+        className="big-card"
+        style={{
+          borderLeftColor: accent,
+          background: `linear-gradient(90deg, rgba(10, 14, 20, 0.72) 0%, rgba(10, 14, 20, 0.72) ${scan - 14}%, color-mix(in srgb, ${accent} 18%, rgba(10, 14, 20, 0.72)) ${scan}%, rgba(10, 14, 20, 0.72) ${scan + 14}%)`,
+          transform: `translate(${interpolate(enter, [0, 1], [40, 0])}px, ${floatY}px)`,
+        }}
+      >
         <div className="big-card-label" style={{color: accent}}>{label}</div>
         <div className="big-card-value">{value}</div>
         <div className="big-card-detail">{detail}</div>
@@ -205,16 +258,18 @@ const CardScene: React.FC<SceneBlockProps> = ({scene, data, index}) => {
 
 const CompareScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const leftActive = Math.sin(frame / 22) >= 0;
   return (
     <AbsoluteFill className="scene scene-compare" style={{opacity: enter}}>
       <Kicker>{text(scene.props, ['kicker'], '别混在一起', 18)}</Kicker>
       <h2>{text(scene.props, ['heading', 'title'], data.displayTitle, 56)}</h2>
       <div className="compare-grid">
-        <div>
+        <div className={leftActive ? 'compare-active' : ''} style={{transform: `translateY(${leftActive ? -10 : 4}px)`}}>
           <span>{text(scene.props, ['leftLabel'], '已知', 14)}</span>
           <strong>{text(scene.props, ['left'], data.cards[0]?.detail || data.summary, 90)}</strong>
         </div>
-        <div>
+        <div className={!leftActive ? 'compare-active' : ''} style={{transform: `translateY(${!leftActive ? -10 : 4}px)`}}>
           <span>{text(scene.props, ['rightLabel'], '待证', 14)}</span>
           <strong>{text(scene.props, ['right'], data.verificationNextStep, 90)}</strong>
         </div>
@@ -225,11 +280,14 @@ const CompareScene: React.FC<SceneBlockProps> = ({scene, data}) => {
 
 const CompareTableScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const rows = list(
     scene.props.rows || scene.props.items,
     data.cards.slice(0, 4).map((card) => `${card.label}|${card.value}|${card.detail}`),
     4,
   );
+  const activeIndex = rows.length > 0 ? Math.floor(frame / Math.max(18, fps * 0.8)) % rows.length : 0;
   return (
     <AbsoluteFill className="scene scene-compare-table" style={{opacity: enter}}>
       <Kicker>{text(scene.props, ['kicker'], '横向比较', 18)}</Kicker>
@@ -242,11 +300,16 @@ const CompareTableScene: React.FC<SceneBlockProps> = ({scene, data}) => {
         </div>
         {rows.map((row, index) => {
           const [label, left, right] = splitRow(row, index);
+          const itemEnter = spring({frame: frame - 10 - index * 8, fps, config: {damping: 12, stiffness: 100}});
+          const active = index === activeIndex;
           return (
             <div
-              className="compare-table-row"
+              className={`compare-table-row${active ? ' compare-table-row-active' : ''}`}
               key={`${label}-${index}`}
-              style={{transform: `translateY(${interpolate(enter, [0, 1], [18 - index * 3, 0])}px)`}}
+              style={{
+                opacity: itemEnter,
+                transform: `translateY(${(1 - itemEnter) * (24 - index * 3) + (active ? -8 : 0)}px) scale(${active ? 1.012 : 1})`,
+              }}
             >
               <span>{label}</span>
               <strong>{left}</strong>
@@ -262,6 +325,7 @@ const CompareTableScene: React.FC<SceneBlockProps> = ({scene, data}) => {
 const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
   const enter = useEnter(2);
   const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const prompt = text(scene.props, ['prompt'], '$', 8);
   const lines = list(scene.props.lines || scene.props.commands || scene.props.items, [
     'clone / install',
@@ -269,10 +333,14 @@ const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => 
     'inspect examples',
     'check tests',
   ], 5);
+  const activeIndex = lines.length > 0 ? Math.floor(frame / Math.max(20, fps * 0.85)) % lines.length : 0;
   return (
     <AbsoluteFill className="scene scene-terminal" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '把它放进终端看', 18)}</Kicker>
-      <div className="terminal-window" style={{boxShadow: `0 0 ${24 + audioPulse * 36}px rgba(114, 231, 255, 0.16)`}}>
+      <div className="terminal-window" style={{
+        boxShadow: `0 0 ${24 + audioPulse * 36}px rgba(114, 231, 255, 0.16)`,
+        transform: `translate(${interpolate(frame, [0, 900], [0, -40])}px, ${interpolate(frame, [0, 900], [0, -20])}px) scale(${interpolate(frame, [0, 900], [1.02, 1.07])})`
+      }}>
         <div className="terminal-bar">
           <div className="terminal-lights"><span /><span /><span /></div>
           <strong>{text(scene.props, ['title', 'heading'], data.displayTitle, 42)}</strong>
@@ -282,10 +350,15 @@ const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => 
             const delay = index * 16;
             const reveal = Math.max(0, Math.min(Array.from(line).length, Math.floor((frame - delay) / 1.5)));
             const rendered = Array.from(line).slice(0, reveal).join('');
+            const active = index === activeIndex;
             return (
-              <div className="terminal-line" key={`${line}-${index}`}>
+              <div
+                className={`terminal-line${active ? ' terminal-line-active' : ''}`}
+                key={`${line}-${index}`}
+                style={{transform: `translateX(${active ? 10 + Math.sin(frame / 8) * 6 : 0}px)`}}
+              >
                 <span>{prompt}</span>
-                <code>{rendered || ' '}</code>
+                <code>{rendered || ' '}{active ? <b className="terminal-cursor">_</b> : null}</code>
               </div>
             );
           })}
@@ -298,27 +371,41 @@ const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => 
 
 const FlowScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const nodes = list(scene.props.nodes || scene.props.steps || scene.props.items, ['输入', '核心模块', '输出', '验证门槛'], 5);
+  const activeIndex = nodes.length > 0 ? Math.floor(frame / Math.max(22, fps * 0.9)) % nodes.length : 0;
+  const railProgress = nodes.length > 1 ? Math.min(1, (activeIndex + (frame % Math.max(22, fps * 0.9)) / Math.max(22, fps * 0.9)) / (nodes.length - 1)) : 1;
   return (
     <AbsoluteFill className="scene scene-flow" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '机制怎么跑', 18)}</Kicker>
       <h2>{text(scene.props, ['heading', 'title'], data.displayTitle, 56)}</h2>
       <div className="flow-diagram" style={{boxShadow: `0 0 ${28 + audioPulse * 32}px rgba(114, 231, 255, 0.14)`}}>
-        {nodes.map((node, index) => (
-          <div className="flow-step" key={`${node}-${index}`}>
-            <div
-              className="flow-node"
-              style={{
-                opacity: interpolate(enter, [0, 1], [0.35 + index * 0.08, 1]),
-                transform: `translateY(${interpolate(enter, [0, 1], [28 - index * 4, 0])}px)`,
-              }}
-            >
-              <span>{String(index + 1).padStart(2, '0')}</span>
-              <strong>{node}</strong>
-            </div>
-            {index < nodes.length - 1 ? <div className="flow-arrow">→</div> : null}
-          </div>
-        ))}
+        <div className="flow-rail">
+          <div className="flow-rail-fill" style={{width: `${railProgress * 100}%`}} />
+          <div className="flow-packet" style={{left: `${railProgress * 100}%`, transform: `translate(-50%, ${Math.sin(frame / 8) * 8}px) scale(${0.92 + audioPulse * 0.18})`}} />
+        </div>
+        <div className="flow-steps">
+          {nodes.map((node, index) => {
+            const itemEnter = spring({frame: frame - 6 - index * 6, fps, config: {damping: 12, stiffness: 100}});
+            const active = index === activeIndex;
+            return (
+              <div className="flow-step" key={`${node}-${index}`}>
+                <div
+                  className={`flow-node${active ? ' flow-node-active' : ''}`}
+                  style={{
+                    opacity: interpolate(itemEnter, [0, 1], [0.35, 1]),
+                    transform: `translateY(${(1 - itemEnter) * (28 - index * 4) + (active ? -14 + Math.sin(frame / 10) * 6 : 0)}px) scale(${active ? 1.06 : 1})`,
+                  }}
+                >
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <strong>{node}</strong>
+                </div>
+                {index < nodes.length - 1 ? <div className="flow-arrow">→</div> : null}
+              </div>
+            );
+          })}
+        </div>
       </div>
       <p className="flow-caption">{text(scene.props, ['caption', 'detail', 'summary'], '把机制画出来，才不是把文字贴到屏幕上。', 80)}</p>
     </AbsoluteFill>
@@ -327,11 +414,15 @@ const FlowScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
 
 const ChartScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const series = numericSeries(scene.props.points || scene.props.items, [18, 36, 52, 71, 88]);
   const max = Math.max(...series, 1);
   const min = Math.min(...series, 0);
   const range = Math.max(1, max - min);
   const progress = Math.max(0, Math.min(1, interpolate(enter, [0, 1], [0.05, 1])));
+  const activeIndex = series.length > 0 ? Math.floor(frame / Math.max(18, fps * 0.75)) % series.length : 0;
+  const scanX = 80 + ((frame * 9) % 760);
   const points = series.map((value, index) => {
     const x = 80 + (index / Math.max(1, series.length - 1)) * 760;
     const y = 300 - ((value - min) / range) * 220;
@@ -356,9 +447,10 @@ const ChartScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
             points={polyline}
             style={{strokeDasharray: 1100, strokeDashoffset: 1100 * (1 - progress)}}
           />
+          <line className="chart-scan-line" x1={scanX} x2={scanX} y1="56" y2="318" />
           {points.map((point, index) => (
             <g key={`${point.x}-${index}`} style={{opacity: index / Math.max(1, points.length - 1) <= progress ? 1 : 0}}>
-              <circle className="chart-dot" cx={point.x} cy={point.y} r={10 + audioPulse * 3} />
+              <circle className={index === activeIndex ? 'chart-dot chart-dot-active' : 'chart-dot'} cx={point.x} cy={point.y} r={10 + audioPulse * 3 + (index === activeIndex ? 5 + Math.sin(frame / 7) * 3 : 0)} />
               <text x={point.x} y={point.y - 18}>{String(point.value)}</text>
             </g>
           ))}
@@ -370,6 +462,8 @@ const ChartScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
 
 const CodeDiffScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
   const additions = list(scene.props.additions || scene.props.added || scene.props.items, [
     '看入口模块',
     '看示例输入输出',
@@ -380,6 +474,7 @@ const CodeDiffScene: React.FC<SceneBlockProps> = ({scene, data}) => {
     ...removals.map((line) => ({kind: 'remove', line})),
     ...additions.map((line) => ({kind: 'add', line})),
   ];
+  const activeIndex = rows.length > 0 ? Math.floor(frame / Math.max(18, fps * 0.75)) % rows.length : 0;
   return (
     <AbsoluteFill className="scene scene-code-diff" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '代码视角', 18)}</Kicker>
@@ -390,12 +485,23 @@ const CodeDiffScene: React.FC<SceneBlockProps> = ({scene, data}) => {
         </div>
         <div className="diff-window">
           <div className="diff-file">{text(scene.props, ['filename', 'file'], 'repo / docs / tests', 34)}</div>
-          {rows.map((row, index) => (
-            <div className={`diff-row diff-${row.kind}`} key={`${row.kind}-${row.line}-${index}`} style={{opacity: interpolate(enter, [0, 1], [0.35 + index * 0.08, 1])}}>
-              <span>{row.kind === 'add' ? '+' : '-'}</span>
-              <code>{row.line}</code>
-            </div>
-          ))}
+          {rows.map((row, index) => {
+            const itemEnter = spring({frame: frame - 8 - index * 7, fps, config: {damping: 12, stiffness: 100}});
+            const active = index === activeIndex;
+            return (
+              <div
+                className={`diff-row diff-${row.kind}${active ? ' diff-row-active' : ''}`}
+                key={`${row.kind}-${row.line}-${index}`}
+                style={{
+                  opacity: interpolate(itemEnter, [0, 1], [0.35, 1]),
+                  transform: `translateX(${(1 - itemEnter) * 34 + (active ? 12 + Math.sin(frame / 9) * 5 : 0)}px)`,
+                }}
+              >
+                <span>{row.kind === 'add' ? '+' : '-'}</span>
+                <code>{row.line}</code>
+              </div>
+            );
+          })}
         </div>
       </div>
     </AbsoluteFill>
@@ -435,6 +541,252 @@ const CtaScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   );
 };
 
+// ---------------------------------------------------------------------------
+// Engineering-theme scenes (SightLine-style: pure black + monospace + minimal)
+// ---------------------------------------------------------------------------
+
+/**
+ * CodeBlockScene: renders a small file in an IDE-like window with one line
+ * highlighted at a time. The visual is intentionally austere — the only
+ * "decoration" is the active-line indicator and the tab dot.
+ */
+const CodeBlockScene: React.FC<SceneBlockProps> = ({scene, data, index}) => {
+  const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const filename = text(scene.props, ['filename'], 'engine.py', 32);
+  const lines = codeLines(scene.props.lines || scene.props.code || scene.props.items, [
+    'def process(input):',
+    '    context = gather(input)',
+    '    return decide(context)',
+  ], 14);
+  // Walk the highlight one line at a time; allow manual override via prop.
+  const autoHighlight = Math.floor(frame / 22) % Math.max(lines.length, 1);
+  const highlight =
+    typeof scene.props.highlight === 'number'
+      ? Math.min(Math.max(Math.floor(scene.props.highlight), 0), Math.max(lines.length - 1, 0))
+      : autoHighlight;
+  const title = text(scene.props, ['title'], data.displayTitle, 60);
+  const detail = optionalText(scene.props, ['detail'], data.summary, 110);
+  return (
+    <AbsoluteFill className="scene scene-code-block" style={{opacity: enter}}>
+      <div className="act-tag">
+        <span className="act-tag-num">ACT {typeof scene.props.act === 'number' ? scene.props.act : index + 1}</span>
+        <span className="act-tag-name">— {text(scene.props, ['actLabel'], 'THE ENGINE', 18)}</span>
+      </div>
+      <div className="code-window">
+        <div className="code-tab">
+          <span className="code-tab-dot" />
+          <strong>{filename}</strong>
+        </div>
+        <pre className="code-body">
+          {lines.map((line, i) => (
+            <div
+              className={`code-line${i === highlight ? ' code-line-active' : ''}`}
+              key={`${i}-${line}`}
+              style={{
+                opacity: interpolate(enter, [0, 1], [0.4, 1]),
+              }}
+            >
+              <span className="code-line-num">{String(i + 1).padStart(2, '0')}</span>
+              <code>{line || ' '}</code>
+            </div>
+          ))}
+        </pre>
+      </div>
+      {(title || detail) ? (
+        <div className="feature-caption">
+          {title ? <strong>{title}</strong> : null}
+          {detail ? <span>{detail}</span> : null}
+        </div>
+      ) : null}
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * NodeGraphScene: a hub-and-spoke architecture diagram. The center carries the
+ * orchestrator/system name; the surrounding nodes are sub-components. Mirrors
+ * the SightLine "Agent Architecture" frame (1 orchestrator + 6 specialists).
+ */
+const NodeGraphScene: React.FC<SceneBlockProps> = ({scene, data, index}) => {
+  const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const nodes = list(scene.props.nodes || scene.props.items, [
+    'Vision Agent', 'OCR Agent', 'Face Agent', 'Memory Agent', 'Navigation Agent', 'Search Agent',
+  ], 8, 18);
+  // Optional per-node sub-labels (model name, latency, etc).
+  const subs = list(scene.props.subs || [], [], nodes.length, 18);
+  // Walk highlight on a slow cadence; the active node also gets a stronger ring.
+  const autoActive = nodes.length > 0 ? Math.floor(frame / 26) % nodes.length : 0;
+  const active = typeof scene.props.active === 'number' ? scene.props.active : autoActive;
+  const center = text(scene.props, ['center', 'title'], data.displayTitle, 28);
+  const centerSub = text(scene.props, ['centerSub', 'powered'], 'powered by', 18);
+  const viewBox = 1000;
+  const cx = 500;
+  const cy = 320;
+  const radiusX = 290;
+  const radiusY = 220;
+  return (
+    <AbsoluteFill className="scene scene-node-graph" style={{opacity: enter}}>
+      <div className="act-tag">
+        <span className="act-tag-num">ACT {typeof scene.props.act === 'number' ? scene.props.act : index + 1}</span>
+        <span className="act-tag-name">— {text(scene.props, ['actLabel'], 'THE ARCHITECTURE', 22)}</span>
+      </div>
+      <svg className="node-graph-svg" viewBox={`0 0 ${viewBox} 640`} role="img">
+        {nodes.map((node, i) => {
+          const angle = (i / Math.max(nodes.length, 1)) * 2 * Math.PI - Math.PI / 2;
+          const x = cx + Math.cos(angle) * radiusX;
+          const y = cy + Math.sin(angle) * radiusY;
+          return (
+            <g key={`${i}-${node}`}>
+              <line className="spoke" x1={cx} y1={cy} x2={x} y2={y} />
+              <circle
+                className={i === active ? 'node-ring node-ring-active' : 'node-ring'}
+                cx={x}
+                cy={y}
+                r="48"
+              />
+              <text className="node-title" x={x} y={y - 2} textAnchor="middle">
+                {node}
+              </text>
+              {subs[i] ? (
+                <text className="node-sub" x={x} y={y + 18} textAnchor="middle">
+                  {subs[i]}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <circle className="center-ring" cx={cx} cy={cy} r="74" />
+        <text className="center-title" x={cx} y={cy - 2} textAnchor="middle">
+          {center}
+        </text>
+        <text className="center-sub" x={cx} y={cy + 22} textAnchor="middle">
+          {centerSub}
+        </text>
+      </svg>
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * DecisionTableScene: a two-column "Rules → Output" grid. Mirrors SightLine's
+ * Level-of-Detail Engine frame (six rules cascading into LOD categories).
+ */
+const DecisionTableScene: React.FC<SceneBlockProps> = ({scene, data, index}) => {
+  const enter = useEnter(2);
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  // Rules can come as "R1 | High motion → Safety" rows OR as parallel arrays
+  // (rules: ["High motion → Safety", ...], tags: ["R1", ...]).
+  const rawRules = Array.isArray(scene.props.rules)
+    ? (scene.props.rules as unknown[]).map((item) => text({item}, ['item'], '', 72))
+    : list(scene.props.rules, ['High motion → Safety', 'Noise > threshold → Safety'], 8, 72);
+  const tags = list(scene.props.tags || [], [], rawRules.length);
+  const categories = list(scene.props.categories, ['LOD 1: Safety', 'LOD 2: Balanced', 'LOD 3: Detailed'], 4, 36);
+  const subs = list(scene.props.categorySubs || [], [], categories.length, 42);
+  // Walk the rule/category pairs so they reveal in sync.
+  const revealCount = Math.min(
+    rawRules.length,
+    Math.floor(interpolate(enter, [0, 1], [0, rawRules.length + 1])),
+  );
+  const title = text(scene.props, ['title', 'heading'], data.displayTitle, 60);
+  return (
+    <AbsoluteFill className="scene scene-decision-table" style={{opacity: enter}}>
+      <div className="act-tag">
+        <span className="act-tag-num">ACT {typeof scene.props.act === 'number' ? scene.props.act : index + 1}</span>
+        <span className="act-tag-name">— {text(scene.props, ['actLabel'], 'THE ENGINE', 18)}</span>
+      </div>
+      {title ? <h2>{title}</h2> : null}
+      <div className="decision-grid">
+        <div className="decision-col">
+          <span className="decision-col-label">Rules</span>
+          {rawRules.map((rule, i) => {
+            const rowEnter = spring({frame: frame - 6 - i * 5, fps, config: {damping: 12, stiffness: 100}});
+            const visible = i < revealCount;
+            return (
+              <div
+                className="decision-rule"
+                key={`${i}-${rule}`}
+                style={{
+                  opacity: rowEnter,
+                  transform: `translateX(${(1 - rowEnter) * 18}px)`,
+                  visibility: visible ? 'visible' : 'hidden',
+                }}
+              >
+                {tags[i] ? <span className="decision-rule-tag">{tags[i]}</span> : null}
+                <span>{rule}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="decision-col">
+          <span className="decision-col-label">Output</span>
+          {categories.map((cat, i) => {
+            const rowEnter = spring({frame: frame - 12 - i * 5, fps, config: {damping: 12, stiffness: 100}});
+            return (
+              <div
+                className="decision-cat"
+                key={`${i}-${cat}`}
+                style={{
+                  opacity: rowEnter,
+                  transform: `translateX(${(1 - rowEnter) * -18}px)`,
+                  // Default amber; first category red, last green for visual variety.
+                  borderLeftColor: i === 0 ? '#ff5f56' : i === categories.length - 1 ? '#22c55e' : 'var(--accent)',
+                }}
+              >
+                {cat}
+                {subs[i] ? <span className="decision-cat-sub">{subs[i]}</span> : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * ActCardScene: a momentary banner that announces the upcoming act. Designed
+ * to feel like a chapter title card — sits in the middle of the canvas and
+ * lasts only ~0.4s at 30fps (use weight 0.06).
+ */
+const ActCardScene: React.FC<SceneBlockProps> = ({scene}) => {
+  const enter = useEnter(0);
+  const eyebrow = text(scene.props, ['eyebrow', 'title'], 'Live Demo', 18);
+  const detail = text(scene.props, ['detail', 'text', 'heading'], 'Adaptive Guidance', 64);
+  const sub = optionalText(scene.props, ['sub'], '', 90);
+  return (
+    <AbsoluteFill className="scene scene-act-card" style={{opacity: enter}}>
+      <div className="act-card" style={{transform: `scale(${interpolate(enter, [0, 1], [0.94, 1])})`}}>
+        <span className="act-card-eyebrow">{eyebrow}</span>
+        <span className="act-card-title">{detail}</span>
+        {sub ? <span className="act-card-detail">{sub}</span> : null}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * ClosingScene: the final frame. Wordmark, one-line description, and a small
+ * "built for" caption. The whole composition fades up; no transitions.
+ */
+const ClosingScene: React.FC<SceneBlockProps> = ({scene}) => {
+  const enter = useEnter(0);
+  const mark = text(scene.props, ['mark'], 'searchpo', 20);
+  const sub = text(scene.props, ['sub'], 'engineering videos for AI builders', 48);
+  const built = text(scene.props, ['built'], 'built for the agents that watch the world', 60);
+  return (
+    <AbsoluteFill className="scene scene-closing" style={{opacity: enter}}>
+      <div className="closing-mark" style={{transform: `translateY(${interpolate(enter, [0, 1], [20, 0])}px)`}}>
+        <span className="closing-wordmark">{mark}</span>
+        <span className="closing-sub">{sub}</span>
+        <span className="closing-built">{built}</span>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 export const SceneBlock: React.FC<SceneBlockProps> = (props) => {
   switch (props.scene.type) {
     case 'statement':
@@ -457,6 +809,16 @@ export const SceneBlock: React.FC<SceneBlockProps> = (props) => {
       return <ChartScene {...props} />;
     case 'code_diff':
       return <CodeDiffScene {...props} />;
+    case 'code_block':
+      return <CodeBlockScene {...props} />;
+    case 'node_graph':
+      return <NodeGraphScene {...props} />;
+    case 'decision_table':
+      return <DecisionTableScene {...props} />;
+    case 'act_card':
+      return <ActCardScene {...props} />;
+    case 'closing':
+      return <ClosingScene {...props} />;
     case 'quote':
       return <QuoteScene {...props} />;
     case 'cta':

@@ -13,7 +13,7 @@ Scripts are thin operational entrypoints. Core state belongs in `data_prep/`, `a
 | `finalize_artifacts.py`, `finalize_run.py` | release truth | Binds final media by SHA256 and writes `run_final.json` last. |
 | `cover_health.py`, `backfill_douyin_covers.py` | cover integrity | Rejects black/blank covers and repairs run-scoped cover/video bindings for older runs. |
 | `video_quality_loop.py` | media improve loop | Runs render/audit attempts, applies layout repairs or content backtracks, and only binds the passing attempt. |
-| `deterministic_visual_audit.py` | media QA | Requires ffmpeg/tesseract; fails on invalid captions, black frames, or silent provider audio. |
+| `deterministic_visual_audit.py` | media QA | Requires ffmpeg; fails on invalid captions, black frames, silent provider audio, weak visual intent, sparse motion, or motion overload. OCR is optional diagnostics via `SEARCHPO_ENABLE_OCR_AUDIT=1`, not a release gate. |
 | `douyin_upload_check.sh` | publish boundary | Manifest check, adapter preflight, or live upload depending on env gates. |
 | `deepseek_polish.py`, `gemini_tts.py`, `gemini_visual_audit.py` | provider explicit | Real provider calls; never fabricate output. |
 | `scan_secrets.py`, `redact_trace_export.py` | security | Redacted trace export and secret-shaped string scanning. |

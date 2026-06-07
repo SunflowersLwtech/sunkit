@@ -24,6 +24,7 @@ if str(ROOT / "scripts") not in sys.path:
 from agent_harness.policy import policy_get
 from agent_harness.evidence import strong_research_review_errors
 from agent_harness.service_artifacts import RENDER_TO_PLANNING_TYPE, bounded_text
+from agent_harness.storyboard import minimum_storyboard_scene_count
 from env_utils import first_env, env_value
 from gemini_api import default_gemini_mode, generate_content_url
 
@@ -66,7 +67,7 @@ def score_content(
     target_overall = float(policy_get("content_optimization.target_overall", 8.0))
     min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
     prompt = json.dumps({
-        "task": "Score this short-video content package for Douyin quality. Return JSON only.",
+        "task": "Score this source-bounded video content package for Douyin quality. Return JSON only.",
         "scoring_dimensions": {
             "hook_strength": "1-10: Does the title/opening grab attention in first 2 seconds?",
             "retention_structure": "1-10: Does it quickly move from problem to mechanism, tradeoff, and verification path so viewers have a reason to keep watching?",
@@ -79,6 +80,7 @@ def score_content(
             "constructive_interpretation": "1-10: Does it provide a useful, source-grounded explanation instead of generic hype?",
             "format_fit": "1-10: Does the chosen duration, orientation, storyboard motion, and animation style fit the subject instead of forcing every topic into the same short vertical template?",
             "custom_visual_fit": "1-10: Does agent_visual define a topic-specific Remotion visual instead of generic reusable cards?",
+            "long_form_structure": "1-10: If duration is 180+ seconds, does the package have enough chapters, scene diversity, pacing, and visual beats to justify a long video instead of stretching a short script?",
             "open_source_explainer_value": "1-10: For GitHub/open-source topics, does it explain repo value through problem, mechanism/architecture, usage or demo path, tradeoff/risk, and verification steps?",
         },
         "required_output": {
@@ -94,9 +96,10 @@ def score_content(
                 "constructive_interpretation": "int",
                 "format_fit": "int",
                 "custom_visual_fit": "int",
+                "long_form_structure": "int",
                 "open_source_explainer_value": "int",
             },
-            "overall": "float weighted average; constructive interpretation, information density, format_fit, custom_visual_fit, and open_source_explainer_value must materially affect it",
+            "overall": "float weighted average; constructive interpretation, information density, format_fit, custom_visual_fit, long_form_structure, and open_source_explainer_value must materially affect it",
             "suggestions": ["1-3 specific improvement suggestions"],
             "verdict": f"pass only if overall >= {target_overall} and every dimension >= {min_dimension}; otherwise improve",
         },
@@ -112,7 +115,11 @@ def score_content(
                 "enabled": (polish.get("agent_visual") or {}).get("enabled"),
                 "render_mode": (polish.get("agent_visual") or {}).get("render_mode"),
                 "description": (polish.get("agent_visual") or {}).get("description"),
-                "component_code_preview": str((polish.get("agent_visual") or {}).get("component_code") or "")[:1600],
+                "component_code_preview": str(
+                    (polish.get("agent_visual") or {}).get("module_code")
+                    or (polish.get("agent_visual") or {}).get("component_code")
+                    or ""
+                )[:1600],
                 "css_preview": str((polish.get("agent_visual") or {}).get("css") or "")[:1000],
             },
             "video_profile": polish.get("video_profile") or polish.get("videoProfile"),
@@ -142,7 +149,8 @@ def score_content(
             "It makes project capability, ranking, benchmark, or adoption claims not supported by evidence_bundle.",
             "It does not explain the problem/mechanism/tradeoff/evaluation path for an open-source project or tool.",
             "For a GitHub/open-source topic, it gives only a trend or README summary and does not explain why a developer should care, how the project works, what could go wrong, and how to verify it.",
-            "The video_profile forces a 12-second vertical radar treatment even though the source depth requires a longer explainer or a different presentation format.",
+            "The video_profile forces a short vertical radar treatment even though the source depth requires a longer explainer or a different presentation format.",
+            "A 180+ second video uses fewer than 9 scene beats, low scene-type diversity, or static/card-heavy structure.",
             "agent_visual is missing, disabled, generic, or not clearly tailored to this topic.",
             "It presents private Douyin thresholds, fixed traffic-pool sizes, completion-rate cutoffs, or a definitive shadowban/限流 diagnosis as fact without official platform-rule evidence.",
             "It asks viewers for fake likes, follows, shares, comment spam, or other engagement bait.",
@@ -266,6 +274,82 @@ def content_value_beats(polish: dict[str, Any], candidate: dict[str, Any]) -> di
     }
 
 
+def longform_min_scene_count(duration_seconds: int) -> int:
+    return minimum_storyboard_scene_count(duration_seconds)
+
+
+def longform_format_issues(polish: dict[str, Any]) -> list[str]:
+    profile = polish.get("video_profile") if isinstance(polish.get("video_profile"), dict) else {}
+    try:
+        duration_seconds = int(profile.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    orientation = str(profile.get("orientation") or "")
+    aspect_ratio = str(profile.get("aspect_ratio") or profile.get("aspectRatio") or "")
+    issues: list[str] = []
+    if orientation not in {"vertical", "horizontal"}:
+        issues.append("video_profile.orientation must be vertical or horizontal")
+    if orientation == "vertical" and aspect_ratio not in {"", "9:16"}:
+        issues.append("vertical video_profile must use 9:16 aspect_ratio")
+    if orientation == "horizontal" and aspect_ratio not in {"", "16:9"}:
+        issues.append("horizontal video_profile must use 16:9 aspect_ratio")
+    if duration_seconds < 60:
+        return issues
+    storyboard = polish.get("storyboard") if isinstance(polish.get("storyboard"), dict) else {}
+    scenes = [scene for scene in storyboard.get("scenes") or [] if isinstance(scene, dict)]
+    scene_types = [str(scene.get("type") or "") for scene in scenes]
+    type_set = set(scene_types)
+    min_scenes = longform_min_scene_count(duration_seconds)
+    if len(scenes) < min_scenes:
+        issues.append(f"video duration {duration_seconds}s requires at least {min_scenes} storyboard scenes, got {len(scenes)}")
+    min_type_count = 5 if duration_seconds >= 180 else 4
+    if len(type_set) < min_type_count:
+        issues.append(f"video duration {duration_seconds}s needs at least {min_type_count} distinct scene types")
+    if not scene_types or scene_types[0] != "statement":
+        issues.append("long-form storyboard must open with statement")
+    if not scene_types or scene_types[-1] not in {"cta", "closing"}:
+        issues.append("long-form storyboard must close with cta or closing")
+    motion_types = {
+        "terminal",
+        "flow",
+        "chart",
+        "code_diff",
+        "code_block",
+        "node_graph",
+        "decision_table",
+        "compare_table",
+        "compare",
+        "bullets",
+        "stat",
+    }
+    min_motion_count = 5 if duration_seconds >= 180 else 3
+    if sum(1 for scene_type in scene_types if scene_type in motion_types) < min_motion_count:
+        issues.append(f"video duration {duration_seconds}s must include at least {min_motion_count} motion-rich explanatory scenes")
+    if scene_types.count("card") > max(4, len(scenes) // 3):
+        issues.append("storyboard overuses card scenes instead of rich explanatory scene types")
+    return issues
+
+
+def revisionable_blocking_issue(issue: str) -> bool:
+    """Return whether DeepSeek can fix the blocker with a revised content package."""
+    text = str(issue or "")
+    prefixes = (
+        "voiceover/title does not reference selected candidate terms",
+        "opening hook is too generic",
+        "open-source explainer voiceover is too short",
+        "open-source explainer is missing core value beats",
+        "video_profile.orientation must be vertical or horizontal",
+        "vertical video_profile must use 9:16 aspect_ratio",
+        "horizontal video_profile must use 16:9 aspect_ratio",
+        "video duration ",
+        "long-form storyboard must open with statement",
+        "long-form storyboard must close with cta",
+        "long-form storyboard must close with cta or closing",
+        "storyboard overuses card scenes",
+    )
+    return any(text.startswith(prefix) for prefix in prefixes)
+
+
 def deterministic_blocking_checks(
     polish: dict[str, Any],
     candidate: dict[str, Any],
@@ -291,19 +375,25 @@ def deterministic_blocking_checks(
     if not candidate_referenced:
         blockers.append(f"voiceover/title does not reference selected candidate terms: {terms}")
     if not hook_specific:
-        blockers.append(f"opening hook is too generic for short video: {opening}")
+        blockers.append(f"opening hook is too generic for a source-bounded explainer: {opening}")
     if not evidence_bundle.get("sources"):
         blockers.append("evidence_bundle.json is missing fetched source details")
     strong_research_errors = strong_research_review_errors(cross_check_review)
     if strong_research_errors:
         blockers.append("strong research review did not pass: " + "; ".join(strong_research_errors))
     if value_beats["open_source_candidate"]:
-        if value_beats["voiceover_chinese_chars"] < 180:
+        duration_seconds = int(value_beats["video_duration_seconds"] or 0)
+        long_form_min_chars = max(180, duration_seconds * 4) if duration_seconds >= 180 else 180
+        if value_beats["voiceover_chinese_chars"] < long_form_min_chars:
             blockers.append("open-source explainer voiceover is too short to deliver useful repo analysis")
         if value_beats["beat_count"] < 4:
             blockers.append(
                 "open-source explainer is missing core value beats: problem, mechanism, usage/demo, tradeoff, verification"
             )
+    format_issues = longform_format_issues(polish)
+    blockers.extend(format_issues)
+    revisionable_blockers = [issue for issue in blockers if revisionable_blocking_issue(issue)]
+    hard_blockers = [issue for issue in blockers if issue not in revisionable_blockers]
     return {
         "candidate_terms": terms,
         "candidate_referenced": candidate_referenced,
@@ -311,6 +401,9 @@ def deterministic_blocking_checks(
         "evidence_sources_present": bool(evidence_bundle.get("sources")),
         "cross_check_status": cross_check_review.get("status") or "missing",
         "content_value_beats": value_beats,
+        "longform_format_issues": format_issues,
+        "revisionable_blocking_issues": revisionable_blockers,
+        "hard_blocking_issues": hard_blockers,
         "blocking_issues": blockers,
     }
 
@@ -358,15 +451,50 @@ def score_target_report(result: dict[str, Any], blocking_checks: dict[str, Any])
     target_overall = float(policy_get("content_optimization.target_overall", 8.0))
     min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
     scores = dimension_scores(result)
+    required_dimensions = {
+        "hook_strength",
+        "retention_structure",
+        "information_density",
+        "emotional_tension",
+        "claim_safety",
+        "douyin_algorithm_fit",
+        "constructive_interaction_fit",
+        "recommendation_eligibility_safety",
+        "constructive_interpretation",
+        "format_fit",
+        "custom_visual_fit",
+        "long_form_structure",
+        "open_source_explainer_value",
+    }
+    for key in required_dimensions:
+        scores.setdefault(key, 0.0)
     overall = float(result.get("overall") or 0)
     failed_dimensions = {
         key: value
         for key, value in sorted(scores.items())
         if value < min_dimension
     }
-    blocking_issues = blocking_checks.get("blocking_issues") or []
+    blocking_issues = [str(item) for item in (blocking_checks.get("blocking_issues") or []) if str(item).strip()]
+    hard_blocking_issues = [
+        str(item)
+        for item in (
+            blocking_checks.get("hard_blocking_issues")
+            if "hard_blocking_issues" in blocking_checks
+            else [issue for issue in blocking_issues if not revisionable_blocking_issue(issue)]
+        )
+        if str(item).strip()
+    ]
+    revisionable_blocking_issues = [
+        str(item)
+        for item in (
+            blocking_checks.get("revisionable_blocking_issues")
+            if "revisionable_blocking_issues" in blocking_checks
+            else [issue for issue in blocking_issues if revisionable_blocking_issue(issue)]
+        )
+        if str(item).strip()
+    ]
     target_met = not blocking_issues and overall >= target_overall and not failed_dimensions
-    eligible_for_revision = not blocking_issues and not target_met
+    eligible_for_revision = not target_met and not hard_blocking_issues
     suggestions = [str(item) for item in (result.get("suggestions") or []) if str(item).strip()]
     focus = [
         str(item)
@@ -378,11 +506,15 @@ def score_target_report(result: dict[str, Any], blocking_checks: dict[str, Any])
         "min_dimension": min_dimension,
         "current_overall": overall,
         "failed_dimensions": failed_dimensions,
+        "blocking_issues": blocking_issues,
+        "hard_blocking_issues": hard_blocking_issues,
+        "revisionable_blocking_issues": revisionable_blocking_issues,
         "suggestions": suggestions,
         "focus": focus,
         "instruction": (
             "Revise the full public content package until it reaches the target, "
-            "without adding claims beyond evidence_bundle or weakening caveats."
+            "resolve every revisionable_blocking_issue, without adding claims beyond "
+            "evidence_bundle or weakening caveats."
         ),
     }
     return {

@@ -5,14 +5,29 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ACTION="${1:-local}"
-RUN_DIR="${SEARCHPO_RUN_DIR:-$(cat runtime/latest_run.txt)}"
+RUN_DIR="${SEARCHPO_RUN_DIR:-}"
+if [[ -z "$RUN_DIR" && -f runtime/latest_run.txt ]]; then
+  RUN_DIR="$(cat runtime/latest_run.txt)"
+fi
+if [[ -z "$RUN_DIR" ]]; then
+  echo "Missing run directory; pass SEARCHPO_RUN_DIR or create runtime/latest_run.txt." >&2
+  exit 2
+fi
 PROPS_FILE="${SEARCHPO_REMOTION_PROPS:-$RUN_DIR/remotion_input_props.json}"
+RUN_ID="${SEARCHPO_RUN_ID:-$(basename "$RUN_DIR")}"
+RUN_DATE="${SEARCHPO_RUN_DATE:-$(basename "$(dirname "$RUN_DIR")")}"
+if [[ ! "$RUN_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  RUN_DATE="undated"
+fi
+PREVIEW_DIR="out/previews/$RUN_DATE/$RUN_ID/manual/local"
 
 if [[ ! -f "$PROPS_FILE" ]]; then
   echo "Missing Remotion props file: $PROPS_FILE" >&2
   echo "Run: python3 render/prepare_remotion_input.py \"$RUN_DIR\"" >&2
   exit 1
 fi
+
+python3 scripts/verify_remotion_inputs.py "$RUN_DIR" --props "$PROPS_FILE"
 
 CRF="${SEARCHPO_RENDER_CRF:-18}"
 AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
@@ -48,7 +63,8 @@ fi
 
 case "$ACTION" in
   local)
-    RENDER_OUT="${SEARCHPO_RENDER_OUTPUT:-out/searchpo-radar.mp4}"
+    RENDER_OUT="${SEARCHPO_RENDER_OUTPUT:-$PREVIEW_DIR/searchpo-radar.mp4}"
+    mkdir -p "$(dirname "$RENDER_OUT")"
     "${REMOTION_CMD[@]}" render SearchpoRadar "$RENDER_OUT" \
       --props "$PROPS_FILE" \
       --codec=h264 \
@@ -59,7 +75,8 @@ case "$ACTION" in
       --jpeg-quality="$JPEG_QUALITY"
     ;;
   cover)
-    COVER_OUT="${SEARCHPO_COVER_OUTPUT:-out/searchpo-cover.jpg}"
+    COVER_OUT="${SEARCHPO_COVER_OUTPUT:-$PREVIEW_DIR/searchpo-cover.jpg}"
+    mkdir -p "$(dirname "$COVER_OUT")"
     "${REMOTION_CMD[@]}" still SearchpoCover "$COVER_OUT" \
       --props "$PROPS_FILE" \
       --image-format=jpeg \

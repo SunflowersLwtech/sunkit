@@ -85,14 +85,15 @@ The full provider/local path does:
 2. operator topic/link intake. The legacy live source probe/shortlist path runs only when `SEARCHPO_ENABLE_DAILY_RADAR=1`.
 3. detailed canonical URL evidence fetch or operator topic seed recording under `evidence_bundle.json`.
 4. strategy-selected widesearch/cross-check under `widesearch_strategy.json`, `anysearch_research.json`, and `cross_check_review.json`.
-5. provider-mode harness with explicit task board and gates.
-6. content improvement loop: DeepSeek draft/revision plus Gemini content score until the policy target is met.
-7. full-service planning artifacts: `topic_brief.json`, `fact_bank.json`, `source_map.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `environment_manifest.json`, and optional `analytics_feedback.json`.
-8. run-scoped Remotion props under the run directory, including a validated `storyboard` compiled from `video_spec.json` into `render_payload.json`.
-9. video quality loop: render, metadata check, deterministic audit, Gemini visual audit, repair/backtrack when allowed.
-10. final artifact binding to `runtime/artifacts/<date>/<run_id>/video/final.mp4` and `cover/final.jpg` only after a passing video attempt.
-11. manifest-level Douyin contract check with `SEARCHPO_DOUYIN_LIVE=0`.
-12. `delivery_package.json` is written before final truth; `run_final.json` is written last.
+5. main-agent runtime contracts under `runtime_contract.json`, `main_task_plan.json`, and `research_barrier.json`.
+6. provider-mode harness with explicit task board and gates.
+7. content improvement loop: DeepSeek draft/revision plus Gemini content score until the policy target is met.
+8. full-service planning artifacts: `topic_brief.json`, `fact_bank.json`, `source_map.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `environment_manifest.json`, and optional `analytics_feedback.json`.
+9. run-scoped Remotion props under the run directory, including a validated `storyboard` compiled from `video_spec.json` into `render_payload.json`.
+10. implementation loop evidence under `implementation_loop.json`, then video quality loop: render, metadata check, deterministic audit, Gemini visual audit, repair/backtrack when allowed.
+11. final artifact binding to `runtime/artifacts/<date>/<run_id>/video/final.mp4` and `cover/final.jpg` only after a passing video attempt.
+12. manifest-level Douyin contract check with `SEARCHPO_DOUYIN_LIVE=0`.
+13. `release_gate.json` and `delivery_package.json` are written before final truth; `run_final.json` is written last.
 
 Explicit higher-side-effect tiers:
 
@@ -155,15 +156,20 @@ The tracked harness writes these per-run files under `runtime/artifacts/YYYY-MM-
 - `widesearch_strategy.json`: selected search strategy, subject kind, source buckets, query plan, provider hints, and docs probing ladder.
 - `anysearch_research.json`, `topic_brief.json`, `fact_bank.json`, `source_map.json`, and `research_brief.json`: research enrichment outputs required before content planning; `research_brief.json` is a compatibility view of `topic_brief.json`.
 - `cross_check_review.json`: structured source-bound content review, source facts, caveats, constructive angles, and research sufficiency.
-- Contract mode writes `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `agent_review.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, and `post/claims_ledger.json`; it does not write final media, `artifact_manifest.json`, or `run_final.json`.
+- `runtime_contract.json` and `main_task_plan.json`: main-agent planning, delegation, verification, and recovery contracts for the run.
+- `research_barrier.json`: main-agent verdict that implementation may start only after artifact-backed evidence sufficiency.
+- Contract mode writes `selected_candidate.json`, `content_plan.json`, `main_task_plan.json`, `runtime_contract.json`, `research_barrier.json`, `agent_review.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, and `post/claims_ledger.json`; it does not write final media, `artifact_manifest.json`, or `run_final.json`.
 - Provider/live modes write `artifact_manifest.json`: final MP4/cover/render/caption/audio hashes.
-- Provider/live modes write `run_final.json`: final source of truth written after render, audit, and publish checks.
+- Provider/live modes write `release_gate.json` and `run_final.json`: final source of truth written after render, audit, and publish checks.
 - Provider/live modes also write `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json`, and `delivery_package.json`; `video_spec.json` is the renderer-neutral contract, `render_payload.json` is the Remotion adapter output, and `cards` remains a compatibility field.
-- Provider profiles also write `content_optimization_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `caption_audit.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, and `gemini_visual_audit.json`.
+- Provider profiles also write `implementation_loop.json`, `content_optimization_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `caption_audit.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, and `gemini_visual_audit.json`.
 - `video/final.mp4` and `cover/final.jpg`: the only publishable media paths. `out/` files are previews only.
+- `RUN.md`: compact human-readable index for the run. Open this first when the run directory feels noisy.
 - `post/`: Douyin contract-check package, claim ledger, and cross-check review.
 
-This is still a synchronous local harness, but the ownership model is explicit: the main agent owns task-plan state and release gates, the research agent owns source enrichment and cross-check evidence, and the implementation agent runs scripts, Remotion, audit, and publish adapters. Project skills under `skills/` encode that split for Claude Code and Codex agent-team runs.
+Render previews are grouped under `out/previews/YYYY-MM-DD/<run_id>/attempt-XX/<local|lambda>/` or `out/previews/YYYY-MM-DD/<run_id>/manual/<local|lambda>/`. The flat `out/*.mp4` names are legacy scratch files and must not be used as publish input.
+
+The default shell wrapper is still a synchronous local harness, but the ownership model is explicit: the main agent owns task-plan state and release gates, the research agent owns source enrichment and cross-check evidence, and the implementation agent runs scripts, Remotion, audit, and publish adapters. Project skills under `skills/` encode that split for Claude Code and Codex agent-team runs. Real host-side delegation must use the phased `run_agent_loop.py --stop-after ... --resume-from ...` commands and record `agent_run.json.delegation.mode`; owner labels alone are not execution proof.
 
 Validate static contracts and safe command wiring:
 
@@ -269,7 +275,7 @@ Lambda commands are explicit because they touch AWS:
 ```bash
 npm run lambda:check   # list deployed Remotion Lambda functions
 npm run lambda:site    # upload/update the Remotion site bundle in S3
-npm run lambda:render  # invoke Lambda render and download out/searchpo-radar-lambda.mp4
+npm run lambda:render  # invoke Lambda render and download under out/previews/<date>/<run_id>/manual/lambda/
 ```
 
 The Lambda path maps local `REMOTION_AWS_*` keys to the AWS SDK env names before invoking the official Remotion CLI. The site name defaults to `REMOTION_LAMBDA_SITE_NAME` or `searchpo-radar`, and render commands use the run-scoped props recorded by `render/prepare_remotion_input.py`.

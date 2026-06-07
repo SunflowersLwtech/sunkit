@@ -18,6 +18,9 @@ tools:
   - filesystem
 mutating: true
 owns_state:
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/runtime_contract.json"
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/research_barrier.json"
+  - "runtime/artifacts/YYYY-MM-DD/<run_id>/release_gate.json"
   - "runtime/artifacts/YYYY-MM-DD/<run_id>/main_task_plan.json"
   - "runtime/artifacts/YYYY-MM-DD/<run_id>/agent_run.json"
   - "runtime/artifacts/YYYY-MM-DD/<run_id>/artifact_manifest.json"
@@ -47,6 +50,10 @@ The main agent verifies these outputs but assigns research to `searchpo-research
 
 - Board: `runtime/artifacts/YYYY-MM-DD/<run_id>/harness_board.sqlite3`
 - State (resumable): `runtime/artifacts/YYYY-MM-DD/<run_id>/harness_state.json`
+- Runtime contract: `runtime/artifacts/YYYY-MM-DD/<run_id>/runtime_contract.json`
+- Research barrier: `runtime/artifacts/YYYY-MM-DD/<run_id>/research_barrier.json`
+- Implementation loop: `runtime/artifacts/YYYY-MM-DD/<run_id>/implementation_loop.json`
+- Release gate: `runtime/artifacts/YYYY-MM-DD/<run_id>/release_gate.json`
 - Harness summary: `runtime/artifacts/YYYY-MM-DD/<run_id>/agent_run.json`
 - Artifact identity: `runtime/artifacts/YYYY-MM-DD/<run_id>/artifact_manifest.json`
 - Final truth: `runtime/artifacts/YYYY-MM-DD/<run_id>/run_final.json`
@@ -67,8 +74,8 @@ source input:
   2. SelectCandidate / ResolveOperatorTopic
   3. SubjectEvidence (assigned to `searchpo-research-agent`; fetch canonical URL detail; GitHub repos require repo API + README)
   4. ResearchEnrichment (assigned to `searchpo-research-agent`; AnySearch-first search/extract, FactBank, TopicBrief, enriched cross-check; DeepWiki MCP may support repo understanding but cannot replace AnySearch)
-  5. CrossCheck (source facts, claim boundary, constructive angles, research sufficiency)
-  6. PlanContent
+  5. ResearchBarrier (main-agent verdict from artifact truth, not research-agent claims)
+  6. PlanContent (writes planning/delegation/verification/recovery contract)
   7. ContentImproveLoop (assigned to `searchpo-impl-agent`; DeepSeek 生成/修订，Gemini 内容评分反馈，最多按 policy 有限迭代；`improve` 不允许直接进入 TTS)
   8. GeminiTTS (语音 + 音频标准化 -16 LUFS)
   9. BuildCaptions (真实音频时长，不估算)
@@ -80,7 +87,7 @@ source input:
 → video_quality_loop (每轮 render + metadata + deterministic audit + Gemini visual audit；可修布局问题重渲染，语义问题最多回退一次内容闭环)
 → finalize_artifacts (only after passing video attempt; copy to `video/final.mp4` + `cover/final.jpg`, SHA256 bound)
 → douyin_upload_check (`submitted` is not success; live needs remote identity)
-→ finalize_run (writes `run_final.json` last)
+→ finalize_run (writes `release_gate.json`, `delivery_package.json`, then `run_final.json` last)
 → 通知 (Slack/Bark)
 ```
 
@@ -101,7 +108,7 @@ Side-effect matrix:
 4. If the user provides only a topic, run `SEARCHPO_TOPIC="..." npm run e2e:provider`; the research agent must treat the topic as a seed, run widesearch, extract independent sources, and pass the strong cross-check gate before implementation.
 5. If the user says `发抖音`, `发布`, `live`, or `post --live`, run `npm run e2e:live`. If they also provide a fixed link/topic, pass `SEARCHPO_LINK` or `SEARCHPO_TOPIC_URL` into the live command.
 6. Verify artifacts per mode:
-   - Contract: `agent_run.json`, `main_task_plan.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `source_map.json`, `fact_bank.json`, `topic_brief.json`, `research_brief.json`, `analytics_feedback.json`, `environment_manifest.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`; no final media, `artifact_manifest.json`, `run_final.json`, or publish-check artifact.
+   - Contract: `agent_run.json`, `main_task_plan.json`, `runtime_contract.json`, `research_barrier.json`, `evidence_bundle.json`, `widesearch_strategy.json`, `anysearch_research.json`, `source_map.json`, `fact_bank.json`, `topic_brief.json`, `research_brief.json`, `analytics_feedback.json`, `environment_manifest.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`; no final media, `artifact_manifest.json`, `run_final.json`, or publish-check artifact.
    - Provider: contract artifacts plus `script.json`, `scene_plan.json`, `video_spec.json`, `artifact_manifest.json`, `delivery_package.json`, `run_final.json`, `post/douyin_upload_check.json`
    - Operator topic: additionally `subject_request.json`; `agent_run.json.subject_input_mode` should be `operator_topic`
    - Provider/Live: additionally `content_optimization_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, `gemini_visual_audit.json`; live also requires `post/post_publish_verification.json`
@@ -122,6 +129,8 @@ Claude Code exposes this as `/searchpo-full-flow`. Codex should perform the same
    - `subject_request.json` when `subject_input_mode` is `operator_topic`
    - `agent_run.json`
    - `main_task_plan.json`
+   - `runtime_contract.json`
+   - `research_barrier.json`
    - `evidence_bundle.json`
    - `widesearch_strategy.json`
    - `anysearch_research.json`
@@ -130,8 +139,8 @@ Claude Code exposes this as `/searchpo-full-flow`. Codex should perform the same
    - `topic_brief.json`
    - `research_brief.json`
    - `cross_check_review.json`
-   - Contract mode: `agent_run.json`, `main_task_plan.json`, `evidence_bundle.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`
-  - Provider/live mode: `artifact_manifest.json`, `delivery_package.json`, `run_final.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json` with `storyboard`, `render_input_manifest.json`, `post/douyin_upload_check.json`
+   - Contract mode: `agent_run.json`, `main_task_plan.json`, `runtime_contract.json`, `research_barrier.json`, `evidence_bundle.json`, `anysearch_research.json`, `fact_bank.json`, `research_brief.json`, `cross_check_review.json`, `post/claims_ledger.json`, `content_preflight_review.json`
+  - Provider/live mode: `implementation_loop.json`, `release_gate.json`, `artifact_manifest.json`, `delivery_package.json`, `run_final.json`, `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json` with `storyboard`, `render_input_manifest.json`, `post/douyin_upload_check.json`
    - In provider/live mode also verify:
      - `deepseek_polish.json`
      - `content_score.json`
@@ -158,6 +167,6 @@ Contract wiring ends at content preflight and claims-ledger coverage. The artifa
 - `visual_audit_deterministic.json` status == "pass"; it must not skip missing ffmpeg/tesseract, silent audio, or invalid captions.
 - `gemini_visual_audit.json` status == "pass" in provider/live mode.
 - `douyin_upload_check.json` status == "pass"; live mode additionally requires `post/post_publish_verification.json` status == "pass".
-- `run_final.json` is written last and is the final source of truth.
+- `release_gate.json` records the final release/no-release decision and `run_final.json` is written last as the final source of truth.
 
 Do not replace missing evidence fetches, provider calls, media tools, remote publish evidence, audio, captions, or visual checks with mock output, silent media, placeholders, or fallback artifacts. Fail with the missing dependency, fetch error, or provider error.

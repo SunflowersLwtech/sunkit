@@ -51,7 +51,15 @@ Codex only spawns subagents when explicitly asked. The Searchpo full-flow skill 
 Use the searchpo-main-agent as lead. Do not run research and implementation in parallel. First spawn or assign only searchpo-research-agent for AnySearch-first source discovery/extraction, GitHub API/README evidence, FactBank/TopicBrief, cross-check tasks, and only supporting DeepWiki repo context when useful. Wait until the main agent verifies cross_check_review.status == pass and research_sufficient == true, then spawn or assign searchpo-impl-agent for provider, render, audit, and Douyin tasks. The main agent must not run implementation commands itself; it verifies artifacts and makes the final release decision.
 ```
 
-Do not count `main_task_plan.json` owner labels, `claude_main_agent`, or `claude_impl_agent` as proof that Codex actually spawned teammates. If the current Codex host does not expose subagent tools, the run may proceed as a manual fallback with the same ownership split, but the final report must say `manual fallback`.
+Do not count `main_task_plan.json` owner labels alone as proof that Codex actually spawned teammates. If the current Codex host does not expose subagent tools, the run may proceed as a manual fallback with the same ownership split, but the final report must say `manual fallback`.
+
+The repo runtime now exposes a phase seam for real host-side delegation. A spawned team run records proof in `agent_run.json.delegation`; `spawned_subagents` requires a host subagent/thread id, while the synchronous wrapper remains `single_harness` unless explicitly marked `manual_fallback`.
+
+```bash
+python3 agent_harness/run_agent_loop.py --topic "topic" --mode provider --stop-after research_enrichment --delegation-mode spawned_subagents --delegation-agent searchpo-research-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 4 --stop-after main_task_plan --delegation-mode spawned_subagents --delegation-agent searchpo-main-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 5 --delegation-mode spawned_subagents --delegation-agent searchpo-impl-agent --delegation-proof "<host-subagent-id>"
+```
 
 ## Source And Sync Contract
 

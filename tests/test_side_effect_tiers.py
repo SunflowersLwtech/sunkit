@@ -47,10 +47,11 @@ class SideEffectTierTests(unittest.TestCase):
 
     def test_lambda_wrapper_uses_delete_after_and_default_concurrency(self) -> None:
         text = (ROOT / "scripts" / "lambda_render.sh").read_text(encoding="utf-8")
-        self.assertIn('FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-}"', text)
+        self.assertIn('FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-200}"', text)
         self.assertIn('CONCURRENCY="${SEARCHPO_LAMBDA_CONCURRENCY:-${REMOTION_LAMBDA_CONCURRENCY:-4}}"', text)
         self.assertIn('RENDER_CMD+=(--delete-after "$DELETE_AFTER")', text)
         self.assertIn('STILL_CMD+=(--delete-after "$DELETE_AFTER")', text)
+        self.assertIn('elif [[ -n "$CONCURRENCY" ]]; then', text)
         self.assertIn('RENDER_CMD+=(--concurrency "$CONCURRENCY")', text)
         self.assertIn('RENDER_CMD+=(--frames-per-lambda "$FRAMES_PER_LAMBDA")', text)
 

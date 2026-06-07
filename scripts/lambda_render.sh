@@ -20,7 +20,12 @@ FUNCTION_NAME="${SEARCHPO_LAMBDA_FUNCTION_NAME:-${REMOTION_LAMBDA_FUNCTION_NAME:
 BUCKET_NAME="${REMOTION_LAMBDA_BUCKET_NAME:-}"
 PRIVACY="${REMOTION_LAMBDA_PRIVACY:-private}"
 SITE_NAME="${REMOTION_LAMBDA_SITE_NAME:-searchpo-radar}"
-FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-}"
+MEMORY_MB="${SEARCHPO_LAMBDA_MEMORY_MB:-${REMOTION_LAMBDA_MEMORY_MB:-2048}}"
+TIMEOUT_SEC="${SEARCHPO_LAMBDA_TIMEOUT_SEC:-${REMOTION_LAMBDA_TIMEOUT_SEC:-120}}"
+DISK_MB="${SEARCHPO_LAMBDA_DISK_MB:-${REMOTION_LAMBDA_DISK_MB:-10240}}"
+# Default to small chunks so each λ finishes within the function timeout. Concurrency-only
+# chunking (few large chunks) times out on long/heavy compositions. Override via env if needed.
+FRAMES_PER_LAMBDA="${SEARCHPO_LAMBDA_FRAMES_PER_LAMBDA:-200}"
 CONCURRENCY="${SEARCHPO_LAMBDA_CONCURRENCY:-${REMOTION_LAMBDA_CONCURRENCY:-4}}"
 CONCURRENCY_PER_LAMBDA="${SEARCHPO_LAMBDA_CONCURRENCY_PER_LAMBDA:-1}"
 DELETE_AFTER="${REMOTION_LAMBDA_DELETE_AFTER:-}"
@@ -38,10 +43,18 @@ if [[ -z "$PROPS_FILE" && -n "$RUN_DIR" ]]; then
   PROPS_FILE="$RUN_DIR/remotion_input_props.json"
 fi
 RUN_ID="${SEARCHPO_RUN_ID:-$(basename "${RUN_DIR:-latest}")}"
-VIDEO_OUTPUT="${SEARCHPO_LAMBDA_RENDER_OUTPUT:-out/${RUN_ID}-searchpo-radar-lambda.mp4}"
-VIDEO_OUT_NAME="${SEARCHPO_LAMBDA_RENDER_OUT_NAME:-${RUN_ID}/searchpo-radar.mp4}"
-COVER_OUTPUT="${SEARCHPO_LAMBDA_COVER_OUTPUT:-out/${RUN_ID}-searchpo-cover-lambda.jpg}"
-COVER_OUT_NAME="${SEARCHPO_LAMBDA_COVER_OUT_NAME:-${RUN_ID}/searchpo-cover.jpg}"
+RUN_DATE="${SEARCHPO_RUN_DATE:-}"
+if [[ -z "$RUN_DATE" && -n "$RUN_DIR" ]]; then
+  RUN_DATE="$(basename "$(dirname "$RUN_DIR")")"
+fi
+if [[ ! "$RUN_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  RUN_DATE="undated"
+fi
+PREVIEW_DIR="out/previews/$RUN_DATE/$RUN_ID/manual/lambda"
+VIDEO_OUTPUT="${SEARCHPO_LAMBDA_RENDER_OUTPUT:-$PREVIEW_DIR/searchpo-radar.mp4}"
+VIDEO_OUT_NAME="${SEARCHPO_LAMBDA_RENDER_OUT_NAME:-${RUN_DATE}/${RUN_ID}/manual/searchpo-radar.mp4}"
+COVER_OUTPUT="${SEARCHPO_LAMBDA_COVER_OUTPUT:-$PREVIEW_DIR/searchpo-cover.jpg}"
+COVER_OUT_NAME="${SEARCHPO_LAMBDA_COVER_OUT_NAME:-${RUN_DATE}/${RUN_ID}/manual/searchpo-cover.jpg}"
 SAMPLE_RATE="${SEARCHPO_RENDER_SAMPLE_RATE:-}"
 X264_PRESET="${SEARCHPO_RENDER_X264_PRESET:-}"
 
@@ -96,14 +109,27 @@ case "$ACTION" in
       --force-bucket-name "$BUCKET_NAME" \
       --enable-folder-expiry
     ;;
+  deploy)
+    "${REMOTION_CMD[@]}" lambda functions deploy \
+      --region "$REGION" \
+      --memory "$MEMORY_MB" \
+      --timeout "$TIMEOUT_SEC" \
+      --disk "$DISK_MB" \
+      --quiet
+    ;;
   render)
     require FUNCTION_NAME
     require BUCKET_NAME
+    if [[ -z "$RUN_DIR" ]]; then
+      echo "Missing run directory; pass SEARCHPO_RUN_DIR or create runtime/latest_run.txt." >&2
+      exit 1
+    fi
     if [[ -z "$PROPS_FILE" || ! -f "$PROPS_FILE" ]]; then
       echo "Missing Remotion props file: ${PROPS_FILE:-<unset>}" >&2
       echo "Run: python3 render/prepare_remotion_input.py \"${RUN_DIR:-<run_dir>}\"" >&2
       exit 1
     fi
+    python3 scripts/verify_remotion_inputs.py "$RUN_DIR" --props "$PROPS_FILE"
     mkdir -p "$(dirname "$VIDEO_OUTPUT")"
     RENDER_CMD=(
       "${REMOTION_CMD[@]}" lambda render "$SITE_NAME" SearchpoRadar "$VIDEO_OUTPUT"
@@ -165,7 +191,7 @@ case "$ACTION" in
     "${STILL_CMD[@]}"
     ;;
   *)
-    echo "Usage: $0 [check|site|render|still]" >&2
+    echo "Usage: $0 [check|site|deploy|render|still]" >&2
     exit 2
     ;;
 esac

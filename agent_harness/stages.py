@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from agent_harness.artifact_identity import sha256_json_file
 from agent_harness.core import Artifact, Gate, HarnessContext, StageResult, utc_now, write_json, retry_call, logger
@@ -18,6 +18,18 @@ from agent_harness.douyin_distribution import evaluate_douyin_distribution_gate
 from agent_harness.evidence import strong_research_review_errors, write_evidence_artifacts
 from agent_harness.policy import content_profile, policy_format, policy_get, unsupported_terms
 from agent_harness.research import run_research_enrichment
+from agent_harness.runtime_contracts import (
+    IMPL_AGENT,
+    MAIN_AGENT,
+    RESEARCH_AGENT,
+    IMPLEMENTATION_LOOP_FILENAME,
+    RUNTIME_CONTRACT_FILENAME,
+    RESEARCH_BARRIER_FILENAME,
+    build_main_task_plan,
+    write_implementation_loop,
+    write_research_barrier,
+    write_runtime_contract,
+)
 from agent_harness.service_artifacts import (
     build_scene_plan_artifact,
     build_script_artifact,
@@ -32,10 +44,12 @@ from agent_harness.speech_quality import (
     evidence_level_for_candidate,
     normalize_display_title,
     normalize_voiceover_text,
+    plan_cover_title_lines,
     unverified_quality_warning,
     verification_next_step_for_candidate,
 )
 from agent_harness.agent_visual import agent_visual_text_items, require_agent_visual
+from agent_harness.premium_repo_visual import is_github_repo_subject, premium_repo_agent_visual
 from agent_harness.storyboard import card_scenes, derive_default_storyboard, storyboard_text_items, validate_storyboard
 from agent_harness.subjects import ensure_subject_pool, is_operator_topic
 from agent_harness.video_profile import choose_video_profile, normalize_video_profile
@@ -174,17 +188,58 @@ def _candidate_title_summary(candidate: dict[str, Any], polish: dict[str, Any] |
     return title, summary
 
 
-def _public_candidate_title(candidate: dict[str, Any]) -> str:
-    title = str(candidate.get("title") or "").strip()
-    parsed = urlparse(title)
+def _safe_cover_display_title(title: str, candidate: dict[str, Any]) -> str:
+    normalized = normalize_display_title(title).replace("...", "").strip(" -:：，,。.")
+    candidates = [normalized]
+    for separator in (":", "：", " - ", " — ", " – "):
+        if separator in normalized:
+            candidates.append(normalized.split(separator, 1)[0].strip(" -:：，,。."))
+    candidate_title = normalize_display_title(str(candidate.get("title") or "")).strip(" -:：，,。.")
+    if candidate_title:
+        candidates.append(candidate_title)
+    seen: set[str] = set()
+    for item in candidates:
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        if plan_cover_title_lines(item)["safe"]:
+            return item
+    words = normalized.split()
+    for count in range(min(6, len(words)), 1, -1):
+        shortened = " ".join(words[:count]).strip(" -:：，,。.")
+        if shortened and plan_cover_title_lines(shortened)["safe"]:
+            return shortened
+    return bounded_text(normalized, 32)
+
+
+def _public_title_from_url(url: str) -> str:
+    parsed = urlparse(url)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         parts = [part for part in parsed.path.split("/") if part]
         host = parsed.netloc.lower().removeprefix("www.")
         if host == "github.com" and len(parts) >= 2:
             return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+        if parts and parts[-1].lower() in {"blog", "post", "posts", "article", "articles", "news"}:
+            query = parse_qs(parsed.query)
+            for key in ("id", "slug"):
+                value = str((query.get(key) or [""])[0]).strip()
+                if value and re.search(r"[A-Za-z]", value):
+                    return value.replace("-", " ").replace("_", " ").strip() or parts[-1]
         if parts:
             return parts[-1].replace("-", " ").replace("_", " ").strip() or host
         return host
+
+
+def _public_candidate_title(candidate: dict[str, Any]) -> str:
+    title = str(candidate.get("title") or "").strip()
+    canonical_url = str(candidate.get("canonical_url") or "").strip()
+    parsed = urlparse(title)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        canonical = urlparse(canonical_url)
+        if canonical.scheme in {"http", "https"} and canonical.netloc and canonical_url.rstrip("/") != title.rstrip("/"):
+            return _public_title_from_url(canonical_url)
+        return _public_title_from_url(title)
     return title or "today's signal"
 
 
@@ -257,80 +312,6 @@ def run_repo_script(context: HarnessContext, args: list[str], timeout: int = 180
     return retry_call(_exec, max_retries=max_retries, base_delay=3.0, retryable=(ScriptTransientError,))
 
 
-def build_main_task_plan(candidate: dict[str, Any], include_providers: bool) -> dict[str, Any]:
-    operator_topic = is_operator_topic(candidate)
-    seed_only_topic = operator_topic and not _candidate_has_external_url(candidate)
-    first_task = {
-        "id": "resolve_operator_topic" if operator_topic else "select_candidate",
-        "owner": "claude_main_agent",
-        "gate": "operator_topic_recorded" if operator_topic else "candidate_has_url",
-    }
-    subject_task = {
-        "id": "subject_detail_fetch",
-        "owner": "searchpo-research-agent",
-        "gate": "subject_seed_recorded" if seed_only_topic else "subject_detail_fetched",
-    }
-    if include_providers:
-        ordered_tasks = [
-            first_task,
-            subject_task,
-            {"id": "research_enrichment", "owner": "searchpo-research-agent", "gate": "research_enrichment_passed"},
-            {"id": "cross_check", "owner": "claude_main_agent", "gate": "cross_check_passed"},
-            {"id": "content_improvement_loop", "owner": "claude_impl_agent", "gate": "content_improvement_loop"},
-            {"id": "script_scene_plan", "owner": "claude_impl_agent", "gate": "script_scene_plan_written"},
-            {"id": "gemini_tts", "owner": "claude_impl_agent", "gate": "voiceover_generated"},
-            {"id": "video_spec", "owner": "claude_impl_agent", "gate": "video_spec_compiled"},
-            {"id": "remotion_render_payload", "owner": "claude_impl_agent", "gate": "render_payload_written"},
-            {"id": "quality_gate", "owner": "claude_main_agent", "gate": "quality_gate_passed"},
-            {"id": "publish_package", "owner": "claude_impl_agent", "gate": "claims_ledger_coverage"},
-            {"id": "content_preflight", "owner": "claude_main_agent", "gate": "content_preflight_gate"},
-            {"id": "remotion_render", "owner": "claude_impl_agent", "gate": "render_metadata_verified"},
-            {"id": "artifact_identity", "owner": "claude_impl_agent", "gate": "artifact_identity_bound"},
-            {"id": "gemini_visual_audit", "owner": "claude_impl_agent", "gate": "visual_audit_passed"},
-            {"id": "douyin_publish", "owner": "claude_impl_agent", "gate": "douyin_contract_or_live_gate"},
-            {"id": "final_verification", "owner": "claude_main_agent", "gate": "artifact_release_gate"},
-        ]
-    else:
-        ordered_tasks = [
-            first_task,
-            subject_task,
-            {"id": "research_enrichment", "owner": "searchpo-research-agent", "gate": "research_enrichment_passed"},
-            {"id": "cross_check", "owner": "claude_main_agent", "gate": "cross_check_passed"},
-            {"id": "publish_package", "owner": "claude_impl_agent", "gate": "claims_ledger_coverage"},
-            {"id": "content_preflight", "owner": "claude_main_agent", "gate": "content_preflight_gate"},
-        ]
-    return {
-        "schema_version": 1,
-        "created_at": utc_now(),
-        "owner": "claude_main_agent",
-        "selected_candidate_id": candidate["candidate_id"],
-        "subject_input_mode": candidate.get("input_mode") or "shortlist",
-        "subject_selection_source": candidate.get("selection_source") or "candidate_shortlist",
-        "task_plan_state": "planned",
-        "provider_mode": "provider" if include_providers else "contract",
-        "roles": {
-            "claude_main_agent": [
-                "owns task-plan state",
-                "assigns implementation stages",
-                "verifies every gate before publish",
-            ],
-            "searchpo-research-agent": [
-                "fetches primary and supplemental source evidence",
-                "runs AnySearch search/extract enrichment",
-                "writes fact_bank.json, research_brief.json, and enriched cross-check artifacts",
-            ],
-            "claude_impl_agent": [
-                "runs DeepSeek polish script",
-                "runs Gemini TTS script",
-                "runs Remotion input preparation/render commands",
-                "runs Gemini visual audit script",
-                "runs Douyin publish/check script only after gates pass",
-            ],
-        },
-        "ordered_tasks": ordered_tasks,
-    }
-
-
 def build_video_payload(
     candidate: dict[str, Any],
     polish: dict[str, Any] | None = None,
@@ -344,8 +325,9 @@ def build_video_payload(
     if not captions:
         raise RuntimeError("captions.json is required to build the render payload.")
     title, summary = _candidate_title_summary(candidate, polish)
-    display_title = normalize_display_title(title)
+    display_title = _safe_cover_display_title(title, candidate)
     speech_title = normalize_voiceover_text(title)
+    public_summary = normalize_voiceover_text(summary)
     evidence_level = evidence_level_for_candidate(candidate)
     verification_next_step = verification_next_step_for_candidate(candidate)
     quality_warnings = [warning for warning in [unverified_quality_warning(candidate)] if warning]
@@ -425,10 +407,20 @@ def build_video_payload(
             raise RuntimeError(f"DeepSeek polish storyboard did not pass validation: {exc}") from exc
     elif polish:
         raise RuntimeError("DeepSeek polish storyboard is required; default storyboard fallback is not allowed in provider mode")
+    fps = int(voiceover_manifest.get("fps") or os.environ.get("SEARCHPO_VIDEO_FPS") or 30)
+    fallback_profile = choose_video_profile(candidate, fps=fps)
+    video_profile = normalize_video_profile((polish or {}).get("video_profile") if polish else None, fallback=fallback_profile)
+    orientation = video_profile.get("orientation") or "vertical"
+
     agent_visual: dict[str, Any] | None = None
+    premium_repo_visual_applied = False
     if polish:
         try:
-            agent_visual = require_agent_visual((polish or {}).get("agent_visual") or (polish or {}).get("agentVisual"))
+            if is_github_repo_subject(candidate=candidate):
+                agent_visual = require_agent_visual(premium_repo_agent_visual("provider GitHub repo payload"), orientation)
+                premium_repo_visual_applied = True
+            else:
+                agent_visual = require_agent_visual((polish or {}).get("agent_visual") or (polish or {}).get("agentVisual"), orientation)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -487,19 +479,17 @@ def build_video_payload(
             verification_next_step=verification_next_step,
             footer=footer,
         )
-    fallback_profile = choose_video_profile(candidate, fps=fps)
-    video_profile = normalize_video_profile((polish or {}).get("video_profile") if polish else None, fallback=fallback_profile)
     storyboard_style = storyboard.get("style") if isinstance(storyboard.get("style"), dict) else {}
     if not storyboard_style.get("motion") and video_profile.get("motion"):
         storyboard_style["motion"] = video_profile["motion"]
         storyboard["style"] = storyboard_style
 
-    return {
+    payload = {
         "badge": badge,
         "title": _sanitize_display(display_title, 90),
         "displayTitle": _sanitize_display(display_title, 90),
         "speechTitle": _sanitize_display(speech_title, 120),
-        "summary": _sanitize_display(summary, 700),
+        "summary": _sanitize_display(public_summary, 700),
         "source": evidence_value if operator_topic and has_external_url else (profile.get("source") if operator_topic else public_source_ids),
         "url": url,
         "score": score,
@@ -525,6 +515,11 @@ def build_video_payload(
         "cta": cta,
         "footer": footer,
     }
+    if polish and polish.get("_agent_visual_fallback_applied") and not premium_repo_visual_applied:
+        payload["_agent_visual_fallback_applied"] = True
+        if polish.get("_agent_visual_fallback_reason"):
+            payload["_agent_visual_fallback_reason"] = polish.get("_agent_visual_fallback_reason")
+    return payload
 
 
 def build_douyin_copy(candidate: dict[str, Any], polish: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -583,7 +578,7 @@ def build_claims_ledger(
         "voiceover": render_payload.get("voiceoverText"),
         "cards": render_payload.get("cards") or [],
         "storyboard": storyboard_text_items(render_payload.get("storyboard")),
-        "agent_visual": agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")),
+        "agent_visual": agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual"), render_payload.get("orientation") or "vertical"),
         "tags": douyin_copy.get("tags") or [],
     }
     claims: list[dict[str, Any]] = []
@@ -939,7 +934,7 @@ class LoadShortlistStage:
 class SelectCandidateStage:
     name: str = "select_candidate"
     title: str = "Select top candidate"
-    owner: str = "claude_main_agent"
+    owner: str = MAIN_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = select_candidate(context.state.get("shortlist") or [])
@@ -970,7 +965,7 @@ class SelectCandidateStage:
 class SubjectEvidenceStage:
     name: str = "subject_evidence"
     title: str = "Fetch subject detail evidence or record research seed"
-    owner: str = "searchpo-research-agent"
+    owner: str = RESEARCH_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1039,7 +1034,7 @@ class SubjectEvidenceStage:
 class ResearchEnrichmentStage:
     name: str = "research_enrichment"
     title: str = "Enrich subject research with AnySearch"
-    owner: str = "searchpo-research-agent"
+    owner: str = RESEARCH_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1107,7 +1102,7 @@ class ResearchEnrichmentStage:
 class PlanContentStage:
     name: str = "main_task_plan"
     title: str = "Main agent task plan"
-    owner: str = "claude_main_agent"
+    owner: str = MAIN_AGENT
     include_providers: bool = False
 
     def run(self, context: HarnessContext) -> StageResult:
@@ -1116,10 +1111,10 @@ class PlanContentStage:
         if cross_check is None:
             cross_check_path = context.run_dir / "cross_check_review.json"
             cross_check = read_json(cross_check_path) if cross_check_path.exists() else {}
-        if str(cross_check.get("status") or "") != "pass" or cross_check.get("research_sufficient") is not True:
-            raise RuntimeError(
-                "research cross-check must pass with research_sufficient=true before content planning"
-            )
+        research_barrier = write_research_barrier(context.run_dir, cross_check)
+        context.state["research_barrier"] = research_barrier
+        if research_barrier["status"] != "pass":
+            raise RuntimeError("research barrier failed: " + "; ".join(research_barrier["errors"]))
         plan = build_content_plan(
             candidate,
             context.state.get("evidence_bundle"),
@@ -1134,23 +1129,48 @@ class PlanContentStage:
         context.state["environment_manifest"] = environment_manifest
         analytics_feedback = write_optional_analytics_feedback(context.run_dir, candidate)
         context.state["analytics_feedback"] = analytics_feedback
-        task_plan = build_main_task_plan(candidate, self.include_providers)
+        axes = side_effect_axes()
+        if self.include_providers and axes.get("agent_mode") != "provider":
+            axes = side_effect_axes("provider")
+        runtime_contract = write_runtime_contract(
+            context.run_dir,
+            candidate,
+            self.include_providers,
+            axes=axes,
+            content_plan=plan,
+            delegation=context.state.get("delegation") if isinstance(context.state.get("delegation"), dict) else None,
+        )
+        task_plan = runtime_contract
         task_plan_path = context.run_dir / "main_task_plan.json"
         write_json(task_plan_path, task_plan)
         context.state["main_task_plan"] = task_plan
+        context.state["runtime_contract"] = runtime_contract
         return StageResult(
             step="plan",
             status="completed",
             details="Main agent assigned impl-agent script tasks and kept source-bounded publish gates.",
             artifacts=[
+                Artifact("research_barrier", context.run_dir / RESEARCH_BARRIER_FILENAME, {"status": research_barrier["status"]}),
                 Artifact("content_plan", path, {"mode": plan["mode"]}),
                 Artifact("environment_manifest", context.run_dir / "environment_manifest.json", {"services": len(environment_manifest.get("service_boundaries") or [])}),
                 Artifact("analytics_feedback", context.run_dir / "analytics_feedback.json", {"status": analytics_feedback.get("status")}),
+                Artifact("runtime_contract", context.run_dir / RUNTIME_CONTRACT_FILENAME, {"architecture": runtime_contract["architecture"]}),
                 Artifact("main_task_plan", task_plan_path, {"state": task_plan["task_plan_state"]}),
             ],
             gates=[
+                Gate(
+                    "research_barrier",
+                    research_barrier["status"],
+                    "Research barrier passed; implementation may start from artifact evidence",
+                    {
+                        "supplemental_source_count": research_barrier["supplemental_source_count"],
+                        "independent_source_hosts": research_barrier["independent_source_hosts"],
+                        "errors": research_barrier["errors"],
+                    },
+                ),
                 Gate("claim_boundary_defined", "pass", "Plan limits public claims to the selected subject evidence boundary"),
                 Gate("task_plan_owned_by_main", "pass", "Main agent owns task-plan state and release gates"),
+                Gate("planning_contract_written", "pass", "Planning, delegation, verification, and recovery contracts were written"),
                 Gate("service_chain_defined", "pass", "Full-service artifact chain is declared for this run", {"service_chain": plan.get("service_chain")}),
             ],
             metadata={"mode": plan["mode"]},
@@ -1161,10 +1181,10 @@ class PlanContentStage:
 class DeepSeekPolishStage:
     name: str = "deepseek_polish"
     title: str = "Run DeepSeek polish script"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
-        script_result = run_repo_script(context, ["scripts/deepseek_polish.py", str(context.run_dir)], timeout=180)
+        script_result = run_repo_script(context, ["scripts/deepseek_polish.py", str(context.run_dir)], timeout=420)
         path = context.run_dir / "deepseek_polish.json"
         polish = read_json(path)
         context.state["deepseek_polish"] = polish
@@ -1190,10 +1210,10 @@ class DeepSeekPolishStage:
 class GeminiTTSStage:
     name: str = "gemini_tts"
     title: str = "Run Gemini TTS script"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
-        script_result = run_repo_script(context, ["scripts/gemini_tts.py", str(context.run_dir)], timeout=180)
+        script_result = run_repo_script(context, ["scripts/gemini_tts.py", str(context.run_dir)], timeout=600)
         manifest_path = context.run_dir / "voiceover_manifest.json"
         manifest = read_json(manifest_path)
         audio_path = Path(manifest["audio_path"])
@@ -1223,10 +1243,10 @@ class GeminiTTSStage:
 class BuildCaptionsStage:
     name: str = "build_captions"
     title: str = "Build audio-synced caption timing"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
-        script_result = run_repo_script(context, ["scripts/build_captions.py", str(context.run_dir)], timeout=60)
+        script_result = run_repo_script(context, ["scripts/build_captions.py", str(context.run_dir)], timeout=240)
         path = context.run_dir / "captions.json"
         audit_path = context.run_dir / "caption_audit.json"
         segment_count = 0
@@ -1269,10 +1289,10 @@ class BuildCaptionsStage:
 class ContentScoringStage:
     name: str = "content_scoring"
     title: str = "Score content quality via Gemini"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
-        script_result = run_repo_script(context, ["scripts/content_scorer.py", str(context.run_dir)], timeout=120)
+        script_result = run_repo_script(context, ["scripts/content_scorer.py", str(context.run_dir)], timeout=300)
         path = context.run_dir / "content_score.json"
         if path.exists():
             score_data = read_json(path)
@@ -1297,7 +1317,7 @@ class ContentScoringStage:
 class ContentImproveLoopStage:
     name: str = "content_improvement_loop"
     title: str = "Improve content through Gemini feedback"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         max_attempts = max(1, int(policy_get("content_optimization.max_content_attempts", 3)))
@@ -1339,29 +1359,48 @@ class ContentImproveLoopStage:
                 if previous_polish_path is None or previous_score_path is None:
                     raise RuntimeError("content revision requires previous polish and Gemini feedback artifacts")
                 polish_args.extend(["--input-polish", str(previous_polish_path), "--feedback", str(previous_score_path)])
-            polish_meta = run_repo_script(context, polish_args, timeout=240)
+            can_reuse_attempt_artifacts = not external_feedback_used
+            if polish_path.exists() and can_reuse_attempt_artifacts:
+                polish_meta = {
+                    "command": "reused existing " + str(polish_path),
+                    "returncode": 0,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                    "reused_existing_artifact": True,
+                }
+            else:
+                polish_meta = run_repo_script(context, polish_args, timeout=600)
 
             score_meta: dict[str, Any] | None = None
             score_error: str | None = None
-            try:
-                score_meta = run_repo_script(
-                    context,
-                    [
-                        "scripts/content_scorer.py",
-                        str(run_dir),
-                        "--polish",
-                        str(polish_path),
-                        "--output",
-                        str(score_path),
-                        "--attempt",
-                        str(attempt),
-                    ],
-                    timeout=150,
-                )
-            except RuntimeError as exc:
-                if not score_path.exists():
-                    raise
-                score_error = str(exc)[:1000]
+            if score_path.exists() and can_reuse_attempt_artifacts:
+                score_meta = {
+                    "command": "reused existing " + str(score_path),
+                    "returncode": 0,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                    "reused_existing_artifact": True,
+                }
+            else:
+                try:
+                    score_meta = run_repo_script(
+                        context,
+                        [
+                            "scripts/content_scorer.py",
+                            str(run_dir),
+                            "--polish",
+                            str(polish_path),
+                            "--output",
+                            str(score_path),
+                            "--attempt",
+                            str(attempt),
+                        ],
+                        timeout=360,
+                    )
+                except RuntimeError as exc:
+                    if not score_path.exists():
+                        raise
+                    score_error = str(exc)[:1000]
 
             polish = read_json(polish_path)
             score = read_json(score_path)
@@ -1390,9 +1429,6 @@ class ContentImproveLoopStage:
             if polish.get("status") != "pass":
                 failure_reason = f"DeepSeek polish attempt {attempt} did not pass"
                 break
-            if verdict == "fail":
-                failure_reason = f"Gemini content score failed on attempt {attempt}"
-                break
             if target_met and verdict == "pass":
                 final_polish_path = polish_path
                 final_score_path = score_path
@@ -1403,11 +1439,15 @@ class ContentImproveLoopStage:
                     f"(overall={overall}, verdict={verdict})"
                 )
                 break
-            if not eligible_for_revision:
-                failure_reason = f"content score {verdict} is not eligible for revision"
+            if eligible_for_revision:
+                previous_polish_path = polish_path
+                previous_score_path = score_path
+                continue
+            if verdict == "fail":
+                failure_reason = f"Gemini content score failed on attempt {attempt}"
                 break
-            previous_polish_path = polish_path
-            previous_score_path = score_path
+            failure_reason = f"content score {verdict} is not eligible for revision"
+            break
 
         success = final_polish_path is not None and final_score_path is not None
         if success:
@@ -1480,6 +1520,26 @@ class ContentImproveLoopStage:
             if success
             else f"Content optimization failed: {failure_reason}"
         )
+        implementation_loop = write_implementation_loop(
+            run_dir,
+            phase="content_generation",
+            status=status,
+            owner=self.owner,
+            artifacts={
+                "content_optimization_loop": str(summary_path),
+                "deepseek_polish": str(canonical_polish_path) if success else "",
+                "content_score": str(canonical_score_path) if success else "",
+                "script": str(run_dir / "script.json") if success else "",
+                "scene_plan": str(run_dir / "scene_plan.json") if success else "",
+            },
+            gates={
+                "content_improvement_loop": "pass" if success else "fail",
+                "content_quality_target": "pass" if success else "fail",
+                "script_scene_plan_written": "pass" if success else "fail",
+            },
+            errors=[failure_reason] if failure_reason else [],
+            metadata={"attempt_count": len(attempts), "max_attempts": max_attempts},
+        )
         artifacts = [Artifact("content_optimization_loop", summary_path, {"status": summary["status"]})]
         if success:
             artifacts.extend(
@@ -1506,6 +1566,7 @@ class ContentImproveLoopStage:
                     ),
                 ]
             )
+        artifacts.append(Artifact("implementation_loop", run_dir / IMPLEMENTATION_LOOP_FILENAME, {"status": implementation_loop["status"]}))
         return StageResult(
             step="act",
             status=status,
@@ -1548,7 +1609,7 @@ class ContentImproveLoopStage:
 class RenderPayloadStage:
     name: str = "render_payload"
     title: str = "Build Remotion render payload"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1593,6 +1654,14 @@ class RenderPayloadStage:
         write_json(path, payload)
         context.state["render_payload"] = payload
         context.state["video_spec"] = video_spec
+        implementation_loop = write_implementation_loop(
+            context.run_dir,
+            phase="media_contracts",
+            status="completed",
+            owner=self.owner,
+            artifacts={"video_spec": str(video_spec_path), "render_payload": str(path)},
+            gates={"video_spec_compiled": "pass", "render_payload_written": "pass"},
+        )
         return StageResult(
             step="act",
             status="completed",
@@ -1600,6 +1669,7 @@ class RenderPayloadStage:
             artifacts=[
                 Artifact("video_spec", video_spec_path, {"scene_count": len(video_spec.get("scenes") or [])}),
                 Artifact("render_payload", path, {"title": payload.get("title")}),
+                Artifact("implementation_loop", context.run_dir / IMPLEMENTATION_LOOP_FILENAME, {"status": implementation_loop["status"]}),
             ],
             gates=[
                 Gate("video_spec_compiled", "pass", "Renderer-neutral video spec was compiled for Remotion", {"video_spec": str(video_spec_path)}),
@@ -1613,7 +1683,7 @@ class RenderPayloadStage:
 class QualityGateStage:
     name: str = "quality_gate"
     title: str = "Evidence and audio quality gate"
-    owner: str = "claude_main_agent"
+    owner: str = MAIN_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1674,7 +1744,7 @@ class QualityGateStage:
 class PublishPackageStage:
     name: str = "publish_package"
     title: str = "Build Douyin contract-check package"
-    owner: str = "claude_impl_agent"
+    owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1704,9 +1774,26 @@ class PublishPackageStage:
         claims_missing = (claims_ledger.get("coverage") or {}).get("missing_fields") or []
         distribution_review = read_json(post_dir / "douyin_distribution_review.json")
         distribution_status = str(distribution_review.get("status") or "missing")
+        status = "completed" if claims_gate_status == "pass" and distribution_status == "pass" else "failed"
+        implementation_loop = write_implementation_loop(
+            context.run_dir,
+            phase="delivery_evidence",
+            status=status,
+            owner=self.owner,
+            artifacts={
+                "post_manifest": str(post_manifest_path),
+                "claims_ledger": str(post_dir / "claims_ledger.json"),
+                "douyin_distribution_review": str(post_dir / "douyin_distribution_review.json"),
+            },
+            gates={
+                "claims_ledger_coverage": claims_gate_status,
+                "douyin_distribution_review": distribution_status,
+            },
+            errors=[*claims_missing, *(distribution_review.get("blocking_issues") or [])],
+        )
         return StageResult(
             step="act",
-            status="completed" if claims_gate_status == "pass" and distribution_status == "pass" else "failed",
+            status=status,
             details="Wrote Douyin upload package, claim ledger, and review artifacts.",
             artifacts=[
                 Artifact("post_manifest", post_manifest_path),
@@ -1715,6 +1802,7 @@ class PublishPackageStage:
                 Artifact("claims_ledger", post_dir / "claims_ledger.json"),
                 Artifact("douyin_distribution_review", post_dir / "douyin_distribution_review.json"),
                 Artifact("cross_check_review", post_dir / "cross_check_review.md"),
+                Artifact("implementation_loop", context.run_dir / IMPLEMENTATION_LOOP_FILENAME, {"status": implementation_loop["status"]}),
             ],
             gates=[
                 Gate("publish_package_written", "pass", "Run-scoped Douyin package was written"),
@@ -1744,11 +1832,48 @@ class PublishPackageStage:
         )
 
 
+def public_preflight_text(render_payload: dict[str, Any], polish: dict[str, Any], douyin_desc: str) -> str:
+    fields: list[Any] = [
+        douyin_desc,
+        polish.get("polished_title"),
+        polish.get("voiceover_text"),
+        polish.get("douyin_title"),
+        polish.get("douyin_desc"),
+        " ".join(str(tag) for tag in polish.get("tags") or []),
+        render_payload.get("displayTitle") or render_payload.get("title"),
+        render_payload.get("summary"),
+        render_payload.get("metricLine"),
+        render_payload.get("audienceMetricLine"),
+        render_payload.get("cta"),
+        render_payload.get("footer"),
+        render_payload.get("verificationNextStep"),
+        render_payload.get("voiceoverText"),
+    ]
+    for card in [*(polish.get("cards") or []), *(render_payload.get("cards") or [])]:
+        if isinstance(card, dict):
+            fields.extend([card.get("label"), card.get("value"), card.get("detail")])
+    fields.extend(storyboard_text_items(polish.get("storyboard")))
+    fields.extend(storyboard_text_items(render_payload.get("storyboard")))
+    fields.extend(
+        agent_visual_text_items(
+            polish.get("agent_visual") or polish.get("agentVisual"),
+            (polish.get("video_profile") or {}).get("orientation") if isinstance(polish.get("video_profile"), dict) else "vertical",
+        )
+    )
+    fields.extend(
+        agent_visual_text_items(
+            render_payload.get("agentVisual") or render_payload.get("agent_visual"),
+            render_payload.get("orientation") or "vertical",
+        )
+    )
+    return " ".join(str(field or "") for field in fields if str(field or "").strip())
+
+
 @dataclass(frozen=True)
 class ContentPreflightStage:
     name: str = "content_preflight"
     title: str = "Content preflight gate"
-    owner: str = "claude_main_agent"
+    owner: str = MAIN_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
         candidate = context.state["selected_candidate"]
@@ -1756,12 +1881,10 @@ class ContentPreflightStage:
         if post_dir is None:
             post_dir = context.run_dir / "post"
         unsafe_terms = unsupported_terms()
-        generated_text = " ".join(
-            [
-                json.dumps(context.state.get("render_payload") or {}, ensure_ascii=False),
-                json.dumps(context.state.get("deepseek_polish") or {}, ensure_ascii=False),
-                (post_dir / "douyin_desc.txt").read_text(encoding="utf-8"),
-            ]
+        generated_text = public_preflight_text(
+            context.state.get("render_payload") or {},
+            context.state.get("deepseek_polish") or {},
+            (post_dir / "douyin_desc.txt").read_text(encoding="utf-8"),
         )
         unsafe_hits = [term for term in unsafe_terms if term.lower() in generated_text.lower()]
         cross_check_path = context.run_dir / "cross_check_review.json"
@@ -1776,11 +1899,13 @@ class ContentPreflightStage:
         coherence_issues: list[str] = []
         polish = context.state.get("deepseek_polish") or {}
         if polish:
-            candidate_title = (candidate.get("title") or "").lower()
+            candidate_title = _public_candidate_title(candidate).lower()
             polish_title = str(polish.get("polished_title") or "").lower()
             voiceover = str(polish.get("voiceover_text") or "").lower()
             if candidate_title and candidate_title not in polish_title and candidate_title not in voiceover:
-                key_words = [w for w in re.split(r"[\s/\-_]+", candidate_title) if len(w) > 3]
+                # Split on dots/colons too so a domain-form title (e.g. "mem0.ai", from a
+                # bare-link subject) yields the brand token ("mem0") that natural narration uses.
+                key_words = [w for w in re.split(r"[\s/\-_.:]+", candidate_title) if len(w) > 3]
                 if key_words and not any(w in voiceover for w in key_words):
                     coherence_issues.append("voiceover_text does not reference the selected candidate")
                     coherence_ok = False

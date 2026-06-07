@@ -247,16 +247,23 @@ class TaskBoard:
 
 
 def _setup_logging(run_dir: Path) -> None:
-    handler = logging.FileHandler(run_dir / "harness.log", encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger("searchpo")
-    if not root.handlers:
-        root.addHandler(handler)
-        root.setLevel(logging.INFO)
+    log_path = str((run_dir / "harness.log").resolve())
+    for existing in list(root.handlers):
+        if isinstance(existing, logging.FileHandler):
+            if existing.baseFilename == log_path:
+                return
+            root.removeHandler(existing)
+            existing.close()
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 
-def _save_state(context: HarnessContext, completed_stages: list[str]) -> None:
+def _save_state(context: HarnessContext, completed_stages: list[str], root_task_id: str) -> None:
     write_json(context.run_dir / "harness_state.json", {
+        "root_task_id": root_task_id,
         "completed_stages": completed_stages,
         "state": {k: str(v) if isinstance(v, Path) else v for k, v in context.state.items()
                   if not isinstance(v, (bytes,))},
@@ -264,10 +271,10 @@ def _save_state(context: HarnessContext, completed_stages: list[str]) -> None:
     })
 
 
-def _load_state(context: HarnessContext) -> list[str]:
+def _load_state(context: HarnessContext) -> dict[str, Any]:
     state_path = context.run_dir / "harness_state.json"
     if not state_path.exists():
-        return []
+        return {}
     data = read_json(state_path)
     # Restore context.state from persisted data on resume
     saved_state = data.get("state")
@@ -279,7 +286,7 @@ def _load_state(context: HarnessContext) -> list[str]:
                     context.state[key] = Path(value)
                 else:
                     context.state[key] = value
-    return data.get("completed_stages") or []
+    return data
 
 
 def _quarantine_partial_artifacts(run_dir: Path, stage_name: str) -> Path | None:
@@ -319,16 +326,21 @@ class SyncHarness:
     def __init__(self, stages: list[Stage]) -> None:
         self.stages = stages
 
-    def run(self, context: HarnessContext, resume_from: int = 0) -> HarnessRunResult:
+    def run(self, context: HarnessContext, resume_from: int = 0, stop_after: str | None = None) -> HarnessRunResult:
         _setup_logging(context.run_dir)
+        if stop_after and all(stage.name != stop_after for stage in self.stages):
+            known = ", ".join(stage.name for stage in self.stages)
+            raise ValueError(f"Unknown stop_after stage: {stop_after} (expected one of: {known})")
         board = context.board
-        root_task = board.create_task("searchpo_agent_run", "Searchpo tracked agent harness run", "harness")
+        saved = _load_state(context) if resume_from > 0 else {}
+        root_task = str(saved.get("root_task_id") or "")
+        if not root_task:
+            root_task = board.create_task("searchpo_agent_run", "Searchpo tracked agent harness run", "harness")
         board.set_status(root_task, "running", "harness", {"run_dir": str(context.run_dir)})
         stage_results: list[StageResult] = []
-        completed_stages: list[str] = []
+        completed_stages: list[str] = list(saved.get("completed_stages") or [])
 
         if resume_from > 0:
-            completed_stages = _load_state(context)
             logger.info(f"Resuming from stage {resume_from}, previously completed: {completed_stages}")
 
         try:
@@ -352,9 +364,15 @@ class SyncHarness:
                     board.gate(task, gate)
                 board.set_status(task, result.status, stage.owner, result.metadata)
                 completed_stages.append(stage.name)
-                _save_state(context, completed_stages)
+                _save_state(context, completed_stages, root_task)
                 if result.status != "completed":
                     raise RuntimeError(f"Stage {stage.name} ended with status {result.status}: {result.details}")
+                if stop_after == stage.name:
+                    payload = {"stage_count": len(completed_stages), "stopped_after": stop_after}
+                    board.gate(root_task, Gate("harness_phase_result", "pass", f"Stopped after {stop_after}", payload))
+                    board.set_status(root_task, "paused", "harness", payload)
+                    logger.info(f"Harness paused after stage: {stop_after}")
+                    return HarnessRunResult(root_task, stage_results)
         except Exception as exc:
             quarantine_dir = _quarantine_partial_artifacts(context.run_dir, stage.name)
             failure_path = context.run_dir / "failure.json"
@@ -374,7 +392,7 @@ class SyncHarness:
             logger.error(f"Harness failed at stage {stage.name}: {exc}")
             raise
 
-        board.gate(root_task, Gate("harness_result", "pass", f"{len(stage_results)} stages completed"))
-        board.set_status(root_task, "completed", "harness", {"stage_count": len(stage_results)})
-        logger.info(f"Harness completed: {len(stage_results)} stages")
+        board.gate(root_task, Gate("harness_result", "pass", f"{len(completed_stages)} stages completed"))
+        board.set_status(root_task, "completed", "harness", {"stage_count": len(completed_stages)})
+        logger.info(f"Harness completed: {len(completed_stages)} stages")
         return HarnessRunResult(root_task, stage_results)

@@ -4,6 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+PYTHON_BIN="${SEARCHPO_PYTHON_BIN:-python3}"
+REQUESTED_PYTHON_BIN="$PYTHON_BIN"
+python_has_google_genai() {
+  "$1" - <<'PY' >/dev/null 2>&1
+from google import genai  # noqa: F401
+from google.genai import types  # noqa: F401
+PY
+}
+
+for candidate in "$PYTHON_BIN" /opt/anaconda3/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+  [[ -x "$candidate" || "$candidate" == "python3" ]] || continue
+  if python_has_google_genai "$candidate"; then
+    PYTHON_BIN="$candidate"
+    break
+  fi
+done
+if [[ "$PYTHON_BIN" != "$REQUESTED_PYTHON_BIN" ]]; then
+  echo "Using $PYTHON_BIN for Searchpo Python stages because google-genai is available there." >&2
+fi
+
 PROFILE="${SEARCHPO_E2E_PROFILE:-contract}"
 EXECUTION_PROFILE="$PROFILE"
 case "$PROFILE" in
@@ -16,9 +36,10 @@ case "$PROFILE" in
     ;;
   provider)
     export SEARCHPO_AGENT_MODE="${SEARCHPO_AGENT_MODE:-provider}"
-    export SEARCHPO_REMOTION_RENDER_MODE="${SEARCHPO_REMOTION_RENDER_MODE:-local}"
+    # Default render backend is cloud (Lambda); video_quality_loop falls back to local on failure.
+    export SEARCHPO_REMOTION_RENDER_MODE="${SEARCHPO_REMOTION_RENDER_MODE:-lambda}"
     export SEARCHPO_DOUYIN_CHECK_LEVEL="${SEARCHPO_DOUYIN_CHECK_LEVEL:-adapter}"
-    EFFECTIVE_RENDER_MODE="local"
+    EFFECTIVE_RENDER_MODE="$SEARCHPO_REMOTION_RENDER_MODE"
     PUBLISH_MODE="contract-check"
     ;;
   lambda)
@@ -50,16 +71,22 @@ export SEARCHPO_EXECUTION_PROFILE="$EXECUTION_PROFILE"
 export SEARCHPO_EFFECTIVE_RENDER_MODE="$EFFECTIVE_RENDER_MODE"
 export SEARCHPO_PUBLISH_MODE="$PUBLISH_MODE"
 
+DELEGATION_MODE="${SEARCHPO_DELEGATION_MODE:-single_harness}"
+DELEGATION_ARGS=(--delegation-mode "$DELEGATION_MODE" --delegation-agent "${SEARCHPO_DELEGATION_AGENT:-searchpo-harness}")
+if [[ -n "${SEARCHPO_DELEGATION_PROOF:-}" ]]; then
+  DELEGATION_ARGS+=(--delegation-proof "$SEARCHPO_DELEGATION_PROOF")
+fi
+
 finalize_and_exit_fail() {
   local msg="$1"
   if [[ -n "${RUN_DIR:-}" && -f "$RUN_DIR/agent_run.json" ]]; then
-    python3 scripts/finalize_run.py "$RUN_DIR" --execution-profile "$EXECUTION_PROFILE" --publish-mode "$PUBLISH_MODE" >/dev/null 2>&1 || true
+    "$PYTHON_BIN" scripts/finalize_run.py "$RUN_DIR" --execution-profile "$EXECUTION_PROFILE" --publish-mode "$PUBLISH_MODE" >/dev/null 2>&1 || true
   fi
   echo "$msg" >&2
   exit 1
 }
 
-python3 scripts/check_env.py --env-file .env --profile "$PROFILE"
+"$PYTHON_BIN" scripts/check_env.py --env-file .env --profile "$PROFILE"
 
 if [[ -n "${SEARCHPO_LINK:-}" && -n "${SEARCHPO_TOPIC_URL:-}" && "${SEARCHPO_LINK}" != "${SEARCHPO_TOPIC_URL}" ]]; then
   echo "SEARCHPO_LINK and SEARCHPO_TOPIC_URL both set but point to different URLs; pass only one canonical source boundary." >&2
@@ -83,8 +110,25 @@ if [[ -n "${SEARCHPO_TOPIC:-}" || -n "$DIRECT_LINK" ]]; then
   if [[ -n "${SEARCHPO_TOPIC_SOURCE:-}" ]]; then
     TOPIC_ARGS+=(--topic-source "$SEARCHPO_TOPIC_SOURCE")
   fi
-  python3 agent_harness/run_agent_loop.py "${TOPIC_ARGS[@]}"
-  RUN_DIR="$(cat runtime/latest_run.txt)"
+  AGENT_OUTPUT="$(mktemp)"
+  "$PYTHON_BIN" agent_harness/run_agent_loop.py "${TOPIC_ARGS[@]}" "${DELEGATION_ARGS[@]}" | tee "$AGENT_OUTPUT"
+  RUN_DIR="$("$PYTHON_BIN" - "$AGENT_OUTPUT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = text.rfind("{")
+if start < 0:
+    raise SystemExit("run_agent_loop did not print a JSON result with run_dir")
+data = json.loads(text[start:])
+run_dir = data.get("run_dir")
+if not run_dir:
+    raise SystemExit("run_agent_loop JSON result is missing run_dir")
+print(run_dir)
+PY
+)"
+  rm -f "$AGENT_OUTPUT"
 else
   if [[ "${SEARCHPO_ENABLE_DAILY_RADAR:-0}" != "1" ]]; then
     cat >&2 <<'EOF'
@@ -94,10 +138,10 @@ Set SEARCHPO_ENABLE_DAILY_RADAR=1 only when you explicitly want the legacy sourc
 EOF
     exit 2
   fi
-  python3 data_prep/scripts/probe_sources.py --timeout 10 --min-ok-sources 4 --min-ok-p0 3 --allow-transient-statuses 429,500,502,503,504 --allow-transient-timeouts
-  python3 data_prep/scripts/run_pipeline.py --limit-per-source "${SEARCHPO_LIMIT_PER_SOURCE:-10}" --shortlist-size 10 --timeout 15
+  "$PYTHON_BIN" data_prep/scripts/probe_sources.py --timeout 10 --min-ok-sources 4 --min-ok-p0 3 --allow-transient-statuses 429,500,502,503,504 --allow-transient-timeouts
+  "$PYTHON_BIN" data_prep/scripts/run_pipeline.py --limit-per-source "${SEARCHPO_LIMIT_PER_SOURCE:-10}" --shortlist-size 10 --timeout 15
   RUN_DIR="$(cat runtime/latest_run.txt)"
-  python3 agent_harness/run_agent_loop.py "$RUN_DIR"
+  "$PYTHON_BIN" agent_harness/run_agent_loop.py "$RUN_DIR" "${DELEGATION_ARGS[@]}"
 fi
 if [[ "$PROFILE" == "contract" ]]; then
   if find "$RUN_DIR" \( \
@@ -120,7 +164,7 @@ FINAL_COVER="$RUN_DIR/cover/final.jpg"
 
 case "$REMOTION_MODE" in
   lambda|local)
-    if ! python3 scripts/video_quality_loop.py "$RUN_DIR" \
+    if ! "$PYTHON_BIN" scripts/video_quality_loop.py "$RUN_DIR" \
       --execution-profile "$EXECUTION_PROFILE" \
       --render-mode "$REMOTION_MODE" \
       --publish-mode "$PUBLISH_MODE"; then
@@ -143,7 +187,7 @@ else
   echo "Douyin upload/check reported failure; recording final gates." >&2
 fi
 DOUYIN_CHECK_JSON="$RUN_DIR/post/douyin_upload_check.json"
-if [[ -f "$DOUYIN_CHECK_JSON" ]] && python3 -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get('status')=='pass' else 1)" "$DOUYIN_CHECK_JSON" 2>/dev/null; then
+if [[ -f "$DOUYIN_CHECK_JSON" ]] && "$PYTHON_BIN" -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get('status')=='pass' else 1)" "$DOUYIN_CHECK_JSON" 2>/dev/null; then
   DOUYIN_STATUS="pass"
 else
   DOUYIN_STATUS="fail"
@@ -165,15 +209,15 @@ DOUYIN_STAGE_STATUS="completed"
 if [[ "$DOUYIN_STATUS" != "pass" ]]; then
   DOUYIN_STAGE_STATUS="failed"
 fi
-python3 agent_harness/record_runtime_stage.py "$RUN_DIR" \
+"$PYTHON_BIN" agent_harness/record_runtime_stage.py "$RUN_DIR" \
   --name douyin_publish \
   --title "Douyin publish adapter" \
-  --owner claude_impl_agent \
+  --owner searchpo-impl-agent \
   --status "$DOUYIN_STAGE_STATUS" \
   --artifact douyin_upload_check="$RUN_DIR/post/douyin_upload_check.json" \
   --gate "$DOUYIN_GATE"
 
-if python3 scripts/finalize_run.py "$RUN_DIR" --execution-profile "$EXECUTION_PROFILE" --publish-mode "$PUBLISH_MODE"; then
+if "$PYTHON_BIN" scripts/finalize_run.py "$RUN_DIR" --execution-profile "$EXECUTION_PROFILE" --publish-mode "$PUBLISH_MODE"; then
   FINAL_STATUS="pass"
 else
   FINAL_STATUS="fail"

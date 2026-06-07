@@ -8,6 +8,9 @@ import base64
 import hashlib
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -36,9 +39,9 @@ LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 DEFAULT_TTS_STYLE = (
     "请用自然标准普通话朗读后面的中文稿件，不要读出本说明。"
     "声音设定：专业但亲和的抖音知识教育女声，清晰、可信、有活力，"
-    "像经验丰富的短视频老师在给普通观众讲有用知识。"
+    "像经验丰富的知识视频老师在给普通观众讲有用知识。"
     "整体语气要自信、干净、友好、信息量清楚；不要像新闻主播、商业销售、广播主持、亢奋带货口吻或机器人旁白。"
-    "语速中快，适合抖音知识短视频，节奏紧凑但关键点必须清楚。"
+    "语速中快，适合抖音知识视频，节奏紧凑但关键点必须清楚。"
     "开头第一句稍微更有好奇感和抓人感。"
     "主体讲解要有自然教学节奏，让问题、解释、例子和结论的结构听得出来；在主要步骤之间留短暂停顿。"
     "数字、关键词、定义、对比、步骤名、因果关系和最后结论要轻微放慢并适度强调。"
@@ -54,6 +57,9 @@ DEFAULT_TTS_SPEED = 1.0
 DEFAULT_TTS_VOLUME_GAIN_DB = 0.0
 DEFAULT_AUDIO_TARGET_LUFS = -16.0
 DEFAULT_FPS = 30
+TOOL_FALLBACKS = {
+    "ffmpeg": ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"],
+}
 
 
 def utc_now() -> str:
@@ -75,6 +81,40 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def resolve_tool(name: str) -> str:
+    tool_path = shutil.which(name)
+    if tool_path:
+        return tool_path
+    for candidate in TOOL_FALLBACKS.get(name, []):
+        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    raise RuntimeError(f"{name} not found; real audio processing requires {name}")
+
+
+def env_truthy(name: str, env_file: Path, default: str = "1") -> bool:
+    return env_value(name, env_file, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def reusable_audio_chunk(
+    path: Path,
+    *,
+    expected_text_hash: str | None = None,
+    previous_manifest: dict[str, Any] | None = None,
+    chunk_index: int | None = None,
+) -> bool:
+    if not path.is_file() or path.stat().st_size <= 44:
+        return False
+    if expected_text_hash and previous_manifest and chunk_index is not None:
+        chunks = ((previous_manifest.get("tts_chunking") or {}).get("chunks") or [])
+        record = next((item for item in chunks if int(item.get("index") or 0) == chunk_index), None)
+        if not record or str(record.get("text_hash") or "") != expected_text_hash:
+            return False
+    elif expected_text_hash:
+        return False
+    duration = probe_audio_seconds(path)
+    return bool(duration and duration > 0)
 
 
 def sha256_text(text: str) -> str:
@@ -144,6 +184,90 @@ def build_tts_prompt(text: str, style: str) -> str:
     return f"{style}：\n{text}"
 
 
+def split_tts_chunks(text: str, max_chars: int) -> list[str]:
+    """Split long voiceover text into endpoint-sized chunks without a duration cap."""
+    max_chars = max(300, int(max_chars or 0))
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return []
+    if len(cleaned) <= max_chars:
+        return [cleaned]
+    pieces = [piece.strip() for piece in re.findall(r".+?[。！？!?；;：:]|.+$", cleaned) if piece.strip()]
+    chunks: list[str] = []
+    current = ""
+
+    def split_overlong(piece: str) -> list[str]:
+        out: list[str] = []
+        remaining = piece.strip()
+        while len(remaining) > max_chars:
+            window = remaining[:max_chars]
+            cut = max(window.rfind(mark) for mark in ["，", "、", ",", "；", ";", "：", ":", "。", "！", "？", "!", "?"])
+            if cut < int(max_chars * 0.45):
+                cut = max_chars
+            else:
+                cut += 1
+            out.append(remaining[:cut].strip())
+            remaining = remaining[cut:].strip()
+        if remaining:
+            out.append(remaining)
+        return out
+
+    for piece in pieces:
+        subpieces = split_overlong(piece) if len(piece) > max_chars else [piece]
+        for subpiece in subpieces:
+            if not current:
+                current = subpiece
+                continue
+            if len(current) + 1 + len(subpiece) <= max_chars:
+                current = f"{current} {subpiece}"
+            else:
+                chunks.append(current)
+                current = subpiece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def concat_wav_chunks(chunk_paths: list[Path], output_path: Path, sample_rate_hz: int, timeout: float) -> dict[str, Any]:
+    if not chunk_paths:
+        raise RuntimeError("no TTS chunks to concatenate")
+    if len(chunk_paths) == 1:
+        return {"status": "single_chunk", "chunk_count": 1}
+    cmd = [resolve_tool("ffmpeg"), "-y"]
+    for path in chunk_paths:
+        cmd.extend(["-i", str(path)])
+    filter_complex = "".join(f"[{index}:a]" for index in range(len(chunk_paths))) + f"concat=n={len(chunk_paths)}:v=0:a=1[a]"
+    cmd.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[a]",
+            "-ar",
+            str(sample_rate_hz),
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ]
+    )
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "audio chunk concat failed; refusing to continue without complete real audio\n"
+            f"stdout:\n{proc.stdout[-1000:]}\nstderr:\n{proc.stderr[-1000:]}"
+        )
+    return {"status": "concatenated", "chunk_count": len(chunk_paths), "stdout": proc.stdout[-1000:], "stderr": proc.stderr[-1000:]}
+
+
 def generate_tts(api_key: str, model: str, voice: str, text: str, timeout: float, env_file: Path, style: str = "") -> tuple[bytes, str, dict[str, Any]]:
     url = generate_content_url(model, api_key, env_file)
     prompt_text = build_tts_prompt(text, style)
@@ -199,7 +323,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
     parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument("--timeout", type=float, default=600)
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
@@ -244,6 +368,7 @@ def main() -> int:
     if not polish_path.exists():
         raise SystemExit(f"DeepSeek polish artifact missing: {polish_path}")
     polish = read_json(polish_path)
+    previous_manifest = read_json(run_dir / "voiceover_manifest.json") if (run_dir / "voiceover_manifest.json").exists() else {}
     source_text = str(polish.get("voiceover_text") or "").strip()
     if not source_text:
         raise SystemExit("deepseek_polish.json has no voiceover_text")
@@ -260,10 +385,68 @@ def main() -> int:
     if not speech_quality_checks["raw_symbol_pronunciation_safe"]:
         raise SystemExit("normalized voiceover still contains raw slash, URL, or symbol pronunciation risk")
 
-    audio_bytes, source_mime_type, response_meta = generate_tts(api_key, model, voice, text, args.timeout, env_file, style=style)
     audio_path = run_dir / "voiceover.wav"
-    output_mime_type = write_audio(audio_path, audio_bytes, source_mime_type)
-    import subprocess as _sp
+    try:
+        chunk_chars = int(env_value("SEARCHPO_GEMINI_TTS_CHUNK_CHARS", env_file, "1200"))
+    except ValueError:
+        chunk_chars = 1200
+    text_chunks = split_tts_chunks(text, chunk_chars)
+    if not text_chunks:
+        raise SystemExit("normalized voiceover_text produced no TTS chunks")
+    chunk_dir = run_dir / "audio_chunks"
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunk_paths: list[Path] = []
+    chunk_records: list[dict[str, Any]] = []
+    source_mime_types: list[str] = []
+    response_meta: dict[str, Any] = {"chunk_count": len(text_chunks), "chunk_chars": chunk_chars, "chunks": []}
+    reuse_existing_chunks = env_truthy("SEARCHPO_GEMINI_TTS_REUSE_CHUNKS", env_file, "1")
+    for index, chunk_text in enumerate(text_chunks, start=1):
+        chunk_audio_path = chunk_dir / f"voiceover_part_{index:03d}.wav"
+        chunk_text_hash = sha256_text(chunk_text)
+        if reuse_existing_chunks and reusable_audio_chunk(
+            chunk_audio_path,
+            expected_text_hash=chunk_text_hash,
+            previous_manifest=previous_manifest,
+            chunk_index=index,
+        ):
+            source_mime_type = "audio/wav;source=reused-gemini-tts-chunk"
+            chunk_response_meta = {"reused_existing_chunk": True}
+        else:
+            audio_bytes, source_mime_type, chunk_response_meta = generate_tts(
+                api_key,
+                model,
+                voice,
+                chunk_text,
+                args.timeout,
+                env_file,
+                style=style,
+            )
+            write_audio(chunk_audio_path, audio_bytes, source_mime_type)
+        source_mime_types.append(source_mime_type)
+        chunk_paths.append(chunk_audio_path)
+        chunk_record = {
+            "index": index,
+            "text_hash": chunk_text_hash,
+            "char_count": len(chunk_text),
+            "audio_path": str(chunk_audio_path),
+            "audio_sha256": sha256_file(chunk_audio_path) if chunk_audio_path.is_file() else None,
+            "source_mime_type": source_mime_type,
+            "response_meta": chunk_response_meta,
+        }
+        chunk_records.append(chunk_record)
+        response_meta["chunks"].append(chunk_record)
+    if len(chunk_paths) == 1:
+        shutil.copyfile(chunk_paths[0], audio_path)
+        response_meta["concat"] = {"status": "single_chunk", "chunk_count": 1}
+    else:
+        response_meta["concat"] = concat_wav_chunks(
+            chunk_paths,
+            audio_path,
+            sample_rate_hz,
+            timeout=max(180.0, min(3600.0, len(chunk_paths) * 90.0)),
+        )
+    source_mime_type = source_mime_types[0] if len(set(source_mime_types)) == 1 else "audio/wav;source=segmented-gemini-tts"
+    ffmpeg_bin = resolve_tool("ffmpeg")
     normalize_env = {
         **os.environ,
         "SEARCHPO_GEMINI_TTS_AUDIO_ENCODING": audio_encoding,
@@ -271,13 +454,17 @@ def main() -> int:
         "SEARCHPO_GEMINI_TTS_SPEED": str(speed),
         "SEARCHPO_GEMINI_TTS_VOLUME_GAIN_DB": str(volume_gain_db),
         "SEARCHPO_AUDIO_TARGET_LUFS": str(target_lufs),
+        "FFMPEG_BIN": ffmpeg_bin,
+        "PATH": os.pathsep.join(
+            [str(Path(ffmpeg_bin).parent), os.environ.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin"]
+        ),
     }
-    normalize_proc = _sp.run(
+    normalize_proc = subprocess.run(
         ["bash", str(ROOT / "scripts" / "normalize_audio.sh"), str(audio_path)],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=180,
         check=False,
         env=normalize_env,
     )
@@ -318,6 +505,12 @@ def main() -> int:
         "normalized_voiceover_text": text,
         "audio_sha256": sha256_file(audio_path) if audio_path.is_file() else None,
         "retry_history": response_meta.get("retry_history") or [],
+        "tts_chunking": {
+            "strategy": "sentence_chunks",
+            "chunk_chars": chunk_chars,
+            "chunk_count": len(text_chunks),
+            "chunks": chunk_records,
+        },
         "speech_quality_checks": speech_quality_checks,
         "response_meta": response_meta,
     }

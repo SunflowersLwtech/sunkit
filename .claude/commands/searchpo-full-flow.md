@@ -17,6 +17,16 @@ Use the searchpo-main-agent as lead. Do not run research and implementation in p
 
 If subagent tools are not available, say so before execution, follow the same ownership split manually, and report the result as `manual fallback`.
 
+When spawned teammates are available, use the phased runtime so owner labels line up with actual command boundaries:
+
+```bash
+python3 agent_harness/run_agent_loop.py --topic "topic" --mode provider --stop-after research_enrichment --delegation-mode spawned_subagents --delegation-agent searchpo-research-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 4 --stop-after main_task_plan --delegation-mode spawned_subagents --delegation-agent searchpo-main-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 5 --delegation-mode spawned_subagents --delegation-agent searchpo-impl-agent --delegation-proof "<host-subagent-id>"
+```
+
+For synchronous shell runs, keep `SEARCHPO_DELEGATION_MODE=single_harness` or set `SEARCHPO_DELEGATION_MODE=manual_fallback`; never report those as spawned subagents.
+
 Raw slash-command arguments:
 
 ```text
@@ -75,6 +85,8 @@ SEARCHPO_TOPIC="topic to investigate" npm run e2e:live
 2. Verify these artifacts in the run directory:
    - `agent_run.json`
    - `main_task_plan.json`
+   - `runtime_contract.json`
+   - `research_barrier.json`
    - `evidence_bundle.json`
    - `widesearch_strategy.json`
    - `anysearch_research.json`
@@ -82,6 +94,8 @@ SEARCHPO_TOPIC="topic to investigate" npm run e2e:live
    - `research_brief.json`
    - `cross_check_review.json`
    - `artifact_manifest.json`
+   - `implementation_loop.json`
+   - `release_gate.json`
    - `run_final.json`
    - `render_payload.json`
    - `render_input_manifest.json`
@@ -95,8 +109,8 @@ SEARCHPO_TOPIC="topic to investigate" npm run e2e:live
      - `visual_audit_deterministic.json` (ffmpeg/tesseract/caption/media checks)
      - `gemini_visual_audit.json` (Gemini 3.5 Flash video audit)
 3. Report content quality score from `content_score.json` (overall/10 + verdict).
-4. Report whether the run used sequential spawned/assigned subagents or manual fallback; artifact owner labels alone do not prove real subagent execution.
-5. Report the research barrier outcome before implementation: `cross_check_review.status`, `research_sufficient`, `supplemental_source_count`, and `independent_source_hosts`.
-6. Report whether publishing was contract-check or live, based on `run_final.json` and `post/douyin_upload_check.json`. Live mode requires `post/post_publish_verification.json`; `submitted` is not success.
+4. Report `agent_run.json.delegation.mode` and whether the run used sequential spawned/assigned subagents, manual fallback, or the default single harness; artifact owner labels alone do not prove real subagent execution.
+5. Report the research barrier outcome before implementation: `research_barrier.status`, `cross_check_review.status`, `research_sufficient`, `supplemental_source_count`, and `independent_source_hosts`.
+6. Report whether publishing was contract-check or live, based on `release_gate.json`, `run_final.json`, and `post/douyin_upload_check.json`. Live mode requires `post/post_publish_verification.json`; `submitted` is not success.
 7. If any gate failed, report which stage and suggest `--resume-from N`.
 8. Do not print secret values.

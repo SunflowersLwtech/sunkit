@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.artifact_identity import create_or_update_artifact_manifest  # noqa: E402
+from agent_harness.artifact_paths import legacy_preview_globs, preview_output_paths  # noqa: E402
 from scripts.cover_health import analyze_cover  # noqa: E402
 
 
@@ -76,7 +77,8 @@ def find_video(run_dir: Path, upload_manifest: dict[str, Any]) -> Path | None:
         run_dir / "video" / "final.mp4",
         resolve_path(upload_manifest.get("expected_video_path")),
     ]
-    candidates.extend(sorted((ROOT / "out").glob(f"{run_dir.name}-searchpo-radar*.mp4")))
+    for pattern in legacy_preview_globs(run_dir, media="video"):
+        candidates.extend(sorted((ROOT / "out").glob(pattern)))
     for candidate in candidates:
         if not candidate or not candidate.is_file():
             continue
@@ -92,7 +94,8 @@ def find_cover(run_dir: Path, upload_manifest: dict[str, Any]) -> Path | None:
         run_dir / "cover" / "final.jpg",
         resolve_path(upload_manifest.get("cover_path")),
     ]
-    candidates.extend(sorted((ROOT / "out").glob(f"{run_dir.name}-searchpo-cover*.jpg")))
+    for pattern in legacy_preview_globs(run_dir, media="cover"):
+        candidates.extend(sorted((ROOT / "out").glob(pattern)))
     for candidate in candidates:
         if not candidate or not candidate.is_file():
             continue
@@ -107,8 +110,7 @@ def render_run(run_dir: Path, *, render_video: bool) -> tuple[Path | None, Path 
         return None, None, {"status": "skipped", "reason": "remotion_input_props.json missing"}
     env = os.environ.copy()
     env["SEARCHPO_RUN_DIR"] = str(run_dir)
-    video_out = ROOT / "out" / f"{run_dir.name}-searchpo-radar-backfill.mp4"
-    cover_out = ROOT / "out" / f"{run_dir.name}-searchpo-cover-backfill.jpg"
+    video_out, cover_out = preview_output_paths(ROOT, run_dir, backend="local", purpose="backfill")
     result: dict[str, Any] = {"status": "pass", "commands": []}
     try:
         if render_video:

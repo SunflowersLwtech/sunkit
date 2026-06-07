@@ -23,6 +23,11 @@ export const SCENE_TYPES = [
   'flow',
   'chart',
   'code_diff',
+  'code_block',
+  'node_graph',
+  'decision_table',
+  'act_card',
+  'closing',
   'quote',
   'cta',
 ] as const;
@@ -38,7 +43,7 @@ export type Scene = {
   emphasis?: 'low' | 'normal' | 'high';
 };
 
-export type Theme = 'radar' | 'minimal' | 'editorial';
+export type Theme = 'radar' | 'minimal' | 'editorial' | 'engineering';
 export type Density = 'minimal' | 'standard' | 'rich';
 export type Motion = 'calm' | 'standard' | 'punchy';
 
@@ -74,6 +79,10 @@ const THEME_DEFAULTS: Record<Theme, {accent: string; chrome: Required<ChromeToke
   radar: {accent: '#ffd60a', chrome: {topbar: true, progress: true, beam: true}},
   minimal: {accent: '#ffd60a', chrome: {topbar: false, progress: false, beam: false}},
   editorial: {accent: '#72e7ff', chrome: {topbar: true, progress: true, beam: false}},
+  // Engineering theme: pure-black canvas + monospace, no decorative noise. The
+  // visual language comes from code/node-graph/decision-table scenes themselves,
+  // not from background gradients. See theme-engineering overrides in styles.css.
+  engineering: {accent: '#f59e0b', chrome: {topbar: false, progress: false, beam: false}},
 };
 
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
@@ -82,7 +91,7 @@ const pickEnum = <T extends string>(value: unknown, allowed: readonly T[], fallb
   (typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback);
 
 export const normalizeStyle = (style?: StyleTokens | null): NormalizedStyle => {
-  const theme = pickEnum<Theme>(style?.theme, ['radar', 'minimal', 'editorial'], 'radar');
+  const theme = pickEnum<Theme>(style?.theme, ['radar', 'minimal', 'editorial', 'engineering'], 'radar');
   const base = THEME_DEFAULTS[theme];
   const accent = typeof style?.accent === 'string' && HEX_RE.test(style.accent) ? style.accent : base.accent;
   const chromeIn = style?.chrome ?? {};
@@ -129,6 +138,17 @@ export const defaultWeightFor = (type: SceneType): number => {
       return 0.18;
     case 'code_diff':
       return 0.22;
+    // Engineering-theme scenes: long enough to read, short enough to keep pace.
+    case 'code_block':
+      return 0.14;
+    case 'node_graph':
+      return 0.18;
+    case 'decision_table':
+      return 0.2;
+    case 'act_card':
+      return 0.06;
+    case 'closing':
+      return 0.09;
     case 'quote':
       return 0.16;
     case 'cta':
@@ -187,20 +207,26 @@ export const sceneStartBoundaries = (sceneFrames: number[], transitionFrames: nu
   return starts;
 };
 
-const MAX_SCENES = 8;
+const MAX_SCENES = 24;
 
 const requiredSceneKeys: Record<SceneType, string[]> = {
-  statement: ['title', 'heading'],
+  statement: ['title', 'heading', 'headline', 'text'],
   context: ['text', 'summary', 'detail'],
   stat: ['value', 'stat', 'label', 'heading'],
   bullets: ['heading', 'title', 'items'],
-  card: ['value', 'detail'],
-  compare: ['left', 'right'],
+  card: ['value', 'detail', 'title', 'heading', 'text', 'summary', 'label', 'kicker'],
+  compare: ['left', 'right', 'title', 'heading', 'text', 'summary', 'items'],
   compare_table: ['rows', 'items'],
-  terminal: ['lines', 'commands', 'items'],
+  terminal: ['lines', 'commands', 'items', 'title', 'heading', 'text', 'summary'],
   flow: ['nodes', 'steps', 'items'],
   chart: ['value', 'stat', 'points', 'items'],
-  code_diff: ['additions', 'added', 'removals', 'removed', 'items'],
+  code_diff: ['additions', 'added', 'removals', 'removed', 'items', 'lines', 'changes', 'diff', 'title', 'heading'],
+  // Structured engineering scenes must carry structured content, not just a title.
+  code_block: ['lines', 'code', 'items'],
+  node_graph: ['nodes', 'items'],
+  decision_table: ['rules', 'items'],
+  act_card: ['title', 'detail', 'heading', 'text'],
+  closing: ['mark', 'title', 'heading'],
   quote: ['quote', 'text'],
   cta: ['text'],
 };
@@ -344,4 +370,122 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
     },
   ];
   return {version: 1, style: {theme: 'radar'}, scenes};
+};
+
+// Engineering-theme factory. Produces an 8-scene storyboard that walks through
+// the same content from a technical angle: opener, act cards, code sample,
+// agent graph, decision table, and closing wordmark. Mirrors the structure of
+// the SightLine demo (act-based engineering reveal). Call this from your content
+// agent when the topic has technical depth worth showcasing.
+export type EngineeringStoryboardInput = {
+  topic: string;
+  tagline: string;
+  subtitle?: string;
+  codeFilename: string;
+  codeLines: string[];
+  codeCaption: string;
+  graphCenter: string;
+  graphCenterSub?: string;
+  graphNodes: string[];
+  graphSubs?: string[];
+  rules: string[];
+  ruleTags?: string[];
+  categories: string[];
+  categorySubs?: string[];
+  title: string;
+  closingMark?: string;
+  closingSub?: string;
+  closingBuilt?: string;
+  actLabels?: {engine?: string; architecture?: string; decision?: string};
+  style?: StyleTokens;
+};
+
+export const deriveEngineeringStoryboard = (input: EngineeringStoryboardInput): Storyboard => {
+  const acts = input.actLabels || {};
+  const scenes: Scene[] = [
+    // Act 1 opener - the problem statement in the engineering voice.
+    {
+      type: 'statement',
+      props: {
+        kicker: input.tagline,
+        title: input.topic,
+        sub: input.subtitle ?? '',
+      },
+      weight: 0.16,
+    },
+    // Act 1 - the engine / code.
+    {
+      type: 'act_card',
+      props: {
+        eyebrow: `ACT 1`,
+        detail: acts.engine ?? 'The Engine',
+        sub: input.codeCaption.slice(0, 90),
+      },
+      weight: 0.05,
+    },
+    {
+      type: 'code_block',
+      props: {
+        filename: input.codeFilename,
+        lines: input.codeLines,
+        title: input.codeCaption,
+        detail: input.subtitle ?? '',
+      },
+      weight: 0.18,
+    },
+    // Act 2 - the architecture.
+    {
+      type: 'act_card',
+      props: {
+        eyebrow: `ACT 2`,
+        detail: acts.architecture ?? 'The Architecture',
+        sub: '',
+      },
+      weight: 0.05,
+    },
+    {
+      type: 'node_graph',
+      props: {
+        center: input.graphCenter,
+        centerSub: input.graphCenterSub ?? 'orchestrator',
+        nodes: input.graphNodes,
+        subs: input.graphSubs ?? [],
+        title: '',
+      },
+      weight: 0.18,
+    },
+    // Act 3 - the decision / memory.
+    {
+      type: 'act_card',
+      props: {
+        eyebrow: `ACT 3`,
+        detail: acts.decision ?? 'The Decision',
+        sub: '',
+      },
+      weight: 0.05,
+    },
+    {
+      type: 'decision_table',
+      props: {
+        title: input.title,
+        rules: input.rules,
+        tags: input.ruleTags ?? [],
+        categories: input.categories,
+        categorySubs: input.categorySubs ?? [],
+      },
+      weight: 0.22,
+    },
+    // Closing wordmark.
+    {
+      type: 'closing',
+      props: {
+        mark: input.closingMark ?? 'searchpo',
+        sub: input.closingSub ?? 'engineering videos for AI builders',
+        built: input.closingBuilt ?? 'built for the agents that watch the world',
+      },
+      weight: 0.11,
+    },
+  ];
+  const style: StyleTokens = input.style ?? {theme: 'engineering', motion: 'calm', density: 'minimal'};
+  return {version: 1, style, scenes};
 };

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from agent_harness.core import utc_now, write_json
 from agent_harness.policy import policy_get
+from agent_harness.storyboard import MAX_SCENES
 
 
 SERVICE_BOUNDARIES = [
@@ -54,6 +55,11 @@ RENDER_TO_PLANNING_TYPE = {
     "flow": "explanation",
     "chart": "chart",
     "code_diff": "explanation",
+    "code_block": "explanation",
+    "node_graph": "explanation",
+    "decision_table": "comparison",
+    "act_card": "summary",
+    "closing": "cta",
     "quote": "quote",
     "cta": "cta",
 }
@@ -98,20 +104,150 @@ def bounded_text(value: Any, limit: int) -> str:
     return text[: limit - 1].rstrip() + "..."
 
 
+def clean_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
 def _host(url: Any) -> str:
     return urlparse(str(url or "")).netloc.lower().removeprefix("www.")
 
 
 def _source_text(source: dict[str, Any]) -> str:
-    if source.get("title"):
-        return str(source.get("title"))
     if source.get("description"):
         return str(source.get("description"))
     if source.get("excerpt"):
         return str(source.get("excerpt"))
+    title = str(source.get("title") or "").strip()
+    host = str(source.get("host") or _host(source.get("url"))).lower()
+    if title and title.lower().strip("/") not in {host, host.removeprefix("www."), "github.com"}:
+        return title
     if source.get("json") is not None:
         return json.dumps(source.get("json"), ensure_ascii=False)
     return str(source.get("url") or source.get("id") or "")
+
+
+def _is_noisy_fact_text(value: str) -> bool:
+    lowered = value.lower()
+    noisy_tokens = [
+        "skip to content",
+        "you signed in",
+        "you signed out",
+        "sign in with another tab",
+        "reload to refresh your session",
+        "notifications",
+        "github mobile",
+        "mailto:",
+        "%0a",
+        "javascript:",
+        "copy link",
+        "share this article",
+        "all rights reserved",
+        "privacy policy",
+        "terms of service",
+    ]
+    if any(token in lowered for token in noisy_tokens):
+        return True
+    if lowered.count("https://") + lowered.count("http://") >= 3:
+        return True
+    if lowered.count("[") + lowered.count("]") >= 6:
+        return True
+    return False
+
+
+def _source_fact_candidates(source: dict[str, Any], max_items: int = 3) -> list[str]:
+    host = str(source.get("host") or _host(source.get("url"))).lower()
+    text = clean_text(source.get("excerpt") or source.get("description") or _source_text(source))
+    if not text or _is_noisy_fact_text(text):
+        return []
+    facts: list[str] = []
+
+    def add(value: str) -> None:
+        value = bounded_text(value, 220)
+        lowered = value.lower().strip(" .:-")
+        weak_values = {host, host.removeprefix("www."), "github.com", "docs.mem0.ai"}
+        if value and lowered not in weak_values and not _is_noisy_fact_text(value) and value not in facts:
+            facts.append(value)
+
+    if host == "github.com":
+        repo_match = re.search(r"github\s*-\s*([^:]+):\s*([^·\n|]+)", text, re.I)
+        if repo_match:
+            add(f"github repo {repo_match.group(1).strip()}: {repo_match.group(2).strip()}")
+        modules = [
+            item
+            for item in ["cli", "cookbooks", "docs", "evaluation", "examples", "mem0", "mem0-ts", "openmemory", "server", "tests"]
+            if re.search(rf"\b{re.escape(item)}\b", text, re.I)
+        ]
+        if modules:
+            add(f"github repo file tree highlights modules: {', '.join(modules[:8])}")
+    sdk_patterns = [
+        (r"\bMemoryClient\b.*?\bclient\.\s*add\b.*?\bclient\.\s*search\b", "quickstart shows MemoryClient with add/search calls"),
+        (r"\bMemory\b.*?\badd\s*\(.*?\bsearch\s*\(", "SDK pattern centers on add(messages) then search(query)"),
+        (r"\bQdrant\b.*?\bPinecone\b.*?\bChroma\b.*?\bSupabase\b", "integration notes mention vector stores including Qdrant, Pinecone, Chroma, and Supabase"),
+    ]
+    for pattern, summary in sdk_patterns:
+        if re.search(pattern, text, re.I):
+            add(summary)
+    if source.get("type") == "github_source_file":
+        return facts[:max_items]
+    for raw in re.split(r"(?<=[。.!?])\s+|\n+", text):
+        sentence = clean_text(raw)
+        if not (45 <= len(sentence) <= 260):
+            continue
+        if _is_noisy_fact_text(sentence):
+            continue
+        lowered = sentence.lower()
+        if lowered in {host, host.removeprefix("www."), "github.com"}:
+            continue
+        if any(
+            token in lowered
+            for token in [
+                "memory",
+                "agent",
+                "add",
+                "search",
+                "vector",
+                "embedding",
+                "temporal",
+                "tenant",
+                "governance",
+                "retrieval",
+                "preference",
+                "session",
+                "记忆",
+                "检索",
+                "向量",
+            ]
+        ):
+            add(sentence)
+        if len(facts) >= max_items:
+            break
+    return facts[:max_items]
+
+
+def _repo_context_source_ref(fact: str, source_ids: list[str]) -> str:
+    source_id_set = set(source_ids)
+    preferred = ""
+    if fact.startswith(("description:", "stars:", "language:", "license:", "topics:")):
+        preferred = "github_repo_context_api"
+    elif fact.startswith("README:"):
+        preferred = "github_repo_context_readme"
+    elif fact.startswith("repo root includes:"):
+        preferred = "github_repo_context_root_contents"
+    else:
+        path = fact.split(" ", 1)[0].strip(":")
+        if "/" in path or path.endswith((".py", ".mdx", ".md")):
+            suffix = re.sub(r"[^a-zA-Z0-9]+", "_", path).strip("_")
+            preferred = f"github_repo_context_{suffix}"
+    if preferred in source_id_set:
+        return preferred
+    if preferred:
+        for source_id in source_ids:
+            if source_id.endswith(preferred.removeprefix("github_repo_context_")):
+                return source_id
+    for source_id in source_ids:
+        if source_id.startswith("github_repo_context_"):
+            return source_id
+    return source_ids[0] if source_ids else "primary_url"
 
 
 def build_source_map_artifact(evidence_bundle: dict[str, Any]) -> dict[str, Any]:
@@ -156,17 +292,29 @@ def build_fact_bank_artifact(
     supplemental = supplemental or []
     source_map = build_source_map_artifact(evidence_bundle)["sources"]
     source_ids = [str(source.get("id")) for source in source_map if source.get("id")]
-    existing_facts = [str(item) for item in (evidence_bundle.get("evidence_summary") or {}).get("source_facts") or []]
-    supplemental_facts = [
-        f"{source.get('host') or _host(source.get('url'))}: {bounded_text(_source_text(source), 180)}"
-        for source in supplemental
-        if source.get("excerpt") or source.get("title") or source.get("url")
+    existing_facts = [(str(item), "primary_url") for item in (evidence_bundle.get("evidence_summary") or {}).get("source_facts") or []]
+    repo_context = evidence_bundle.get("repo_context") if isinstance(evidence_bundle.get("repo_context"), dict) else {}
+    repo_context_facts = [
+        (str(item), _repo_context_source_ref(str(item), source_ids))
+        for item in (repo_context.get("facts") or [])
+        if str(item).strip() and not _is_noisy_fact_text(str(item))
     ]
-    claims: list[str] = []
-    for claim in [*existing_facts, *supplemental_facts]:
+    supplemental_facts: list[tuple[str, str]] = []
+    for source in supplemental:
+        if not isinstance(source, dict):
+            continue
+        host = source.get("host") or _host(source.get("url"))
+        source_ref = str(source.get("id") or host or "supplemental")
+        for fact in _source_fact_candidates(source):
+            supplemental_facts.append((f"{host}: {fact}", source_ref))
+    claims: list[tuple[str, str, str]] = []
+    seen_claims: set[str] = set()
+    for claim, source_ref in [*existing_facts, *repo_context_facts, *supplemental_facts]:
         claim = bounded_text(claim, 260)
-        if claim and claim not in claims:
-            claims.append(claim)
+        if claim and claim not in seen_claims:
+            seen_claims.add(claim)
+            kind = "primary" if source_ref == "primary_url" else ("repo_context" if str(source_ref).startswith("github_repo_context_") else "supplemental")
+            claims.append((claim, source_ref, kind))
     risk_notes = [
         "Treat supplemental search results as context, not proof of adoption, benchmark rank, funding, or production maturity.",
         "Only claims visible in primary or supplemental extracted text may be used in public copy.",
@@ -176,9 +324,11 @@ def build_fact_bank_artifact(
         if flag_text and flag_text not in risk_notes:
             risk_notes.append(flag_text)
     facts = []
-    for index, claim in enumerate(claims[:16], start=1):
-        source_ref = source_ids[min(index - 1, len(source_ids) - 1)] if source_ids else "primary_url"
-        confidence = 0.78 if index <= len(existing_facts) else 0.62
+    source_id_set = set(source_ids)
+    for index, (claim, source_ref, kind) in enumerate(claims[:16], start=1):
+        if source_ref not in source_id_set:
+            source_ref = "primary_url" if "primary_url" in source_id_set else (source_ids[0] if source_ids else "primary_url")
+        confidence = 0.78 if kind == "primary" else (0.72 if kind == "repo_context" else 0.62)
         facts.append(
             {
                 "id": f"fact_{index:03d}",
@@ -215,6 +365,23 @@ def build_topic_brief_artifact(
     facts = [str(item) for item in fact_bank.get("source_backed_facts") or []]
     risk_notes = [str(item) for item in fact_bank.get("risk_notes") or []]
     supplemental_hosts = sorted({str(source.get("host") or _host(source.get("url"))) for source in supplemental if source.get("url") or source.get("host")})
+    repo_sources = [
+        source
+        for source in fact_bank.get("source_map") or []
+        if str(source.get("host") or "").lower() == "github.com" or "github" in str(source.get("url") or "").lower()
+    ]
+    visual_opportunities = [
+        "Show primary source, supplemental sources, and open questions as separate evidence layers.",
+        "Use a problem -> mechanism -> tradeoff -> verification path scene sequence.",
+        "Convert source hosts into a compact source-map card instead of showing raw URLs.",
+    ]
+    if repo_sources:
+        visual_opportunities = [
+            "Use a repo-aware Remotion composition: file tree, SDK/API call path, memory lifecycle, and adoption-risk panels.",
+            "Show concrete source artifacts such as README claim, package/module names, add/search calls, vector-store options, and evaluation or test folders when present.",
+            "Avoid generic node diagrams unless each node is tied to a source-backed API, module, or repo path.",
+            *visual_opportunities,
+        ]
     brief = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -226,11 +393,7 @@ def build_topic_brief_artifact(
         "core_question": f"What concrete problem does {title} appear to address, and what evidence supports that interpretation?",
         "angle": "Lead with the problem, mechanism, tradeoff, and next verification step instead of a generic source summary.",
         "key_points": facts[:5],
-        "visual_opportunities": [
-            "Show primary source, supplemental sources, and open questions as separate evidence layers.",
-            "Use a problem -> mechanism -> tradeoff -> verification path scene sequence.",
-            "Convert source hosts into a compact source-map card instead of showing raw URLs.",
-        ],
+        "visual_opportunities": visual_opportunities,
         "risk_notes": risk_notes[:8],
         "publish_risks": risk_notes[:8],
         "supplemental_hosts": supplemental_hosts,
@@ -250,7 +413,7 @@ def build_script_artifact(
     fact_bank: dict[str, Any],
 ) -> dict[str, Any]:
     title = bounded_text(polish.get("polished_title") or candidate.get("title"), 90)
-    voiceover = bounded_text(polish.get("voiceover_text"), 1100)
+    voiceover = clean_text(polish.get("voiceover_text"))
     segments = []
     roles = ["hook", "context", "conflict", "explanation", "evidence", "takeaway", "cta"]
     facts = fact_bank.get("facts") or []
@@ -351,7 +514,7 @@ def build_scene_plan_artifact(
             "service": "visual_planning",
             "selected_candidate_id": candidate.get("candidate_id"),
             "allowed_planning_scene_types": sorted(PLANNING_SCENE_TYPES),
-            "scenes": scenes[:8],
+            "scenes": scenes[:MAX_SCENES],
         },
     )
 

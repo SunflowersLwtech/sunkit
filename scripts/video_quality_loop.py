@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from agent_harness.artifact_paths import preview_output_paths
 from agent_harness.policy import policy_get
+from agent_harness.runtime_contracts import IMPL_AGENT, write_implementation_loop
 
 
 def utc_now() -> str:
@@ -68,7 +70,7 @@ def record_stage(
     *,
     name: str,
     title: str,
-    owner: str = "claude_impl_agent",
+    owner: str = IMPL_AGENT,
     status: str = "completed",
     artifacts: dict[str, Path] | None = None,
     gates: list[tuple[str, str, str]] | None = None,
@@ -141,7 +143,7 @@ def apply_video_repair(run_dir: Path, route: str, attempt: int, decision: dict[s
     caption_rebuild = None
     if route == "caption":
         try:
-            caption_rebuild = run_command([sys.executable, "scripts/build_captions.py", str(run_dir)], timeout=120)
+            caption_rebuild = run_command([sys.executable, "scripts/build_captions.py", str(run_dir)], timeout=240)
         except RuntimeError as exc:
             caption_rebuild = {"error": str(exc)[:1000]}
     patch_report = {
@@ -166,6 +168,15 @@ def deterministic_decision(report: dict[str, Any]) -> dict[str, Any]:
     joined = " ".join(errors).lower()
     if "ffmpeg" in joined or "tesseract" in joined or "black frame" in joined or "silence" in joined or "video missing" in joined:
         route = "hard_fail"
+    elif (
+        "central content motion" in joined
+        or "central content remains static" in joined
+        or "central visual movement" in joined
+        or "active_ratio" in joined
+    ):
+        route = "content"
+    elif "agent_visual" in joined or "cards-only" in joined or "topic-specific" in joined or "compatibility cards" in joined:
+        route = "content"
     elif "caption" in joined:
         route = "caption"
     elif "ocr" in joined or "text" in joined:
@@ -193,8 +204,65 @@ def reroute_agent_visual_failures(run_dir: Path, decision: dict[str, Any]) -> di
     route = str(decision.get("repair_route") or "hard_fail")
     hint = str(decision.get("repair_hint") or "").lower()
     failed = " ".join(str(item) for item in decision.get("failed_checks") or []).lower()
-    dependency_failure = any(token in hint or token in failed for token in ["ffmpeg", "tesseract", "silence", "codec broken"])
-    agent_visual_failure = route == "storyboard" or "video_attempt_exception" in failed or "blank" in hint or "black frame" in hint or "overlap" in hint
+    agent_visual_compile_failure = any(
+        token in hint or token in failed
+        for token in [
+            "agent_visual",
+            "agentvisual",
+            "agentvisualgenerated",
+            "component_code",
+            "prepare_remotion_input.py",
+            "tsx",
+            "esbuild",
+            "transform failed",
+            "symbol",
+            "has already been declared",
+        ]
+    )
+    infra_dependency_failure = any(
+        token in hint or token in failed
+        for token in [
+            "ffmpeg",
+            "tesseract",
+            "silence",
+            "codec broken",
+            "render_metadata",
+        ]
+    )
+    lambda_dependency_failure = any(
+        token in hint or token in failed
+        for token in [
+            "lambda",
+            "timeout",
+            "timed out",
+        ]
+    )
+    dependency_failure = (infra_dependency_failure or lambda_dependency_failure) and not agent_visual_compile_failure
+    visual_content_failure = any(
+        token in hint or token in failed
+        for token in [
+            "central visual motion",
+            "central content motion",
+            "central content remains static",
+            "central visual movement",
+            "active_ratio",
+            "caption/progress/fade-only",
+            "central_motion_not_caption_or_progress_only",
+            "topic_specific_visual",
+            "not_cards_only_template",
+            "cards-only",
+            "topic-specific",
+        ]
+    )
+    agent_visual_failure = (
+        agent_visual_compile_failure
+        or (route in {"storyboard", "caption"} and visual_content_failure)
+        or route == "storyboard"
+        or "video_attempt_exception" in failed
+        or "blank" in hint
+        or "black frame" in hint
+        or "overlap" in hint
+    )
     if agent_visual_failure and not dependency_failure:
         updated = dict(decision)
         updated["repair_route"] = "content"
@@ -224,7 +292,13 @@ def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int, 
             "video_attempt": attempt,
             "failed_checks": failed_checks,
             "repair_hint": (decision or audit).get("repair_hint"),
-            "instruction": "Revise content and regenerate agent_visual TSX/CSS so the rendered video has source-grounded constructive insight and matches run artifacts.",
+            "instruction": (
+                "Revise content and regenerate agent_visual TSX/CSS so the rendered video has source-grounded constructive insight, "
+                "matches run artifacts, and shows central visual motion in every major segment. Progress bars, caption highlights, "
+                "and fades alone do not satisfy the motion requirement. If the failure mentions central_animation_richness, add "
+                "multiple visible central motion layers such as spring entrance, staggered reveals, moving packets, orbiting nodes, "
+                "audio-reactive emphasis, scanner sweeps, and animated score or state transitions."
+            ),
         },
     }
     pending = run_dir / "optimization" / "video" / "pending_content_feedback.json"
@@ -232,18 +306,41 @@ def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int, 
     return pending
 
 
+def delegation_args_from_env() -> list[str]:
+    mode = str(os.environ.get("SEARCHPO_DELEGATION_MODE") or "").strip()
+    agent = str(os.environ.get("SEARCHPO_DELEGATION_AGENT") or "").strip()
+    proof = str(os.environ.get("SEARCHPO_DELEGATION_PROOF") or "").strip()
+    args: list[str] = []
+    if mode:
+        args.extend(["--delegation-mode", mode])
+    if agent:
+        args.extend(["--delegation-agent", agent])
+    if proof:
+        args.extend(["--delegation-proof", proof])
+    return args
+
+
 def run_content_backtrack(run_dir: Path, audit_path: Path, attempt: int, decision: dict[str, Any] | None = None) -> dict[str, Any]:
     feedback_path = semantic_feedback_from_audit(run_dir, audit_path, attempt, decision)
     return run_command(
-        [sys.executable, "agent_harness/run_agent_loop.py", str(run_dir), "--mode", "provider", "--resume-from", "4"],
+        [
+            sys.executable,
+            "agent_harness/run_agent_loop.py",
+            str(run_dir),
+            "--mode",
+            "provider",
+            "--resume-from",
+            "4",
+            *delegation_args_from_env(),
+        ],
         env={"SEARCHPO_VIDEO_FEEDBACK": str(feedback_path)},
-        timeout=900,
+        timeout=1800,
     )
 
 
-def render_attempt(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: str) -> dict[str, Any]:
+def render_attempt(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: str, publish_mode: str = "contract-check") -> dict[str, Any]:
     run_id = run_dir.name
-    prepare = run_command([sys.executable, "render/prepare_remotion_input.py", str(run_dir)], timeout=120)
+    prepare = run_command([sys.executable, "render/prepare_remotion_input.py", str(run_dir)], timeout=240)
     props = run_dir / "remotion_input_props.json"
     manifest = run_dir / "render_input_manifest.json"
     copy_artifact(props, attempt_dir / "remotion_input_props.json")
@@ -263,57 +360,129 @@ def render_attempt(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: 
         gates=[("remotion_input_prepared", "pass", f"attempt {attempt} props ready")],
     )
 
-    if render_mode == "lambda":
-        video_out = ROOT / "out" / f"{run_id}-searchpo-radar-lambda-attempt-{attempt:02d}.mp4"
-        cover_out = ROOT / "out" / f"{run_id}-searchpo-cover-lambda-attempt-{attempt:02d}.jpg"
-        video = run_command(
-            ["bash", "scripts/lambda_render.sh", "render"],
-            env={
-                "SEARCHPO_RUN_DIR": str(run_dir),
-                "SEARCHPO_LAMBDA_RENDER_OUTPUT": str(video_out.relative_to(ROOT)),
-                "SEARCHPO_LAMBDA_RENDER_OUT_NAME": f"{run_id}/attempt-{attempt:02d}/searchpo-radar.mp4",
+    site = None
+    render_backend = render_mode
+    lambda_fallback = None
+
+    def _write_preview_manifest(
+        *,
+        backend: str,
+        video_out: Path,
+        cover_out: Path,
+        attempt_video: Path,
+        attempt_cover: Path,
+    ) -> Path:
+        manifest_path = video_out.parent / "preview_manifest.json"
+        write_json(
+            manifest_path,
+            {
+                "schema_version": 1,
+                "created_at": utc_now(),
+                "run_id": run_id,
+                "run_dir": str(run_dir),
+                "attempt": attempt,
+                "backend": backend,
+                "preview_dir": str(video_out.parent),
+                "preview_video": str(video_out),
+                "preview_cover": str(cover_out),
+                "attempt_video": str(attempt_video),
+                "attempt_cover": str(attempt_cover),
+                "publishable_video_after_pass": str(run_dir / "video" / "final.mp4"),
+                "publishable_cover_after_pass": str(run_dir / "cover" / "final.jpg"),
             },
-            timeout=1800,
         )
-        cover = run_command(
-            ["bash", "scripts/lambda_render.sh", "still"],
-            env={
-                "SEARCHPO_RUN_DIR": str(run_dir),
-                "SEARCHPO_LAMBDA_COVER_OUTPUT": str(cover_out.relative_to(ROOT)),
-                "SEARCHPO_LAMBDA_COVER_OUT_NAME": f"{run_id}/attempt-{attempt:02d}/searchpo-cover.jpg",
-            },
+        return manifest_path
+
+    def _render_local():
+        local_video, local_cover = preview_output_paths(ROOT, run_dir, backend="local", attempt=attempt)
+        local_video_result = run_command(
+            ["bash", "scripts/remotion_render.sh", "local"],
+            env={"SEARCHPO_RUN_DIR": str(run_dir), "SEARCHPO_RENDER_OUTPUT": str(local_video.relative_to(ROOT))},
+            timeout=2400,
+        )
+        local_cover_result = run_command(
+            ["bash", "scripts/remotion_render.sh", "cover"],
+            env={"SEARCHPO_RUN_DIR": str(run_dir), "SEARCHPO_COVER_OUTPUT": str(local_cover.relative_to(ROOT))},
             timeout=900,
         )
+        return local_video, local_cover, local_video_result, local_cover_result
+
+    if render_mode == "lambda":
+        site = run_command(["bash", "scripts/lambda_render.sh", "site"], env={"SEARCHPO_RUN_DIR": str(run_dir)}, timeout=900)
+        video_out, cover_out = preview_output_paths(ROOT, run_dir, backend="lambda", attempt=attempt)
+        remote_prefix = f"{run_dir.parent.name}/{run_id}/attempt-{attempt:02d}"
+        try:
+            video = run_command(
+                ["bash", "scripts/lambda_render.sh", "render"],
+                env={
+                    "SEARCHPO_RUN_DIR": str(run_dir),
+                    "SEARCHPO_LAMBDA_RENDER_OUTPUT": str(video_out.relative_to(ROOT)),
+                    "SEARCHPO_LAMBDA_RENDER_OUT_NAME": f"{remote_prefix}/searchpo-radar.mp4",
+                },
+                timeout=3600,
+            )
+            cover = run_command(
+                ["bash", "scripts/lambda_render.sh", "still"],
+                env={
+                    "SEARCHPO_RUN_DIR": str(run_dir),
+                    "SEARCHPO_LAMBDA_COVER_OUTPUT": str(cover_out.relative_to(ROOT)),
+                    "SEARCHPO_LAMBDA_COVER_OUT_NAME": f"{remote_prefix}/searchpo-cover.jpg",
+                },
+                timeout=1200,
+            )
+            if int(video.get("returncode", 1)) != 0 or not video_out.exists() or not cover_out.exists():
+                raise RuntimeError("lambda render did not produce expected video/cover artifacts")
+        except RuntimeError as exc:
+            if publish_mode == "live" or os.environ.get("SEARCHPO_ALLOW_LAMBDA_LOCAL_FALLBACK") != "1":
+                record_stage(
+                    run_dir,
+                    name=f"lambda_render_attempt_{attempt:02d}",
+                    title=f"Lambda render attempt {attempt}",
+                    artifacts={},
+                    gates=[("lambda_rendered", "fail", f"lambda render failed: {str(exc)[:400]}")],
+                )
+                raise
+            lambda_fallback = {"reason": "lambda_render_failed", "error": str(exc)[:2000], "site": site}
+            render_backend = "local"
+            video_out, cover_out, video, cover = _render_local()
     else:
-        video_out = ROOT / "out" / f"{run_id}-searchpo-radar-attempt-{attempt:02d}.mp4"
-        cover_out = ROOT / "out" / f"{run_id}-searchpo-cover-attempt-{attempt:02d}.jpg"
-        video = run_command(
-            ["bash", "scripts/remotion_render.sh", "local"],
-            env={"SEARCHPO_RUN_DIR": str(run_dir), "SEARCHPO_RENDER_OUTPUT": str(video_out.relative_to(ROOT))},
-            timeout=1200,
-        )
-        cover = run_command(
-            ["bash", "scripts/remotion_render.sh", "cover"],
-            env={"SEARCHPO_RUN_DIR": str(run_dir), "SEARCHPO_COVER_OUTPUT": str(cover_out.relative_to(ROOT))},
-            timeout=600,
-        )
+        render_backend = "local"
+        video_out, cover_out, video, cover = _render_local()
     attempt_video = attempt_dir / "rendered_video.mp4"
     attempt_cover = attempt_dir / "rendered_cover.jpg"
     copy_artifact(video_out, attempt_video)
     copy_artifact(cover_out, attempt_cover)
+    preview_manifest = _write_preview_manifest(
+        backend=render_backend,
+        video_out=video_out,
+        cover_out=cover_out,
+        attempt_video=attempt_video,
+        attempt_cover=attempt_cover,
+    )
+    copy_artifact(preview_manifest, attempt_dir / "preview_manifest.json")
     record_stage(
         run_dir,
         name=f"remotion_render_attempt_{attempt:02d}",
         title=f"Render MP4 attempt {attempt}",
-        artifacts={"rendered_video_preview": attempt_video, "rendered_cover": attempt_cover},
+        artifacts={
+            "rendered_video_preview": attempt_video,
+            "rendered_cover": attempt_cover,
+            "preview_manifest": attempt_dir / "preview_manifest.json",
+        },
         gates=[("remotion_rendered", "pass", f"attempt {attempt} video and cover rendered")],
     )
     return {
         "prepare": prepare,
+        "site": site,
+        "render_backend": render_backend,
+        "lambda_fallback": lambda_fallback,
         "video": video,
         "cover": cover,
         "video_path": str(attempt_video),
         "cover_path": str(attempt_cover),
+        "raw_preview_video_path": str(video_out),
+        "raw_preview_cover_path": str(cover_out),
+        "preview_manifest": str(preview_manifest),
         "props_sha256": sha256_file(props),
         "video_sha256": sha256_file(attempt_video),
         "cover_sha256": sha256_file(attempt_cover),
@@ -328,7 +497,7 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
     try:
         metadata_meta = run_command(
             [sys.executable, "scripts/check_render_metadata.py", str(run_dir), "--video", str(video_path), "--output", str(metadata_path)],
-            timeout=90,
+            timeout=180,
         )
     except RuntimeError as exc:
         return {"status": "fail", "repair_route": "hard_fail", "repair_hint": str(exc)[:1000], "failed_checks": ["render_metadata"], "metadata_error": str(exc)[:1000]}
@@ -347,7 +516,7 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
                 "--output",
                 str(deterministic_path),
             ],
-            timeout=180,
+            timeout=900,
         )
     except RuntimeError:
         deterministic = read_json(deterministic_path) if deterministic_path.exists() else {"status": "fail", "errors": ["deterministic audit crashed"]}
@@ -373,7 +542,7 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
                 "--prompt-output",
                 str(gemini_prompt_path),
             ],
-            timeout=300,
+            timeout=600,
         )
     except RuntimeError:
         gemini = read_json(gemini_path) if gemini_path.exists() else {"status": "fail", "repair_route": "hard_fail", "failed_checks": ["gemini_visual_audit"], "repair_hint": "Gemini visual audit crashed"}
@@ -412,11 +581,11 @@ def promote_attempt(run_dir: Path, attempt_dir: Path, render_info: dict[str, Any
             "--execution-profile",
             args.execution_profile,
             "--render-mode",
-            args.render_mode,
+            str(render_info.get("render_backend") or args.render_mode),
             "--publish-mode",
             args.publish_mode,
         ],
-        timeout=120,
+        timeout=300,
     )
     record_stage(
         run_dir,
@@ -468,16 +637,15 @@ def main() -> int:
     optimization_root = run_dir / "optimization" / "video"
     optimization_root.mkdir(parents=True, exist_ok=True)
 
-    if args.render_mode == "lambda":
-        run_command(["bash", "scripts/lambda_render.sh", "site"], env={"SEARCHPO_RUN_DIR": str(run_dir)}, timeout=900)
-
     status = "fail"
     failure_reason = ""
     for attempt in range(1, max_attempts + 1):
         attempt_dir = optimization_root / f"attempt-{attempt:02d}"
+        if attempt_dir.exists():
+            shutil.rmtree(attempt_dir)
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
-            render_info = render_attempt(run_dir, attempt_dir, attempt, args.render_mode)
+            render_info = render_attempt(run_dir, attempt_dir, attempt, args.render_mode, args.publish_mode)
             decision = audit_attempt(run_dir, attempt_dir, attempt, Path(render_info["video_path"]))
         except Exception as exc:
             render_info = {}
@@ -534,6 +702,21 @@ def main() -> int:
     }
     summary_path = run_dir / "video_optimization_loop.json"
     write_json(summary_path, summary)
+    write_implementation_loop(
+        run_dir,
+        phase="video_quality_loop",
+        status="completed" if status == "pass" else "failed",
+        owner=IMPL_AGENT,
+        artifacts={
+            "video_optimization_loop": str(summary_path),
+            "artifact_manifest": str(run_dir / "artifact_manifest.json") if (run_dir / "artifact_manifest.json").exists() else "",
+            "final_video": str(run_dir / "video" / "final.mp4") if (run_dir / "video" / "final.mp4").exists() else "",
+            "final_cover": str(run_dir / "cover" / "final.jpg") if (run_dir / "cover" / "final.jpg").exists() else "",
+        },
+        gates={"video_quality_loop": "pass" if status == "pass" else "fail"},
+        errors=[failure_reason] if failure_reason else [],
+        metadata={"attempt_count": len(attempts), "semantic_backtracks": semantic_backtracks},
+    )
     record_stage(
         run_dir,
         name="video_quality_loop",

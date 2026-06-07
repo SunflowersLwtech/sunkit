@@ -90,7 +90,8 @@ def _render_payload_text_units(render_payload: dict[str, Any] | None) -> list[st
         if isinstance(card, dict):
             fields.extend([card.get("label"), card.get("value"), card.get("detail")])
     fields.extend(storyboard_text_items(render_payload.get("storyboard")))
-    fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual")))
+    orientation = render_payload.get("orientation") or "vertical"
+    fields.extend(agent_visual_text_items(render_payload.get("agentVisual") or render_payload.get("agent_visual"), orientation))
     return [_clean_text(field) for field in fields if _clean_text(field)]
 
 

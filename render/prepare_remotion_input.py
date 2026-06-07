@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from agent_harness.storyboard import validate_storyboard  # noqa: E402
 from agent_harness.agent_visual import normalize_agent_visual, require_agent_visual  # noqa: E402
+from agent_harness.premium_repo_visual import is_github_repo_subject, premium_repo_agent_visual  # noqa: E402
 from agent_harness.video_profile import normalize_video_profile  # noqa: E402
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
@@ -107,7 +108,8 @@ def apply_video_profile(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _placeholder_agent_visual_source() -> str:
-    return """import type {FC} from 'react';
+    return """// @ts-nocheck
+import type {FC} from 'react';
 import type {AgentVisualProps} from '../AgentVisualTypes';
 import './agent-visual.generated.css';
 
@@ -118,7 +120,8 @@ export const AgentVisualGenerated: FC<AgentVisualProps> = () => {
 
 
 def _agent_visual_source(component_body: str) -> str:
-    return f"""import type {{FC}} from 'react';
+    return f"""// @ts-nocheck
+import type {{FC}} from 'react';
 import React, {{useMemo}} from 'react';
 import {{
   AbsoluteFill,
@@ -143,9 +146,13 @@ export const AgentVisualGenerated: FC<AgentVisualProps> = (props) => {{
     height,
     progress,
     audioPulse,
-    captions,
   }} = props;
+  // Scope the generated body in its own block so it may safely re-declare any
+  // prop-provided name (e.g. progress, audioPulse, frame) without an esbuild
+  // "symbol has already been declared" collision against the destructured props.
+  {{
 {component_body.rstrip()}
+  }}
 }};
 """
 
@@ -153,14 +160,22 @@ export const AgentVisualGenerated: FC<AgentVisualProps> = (props) => {{
 def write_agent_visual_source(payload: dict[str, Any]) -> dict[str, Any]:
     raw = payload.get("agentVisual") or payload.get("agent_visual")
     required = bool(payload.get("agentVisualRequired"))
+    orientation = payload.get("orientation") or "vertical"
     try:
-        visual = require_agent_visual(raw) if required else normalize_agent_visual(raw)
+        if is_github_repo_subject(payload=payload):
+            visual = require_agent_visual(premium_repo_agent_visual("prepared GitHub repo visual"), orientation)
+        else:
+            visual = require_agent_visual(raw, orientation) if required else normalize_agent_visual(raw, orientation)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
     GENERATED_VISUAL_TSX.parent.mkdir(parents=True, exist_ok=True)
     if visual.get("enabled"):
-        GENERATED_VISUAL_TSX.write_text(_agent_visual_source(str(visual.get("component_code") or "")), encoding="utf-8")
+        module_code = str(visual.get("module_code") or "").strip()
+        if module_code:
+            GENERATED_VISUAL_TSX.write_text(module_code.rstrip() + "\n", encoding="utf-8")
+        else:
+            GENERATED_VISUAL_TSX.write_text(_agent_visual_source(str(visual.get("component_code") or "")), encoding="utf-8")
         GENERATED_VISUAL_CSS.write_text(str(visual.get("css") or ""), encoding="utf-8")
     else:
         if required:
@@ -245,7 +260,9 @@ def main() -> int:
                 "agent_visual_required": bool(payload.get("agentVisualRequired")),
                 "agent_visual_enabled": bool((payload.get("agentVisual") or {}).get("enabled")),
                 "agent_visual_source": str(GENERATED_VISUAL_TSX),
+                "agent_visual_source_sha256": sha256_file(GENERATED_VISUAL_TSX),
                 "agent_visual_css": str(GENERATED_VISUAL_CSS),
+                "agent_visual_css_sha256": sha256_file(GENERATED_VISUAL_CSS),
                 "audio_duration_sec": manifest.get("audio_duration_sec"),
                 "audio_frames": manifest.get("audio_frames"),
                 "title": payload.get("title"),

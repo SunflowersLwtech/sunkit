@@ -33,6 +33,16 @@ Use the searchpo-main-agent as lead. Do not run research and implementation in p
 
 If the host cannot spawn or assign teammates, say that before running the flow, follow the same ownership split manually, and report the run as `manual fallback`, not as a spawned agent-team run.
 
+When spawned teammates are available, use the phased runtime so each teammate owns a real command boundary:
+
+```bash
+python3 agent_harness/run_agent_loop.py --topic "topic" --mode provider --stop-after research_enrichment --delegation-mode spawned_subagents --delegation-agent searchpo-research-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 4 --stop-after main_task_plan --delegation-mode spawned_subagents --delegation-agent searchpo-main-agent --delegation-proof "<host-subagent-id>"
+python3 agent_harness/run_agent_loop.py "<run_dir>" --mode provider --resume-from 5 --delegation-mode spawned_subagents --delegation-agent searchpo-impl-agent --delegation-proof "<host-subagent-id>"
+```
+
+When using the synchronous shell wrapper, keep the default `--delegation-mode single_harness` or explicitly set `SEARCHPO_DELEGATION_MODE=manual_fallback`; do not call that a spawned team run.
+
 ## Command Choice
 
 - Topic-only widesearch with publishable local render:
@@ -76,6 +86,8 @@ After the command finishes, read `runtime/latest_run.txt` and verify the run dir
 
 - `agent_run.json`
 - `main_task_plan.json`
+- `runtime_contract.json`
+- `research_barrier.json`
 - `evidence_bundle.json`
 - `widesearch_strategy.json`
 - `anysearch_research.json`
@@ -84,8 +96,9 @@ After the command finishes, read `runtime/latest_run.txt` and verify the run dir
 - `research_brief.json`
 - `cross_check_review.json`
 - provider/live: `script.json`, `scene_plan.json`, `video_spec.json`, `render_payload.json`, `render_input_manifest.json`
-- provider/live: `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, `gemini_visual_audit.json`
-- provider/live: `artifact_manifest.json`, `delivery_package.json`, `run_final.json`, `post/douyin_upload_check.json`
+- provider/live: `implementation_loop.json`, `deepseek_polish.json`, `content_score.json`, `voiceover_manifest.json`, `video_optimization_loop.json`, `visual_audit_deterministic.json`, `gemini_visual_audit.json`
+- provider/live: `artifact_manifest.json`, `release_gate.json`, `delivery_package.json`, `run_final.json`, `post/douyin_upload_check.json`
 - live: `post/post_publish_verification.json`
 
 `submitted` is not live success. Live success requires remote identity verification.
+Always report `agent_run.json.delegation.mode`; owner labels in `main_task_plan.json` are not execution proof.

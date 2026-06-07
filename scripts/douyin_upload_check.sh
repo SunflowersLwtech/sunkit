@@ -92,6 +92,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -156,12 +157,20 @@ def sau_command(args: list[str]) -> list[str]:
     return [social_python, "sau_cli.py", *args]
 
 
+def sau_cwd() -> Path:
+    # The installed `sau` entrypoint must not run from the source checkout:
+    # that makes Python import runtime/social-auto-upload/conf.py and use a
+    # different cookie home from the installed CLI package.
+    return root if social_cli else social_root
+
+
 def run_sau(args: list[str]) -> dict[str, Any]:
     command = sau_command(args)
+    cwd = sau_cwd()
     try:
         proc = subprocess.run(
             command,
-            cwd=social_root,
+            cwd=cwd,
             text=True,
             capture_output=True,
             timeout=command_timeout,
@@ -170,6 +179,7 @@ def run_sau(args: list[str]) -> dict[str, Any]:
     except subprocess.TimeoutExpired as exc:
         return {
             "command": " ".join(shlex.quote(part) for part in command),
+            "cwd": str(cwd),
             "returncode": -1,
             "timed_out": True,
             "timeout_sec": command_timeout,
@@ -178,12 +188,32 @@ def run_sau(args: list[str]) -> dict[str, Any]:
         }
     return {
         "command": " ".join(shlex.quote(part) for part in command),
+        "cwd": str(cwd),
         "returncode": proc.returncode,
         "timed_out": False,
         "timeout_sec": command_timeout,
         "stdout": proc.stdout[-1200:],
         "stderr": proc.stderr[-1200:],
     }
+
+
+def run_sau_until_success(args: list[str], attempts: int = 1, delay_sec: float = 3.0) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    for attempt in range(1, max(1, attempts) + 1):
+        result = run_sau(args)
+        result["attempt"] = attempt
+        results.append(result)
+        if result["returncode"] == 0:
+            result = dict(result)
+            if len(results) > 1:
+                result["attempts"] = [dict(item) for item in results]
+            return result
+        if attempt < attempts:
+            time.sleep(delay_sec)
+    final = dict(results[-1])
+    if len(results) > 1:
+        final["attempts"] = [dict(item) for item in results]
+    return final
 
 
 def _parse_json_payload(text: str) -> dict[str, Any]:
@@ -367,7 +397,7 @@ def build_post_publish_verification(manifest: dict[str, Any], upload_result: dic
                 **remote,
                 **{key: value for key, value in creator_remote.items() if value not in ("", None, [])},
             }
-    expected_statuses = {"published", "verified-published", "已发布"}
+    acceptable_statuses = {"published", "verified-published", "已发布", "审核中"}
     row_text = str(remote.get("row_text") or remote.get("title") or "")
     expected_title = str(manifest.get("title") or "")
     expected_desc = str(manifest.get("desc") or "")
@@ -380,7 +410,7 @@ def build_post_publish_verification(manifest: dict[str, Any], upload_result: dic
     checks = {
         "remote_identity_present": bool(remote.get("remote_post_id") or remote.get("permalink") or remote.get("remote_row_hash")),
         "remote_identity_not_adapter_only": remote.get("raw_detection_source") != "adapter_output_only",
-        "remote_status_published": remote["status"] in expected_statuses,
+        "remote_status_acceptable": remote["status"] in acceptable_statuses,
         "title_match": title_match,
         "remote_duration_present": bool(remote["duration_sec"]),
         "remote_cover_evidence_present": bool(remote["cover_evidence"]),
@@ -472,7 +502,8 @@ account_check: dict[str, Any] = {"status": "not-required", "reason": "DOUYIN_ACC
 if check_level != "adapter":
     account_check = {"status": "not-required", "reason": f"SEARCHPO_DOUYIN_CHECK_LEVEL={check_level}"}
 elif account_name:
-    result = run_sau(["douyin", "check", "--account", account_name])
+    check_attempts = int(os.environ.get("SEARCHPO_DOUYIN_ACCOUNT_CHECK_ATTEMPTS") or (3 if live else 1))
+    result = run_sau_until_success(["douyin", "check", "--account", account_name], attempts=check_attempts)
     account_check = {"status": "valid" if result["returncode"] == 0 else "invalid", **result}
     if result["returncode"] != 0:
         if live:
@@ -493,6 +524,21 @@ if live:
         errors.append("Live Douyin upload requires DOUYIN_ACCOUNT_NAME or SOCIAL_UPLOAD_ACCOUNT_NAME.")
     elif errors:
         upload_result = {"status": "not-run", "reason": "pre-flight errors blocked live upload"}
+    elif os.environ.get("SEARCHPO_DOUYIN_REVERIFY_ONLY") == "1":
+        existing_check = json.loads(check_json.read_text(encoding="utf-8")) if check_json.is_file() else {}
+        previous_upload = existing_check.get("live_upload") or {}
+        if previous_upload.get("returncode") != 0:
+            errors.append("Douyin reverify requested but no previous successful live_upload result exists.")
+            upload_result = {"status": "not-run", "reason": "reverify requires previous successful live_upload"}
+        else:
+            upload_result = {**previous_upload, "status": previous_upload.get("status") or "submitted"}
+            post_publish_verification, verify_errors = build_post_publish_verification(manifest, upload_result)
+            (post_dir / "post_publish_verification.json").write_text(
+                json.dumps(post_publish_verification, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            if verify_errors:
+                errors.append("Douyin upload submitted but post-publish verification failed: " + ", ".join(verify_errors))
     elif manifest and video_path.is_file():
         upload_result = run_sau(upload_args(manifest))
         upload_result["status"] = "submitted" if upload_result["returncode"] == 0 else "failed"

@@ -17,31 +17,54 @@ SCENE_TYPES = {
     "flow",
     "chart",
     "code_diff",
+    "code_block",
+    "node_graph",
+    "decision_table",
+    "act_card",
+    "closing",
     "quote",
     "cta",
 }
-THEMES = {"radar", "minimal", "editorial"}
+THEMES = {"radar", "minimal", "editorial", "engineering"}
 DENSITIES = {"minimal", "standard", "rich"}
 MOTIONS = {"calm", "standard", "punchy"}
 EMPHASIS = {"low", "normal", "high"}
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
-MAX_SCENES = 8
+MAX_SCENES = 24
 
 REQUIRED_SCENE_TEXT: dict[str, tuple[str, ...]] = {
-    "statement": ("title", "heading"),
+    "statement": ("title", "heading", "headline", "text"),
     "context": ("text", "summary", "detail"),
     "stat": ("value", "stat", "label", "heading"),
     "bullets": ("heading", "title", "items"),
-    "card": ("value", "detail"),
-    "compare": ("left", "right"),
+    "card": ("value", "detail", "title", "heading", "text", "summary", "label", "kicker"),
+    "compare": ("left", "right", "title", "heading", "text", "summary", "items"),
     "compare_table": ("rows", "items"),
-    "terminal": ("lines", "commands", "items"),
+    "terminal": ("lines", "commands", "items", "title", "heading", "text", "summary"),
     "flow": ("nodes", "steps", "items"),
     "chart": ("value", "stat", "points", "items"),
-    "code_diff": ("additions", "added", "removals", "removed", "items"),
+    "code_diff": ("additions", "added", "removals", "removed", "items", "lines", "changes", "diff", "title", "heading"),
+    "code_block": ("lines", "code", "items"),
+    "node_graph": ("nodes", "items"),
+    "decision_table": ("rules", "items"),
+    "act_card": ("title", "detail", "heading", "text"),
+    "closing": ("mark", "title", "heading"),
     "quote": ("quote", "text"),
     "cta": ("text",),
 }
+
+
+def minimum_storyboard_scene_count(duration_seconds: int | float) -> int:
+    seconds = max(1, int(float(duration_seconds or 0)))
+    if seconds < 60:
+        return 3
+    if seconds < 90:
+        return 5
+    if seconds < 120:
+        return 6
+    if seconds < 180:
+        return 7
+    return min(MAX_SCENES, max(9, seconds // 24))
 
 
 def bounded_text(value: Any, limit: int) -> str:
@@ -66,6 +89,7 @@ def normalize_style(style: Any) -> dict[str, Any]:
         "radar": {"topbar": True, "progress": True, "beam": True},
         "minimal": {"topbar": False, "progress": False, "beam": False},
         "editorial": {"topbar": True, "progress": True, "beam": False},
+        "engineering": {"topbar": False, "progress": False, "beam": False},
     }[theme]
     chrome = raw.get("chrome") if isinstance(raw.get("chrome"), dict) else {}
     accent = raw.get("accent")
@@ -73,7 +97,9 @@ def normalize_style(style: Any) -> dict[str, Any]:
         "theme": theme,
         "density": raw.get("density") if raw.get("density") in DENSITIES else "standard",
         "motion": raw.get("motion") if raw.get("motion") in MOTIONS else "standard",
-        "accent": accent if isinstance(accent, str) and HEX_RE.match(accent) else ("#72e7ff" if theme == "editorial" else "#ffd60a"),
+        "accent": accent
+        if isinstance(accent, str) and HEX_RE.match(accent)
+        else ("#72e7ff" if theme == "editorial" else "#f59e0b" if theme == "engineering" else "#ffd60a"),
         "chrome": {
             "topbar": bool(chrome.get("topbar", default_chrome["topbar"])),
             "progress": bool(chrome.get("progress", default_chrome["progress"])),
@@ -86,6 +112,22 @@ def _normalize_items(value: Any, limit: int = 58, max_items: int = 4) -> list[st
     if not isinstance(value, list):
         return []
     return [bounded_text(item, limit) for item in value if str(item or "").strip()][:max_items]
+
+
+def _normalize_code_lines(value: Any, limit: int = 88, max_items: int = 14) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    lines: list[str] = []
+    for item in value:
+        line = str(item or "").rstrip()
+        if not line.strip():
+            continue
+        if len(line) > limit:
+            line = line[: limit - 1].rstrip() + "..."
+        lines.append(line)
+        if len(lines) >= max_items:
+            break
+    return lines
 
 
 def _raw_has_required_text(scene_type: str, props: Any) -> bool:
@@ -104,7 +146,7 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
     if scene_type == "statement":
         return {
             "kicker": _first_text(raw, ("kicker",), "今天为什么刷到它", 18),
-            "title": _first_text(raw, ("title", "heading"), "", 68),
+            "title": _first_text(raw, ("title", "heading", "headline", "text"), "", 68),
             "sub": _first_text(raw, ("sub", "subtitle", "detail"), "", 110),
         }
     if scene_type == "context":
@@ -129,14 +171,20 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
             "heading": _first_text(raw, ("heading", "title"), "", 56),
             "items": _normalize_items(raw.get("items")),
         }
+    if scene_type == "card":
+        return {
+            "label": _first_text(raw, ("label", "kicker"), "证据", 18),
+            "value": _first_text(raw, ("value", "title", "heading", "label"), "", 54),
+            "detail": _first_text(raw, ("detail", "text", "summary", "sub"), "", 118),
+        }
     if scene_type == "compare":
         return {
             "kicker": _first_text(raw, ("kicker",), "别混在一起", 18),
             "heading": _first_text(raw, ("heading", "title"), "", 56),
             "leftLabel": _first_text(raw, ("leftLabel",), "已知", 14),
-            "left": _first_text(raw, ("left",), "", 90),
+            "left": _first_text(raw, ("left", "text", "summary", "title", "heading"), "", 90),
             "rightLabel": _first_text(raw, ("rightLabel",), "待证", 14),
-            "right": _first_text(raw, ("right",), "", 90),
+            "right": _first_text(raw, ("right", "detail", "sub"), "", 90),
         }
     if scene_type == "compare_table":
         return {
@@ -149,7 +197,7 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
     if scene_type == "terminal":
         return {
             "kicker": _first_text(raw, ("kicker",), "把它放进终端看", 18),
-            "title": _first_text(raw, ("title", "heading"), "开发者路径", 42),
+            "title": _first_text(raw, ("title", "heading", "text", "summary"), "开发者路径", 42),
             "prompt": _first_text(raw, ("prompt",), "$", 8),
             "lines": _normalize_items(raw.get("lines") or raw.get("commands") or raw.get("items"), limit=64, max_items=5),
         }
@@ -173,8 +221,45 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
             "kicker": _first_text(raw, ("kicker",), "代码视角", 18),
             "title": _first_text(raw, ("title", "heading"), "不是只看 README", 50),
             "filename": _first_text(raw, ("filename", "file"), "skill.md", 34),
-            "additions": _normalize_items(raw.get("additions") or raw.get("added") or raw.get("items"), limit=70, max_items=4),
+            "additions": _normalize_items(raw.get("additions") or raw.get("added") or raw.get("items") or raw.get("lines") or raw.get("changes") or raw.get("diff"), limit=70, max_items=4),
             "removals": _normalize_items(raw.get("removals") or raw.get("removed"), limit=70, max_items=2),
+        }
+    if scene_type == "code_block":
+        return {
+            "filename": _first_text(raw, ("filename", "file"), "engine.py", 34),
+            "lines": _normalize_code_lines(raw.get("lines") or raw.get("code") or raw.get("items")),
+            "title": _first_text(raw, ("title", "heading"), "代码验证路径", 60),
+            "detail": _first_text(raw, ("detail", "summary", "sub"), "", 110),
+            "actLabel": _first_text(raw, ("actLabel",), "THE ENGINE", 18),
+        }
+    if scene_type == "node_graph":
+        return {
+            "center": _first_text(raw, ("center", "title", "heading"), "orchestrator", 28),
+            "centerSub": _first_text(raw, ("centerSub", "powered", "sub"), "powered by", 18),
+            "nodes": _normalize_items(raw.get("nodes") or raw.get("items"), limit=32, max_items=8),
+            "subs": _normalize_items(raw.get("subs"), limit=24, max_items=8),
+            "actLabel": _first_text(raw, ("actLabel",), "THE ARCHITECTURE", 22),
+        }
+    if scene_type == "decision_table":
+        return {
+            "title": _first_text(raw, ("title", "heading"), "规则到输出", 60),
+            "rules": _normalize_items(raw.get("rules") or raw.get("items"), limit=76, max_items=8),
+            "tags": _normalize_items(raw.get("tags"), limit=14, max_items=8),
+            "categories": _normalize_items(raw.get("categories"), limit=42, max_items=4),
+            "categorySubs": _normalize_items(raw.get("categorySubs") or raw.get("subs"), limit=42, max_items=4),
+            "actLabel": _first_text(raw, ("actLabel",), "THE DECISION", 18),
+        }
+    if scene_type == "act_card":
+        return {
+            "eyebrow": _first_text(raw, ("eyebrow", "title"), "ACT", 18),
+            "detail": _first_text(raw, ("detail", "text", "heading"), "Adaptive Guidance", 64),
+            "sub": _first_text(raw, ("sub", "summary"), "", 90),
+        }
+    if scene_type == "closing":
+        return {
+            "mark": _first_text(raw, ("mark", "title", "heading"), "searchpo", 32),
+            "sub": _first_text(raw, ("sub", "summary"), "engineering videos for AI builders", 48),
+            "built": _first_text(raw, ("built", "detail"), "built for the agents that watch the world", 60),
         }
     if scene_type == "quote":
         return {
@@ -206,6 +291,16 @@ def _scene_has_text(scene_type: str, props: dict[str, Any]) -> bool:
         return bool(props.get("heading") or props.get("value") or props.get("points"))
     if scene_type == "code_diff":
         return bool(props.get("title") or props.get("additions") or props.get("removals"))
+    if scene_type == "code_block":
+        return bool(props.get("lines"))
+    if scene_type == "node_graph":
+        return bool(props.get("nodes"))
+    if scene_type == "decision_table":
+        return bool(props.get("rules"))
+    if scene_type == "act_card":
+        return bool(props.get("detail") or props.get("eyebrow"))
+    if scene_type == "closing":
+        return bool(props.get("mark") or props.get("sub") or props.get("built"))
     if scene_type == "compare_table":
         return bool(props.get("heading") or props.get("rows"))
     return any(str(value or "").strip() for value in props.values() if not isinstance(value, list))
