@@ -225,6 +225,17 @@ const coreLabelFor = (model: ShowcaseModel, limit = 18) => workflowLabel(coreObj
 const guardLabelFor = (model: ShowcaseModel, limit = 18) => workflowLabel(guardObjectFor(model)?.label, '验收边界', limit);
 const metricLabelFor = (model: ShowcaseModel, limit = 18) => workflowLabel(metricObjectFor(model)?.label, '输出指标', limit);
 
+const horizontalHeadlineSize = (text: string, large: number, medium: number, small: number) => {
+  const length = Array.from(text).length;
+  if (length >= 62) {
+    return small;
+  }
+  if (length >= 44) {
+    return medium;
+  }
+  return large;
+};
+
 const workflowActionsFor = (model: ShowcaseModel) => {
   const core = coreLabelFor(model, 10);
   const guard = guardLabelFor(model, 10);
@@ -1391,6 +1402,10 @@ const HeroScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
   const repoMode = isRepoTopic(model);
   const searchMode = isSearchTopic(model) && !repoMode;
   const stageY = Math.sin(frame / 88) * 6;
+  const heroHook = clean(model.arc.hook || model.title, isHorizontal ? 62 : 42);
+  const heroDetail = clean(model.arc.mechanism || model.arc.practical_fit || model.metric, isHorizontal ? 112 : 70);
+  const heroTitleSize = isHorizontal ? horizontalHeadlineSize(heroHook, 68, 58, 50) : 35;
+  const heroDetailSize = isHorizontal ? horizontalHeadlineSize(heroDetail, 27, 24, 22) : 19;
   if (repoMode && isHorizontal) {
     return (
       <div style={{position: 'absolute', inset: 0, padding: '118px 72px 82px'}}>
@@ -1472,15 +1487,15 @@ const HeroScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
     );
   }
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '170px 72px 72px' : '138px 58px 610px'}}>
-      <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.92fr 1.08fr' : '1fr', gap: 38, alignItems: 'center'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 78px 92px' : '138px 58px 610px'}}>
+      <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.82fr 1.18fr' : '1fr', gap: isHorizontal ? 58 : 38, alignItems: 'center'}}>
         <div style={{opacity: soft(enter, 0.78), transform: `translateX(${(1 - enter) * -28}px)`}}>
           <div style={{fontSize: isHorizontal ? 22 : 18, color: scene.tone, fontWeight: 950}}>先把问题钉住</div>
-          <div style={{marginTop: isHorizontal ? 22 : 14, fontSize: isHorizontal ? 78 : 35, lineHeight: isHorizontal ? 0.94 : 1.04, color: palette.ivory, fontWeight: 980, overflowWrap: 'anywhere'}}>
-            {clean(model.arc.hook || model.title, isHorizontal ? 74 : 42)}
+          <div style={{marginTop: isHorizontal ? 20 : 14, maxWidth: isHorizontal ? 690 : 'none', fontSize: heroTitleSize, lineHeight: isHorizontal ? 1.03 : 1.04, color: palette.ivory, fontWeight: 980, overflowWrap: 'anywhere'}}>
+            {heroHook}
           </div>
-          <div style={{marginTop: isHorizontal ? 28 : 16, maxWidth: 780, fontSize: isHorizontal ? 31 : 19, lineHeight: 1.16, color: palette.mist, fontWeight: 690}}>
-            {clean(model.arc.mechanism || model.arc.practical_fit || model.metric, isHorizontal ? 128 : 70)}
+          <div style={{marginTop: isHorizontal ? 24 : 16, maxWidth: isHorizontal ? 680 : 780, fontSize: heroDetailSize, lineHeight: 1.18, color: palette.mist, fontWeight: 690}}>
+            {heroDetail}
           </div>
           <div style={{marginTop: isHorizontal ? 34 : 18, width: isHorizontal ? 620 : 420, maxWidth: '100%', height: 7, borderRadius: 99, background: 'rgba(255,250,240,0.13)', overflow: 'hidden'}}>
             <div style={{height: '100%', width: pct(path), background: `linear-gradient(90deg, ${scene.tone}, ${palette.green}, ${palette.amber})`}} />
@@ -2445,10 +2460,10 @@ export const ShowcaseDirectorVisual: React.FC<AgentVisualProps & {spec?: Premium
           const previousIsTerminal = index === activeIndex - 1 && /code|terminal/i.test(scene.scene_type);
           const terminalDecisionHandoff = enteringDecisionFromTerminal && (index === activeIndex || previousIsTerminal);
           const architectureTerminalHandoff = enteringTerminalFromArchitecture && (index === activeIndex || previousIsArchitecture);
-          const transitionFrames = width > height ? (terminalDecisionHandoff ? 58 : architectureTerminalHandoff ? 48 : 22) : 14;
+          const transitionFrames = width > height ? (terminalDecisionHandoff ? 42 : architectureTerminalHandoff ? 34 : 0) : 14;
           const activeStart = activeIndex * sceneFrames;
           const activeLocal = Math.max(0, frame - activeStart);
-          const isPreviousOverlay = index === activeIndex - 1 && activeLocal < transitionFrames;
+          const isPreviousOverlay = transitionFrames > 0 && index === activeIndex - 1 && activeLocal < transitionFrames;
           if (index !== activeIndex && !isPreviousOverlay) {
             return null;
           }
@@ -2456,10 +2471,21 @@ export const ShowcaseDirectorVisual: React.FC<AgentVisualProps & {spec?: Premium
           const end = start + sceneFrames;
           const isTerminalScene = /code|terminal/i.test(scene.scene_type);
           const isDepthScene = /decision/i.test(scene.scene_type);
-          const fadeInFrames = isDepthScene ? (enteringDecisionFromTerminal ? 38 : 24) : isTerminalScene ? (enteringTerminalFromArchitecture ? 28 : 14) : 18;
+          const fadeInFrames = width > height
+            ? isDepthScene
+              ? (enteringDecisionFromTerminal ? 22 : 14)
+              : isTerminalScene
+                ? (enteringTerminalFromArchitecture ? 18 : 10)
+                : 8
+            : isDepthScene
+              ? (enteringDecisionFromTerminal ? 38 : 24)
+              : isTerminalScene
+                ? (enteringTerminalFromArchitecture ? 28 : 14)
+                : 18;
           const fadeOutFrames = /architecture/i.test(scene.scene_type) ? 12 : 24;
           const overlayProgress = isPreviousOverlay ? clamp(activeLocal / transitionFrames) : 0;
-          const fade = isPreviousOverlay ? (1 - overlayProgress) * (terminalDecisionHandoff || architectureTerminalHandoff ? 0.08 : 0.12) : interpolate(frame, [start, start + fadeInFrames, end - fadeOutFrames, end], [0, 1, 1, 0], {
+          const fadeFloor = width > height ? 0.52 : 0;
+          const fade = isPreviousOverlay ? (1 - overlayProgress) * 0.06 : interpolate(frame, [start, start + fadeInFrames, end - fadeOutFrames, end], [fadeFloor, 1, 1, 0], {
             extrapolateLeft: 'clamp',
             extrapolateRight: 'clamp',
           });
