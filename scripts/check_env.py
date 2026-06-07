@@ -19,6 +19,7 @@ from agent_harness.side_effect_tiers import resolve_side_effect_tier  # noqa: E4
 REQUIRED_GROUPS = {
     "data_optional": ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "HUGGINGFACE_TOKEN"],
     "research_optional": ["ANYSEARCH_API_KEY"],
+    "research_required": ["ANYSEARCH_API_KEY"],
     "agent_llm_optional": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY"],
     "script_agents_required": ["DEEPSEEK_API_KEY", "GOOGLE_AGENT_PLATFORM_API", "GOOGLE_API_KEY"],
     "remotion_lambda_required": [
@@ -96,6 +97,7 @@ def main() -> int:
     if not google_key_set:
         script_required_missing.append("GOOGLE_AGENT_PLATFORM_API or GOOGLE_API_KEY")
     groups["script_agents_required"]["missing_effective"] = script_required_missing
+    research_required_missing = groups["research_required"]["missing"]
     social_auto_upload = {
         "root": str(social_root),
         "exists": social_root.exists(),
@@ -122,6 +124,7 @@ def main() -> int:
             "Secret values are intentionally omitted.",
             "Default contract E2E does not require provider, AWS, or Douyin account secrets.",
             "Adapter publishing validation targets Douyin via dreammis/social-auto-upload.",
+            "Provider video runs require AnySearch enrichment because research_barrier/cross_check requires independent supplemental sources.",
             "DeepSeek polish, Gemini TTS, and Gemini visual audit are real script adapters; missing provider keys fail E2E.",
             "Live Douyin upload is gated by SEARCHPO_DOUYIN_LIVE=1 plus DOUYIN_ACCOUNT_NAME or SOCIAL_UPLOAD_ACCOUNT_NAME.",
             "X/Twitter keys remain optional read-source inputs only; they are not the default publishing path.",
@@ -133,14 +136,14 @@ def main() -> int:
     if args.profile == "contract":
         return 0
     if args.profile == "provider":
-        return 1 if script_required_missing else 0
+        return 1 if script_required_missing or research_required_missing else 0
     if args.profile == "lambda":
         missing_lambda = groups["remotion_lambda_required"]["missing"]
-        return 1 if missing_lambda or script_required_missing else 0
+        return 1 if missing_lambda or script_required_missing or research_required_missing else 0
     if args.profile == "live":
         missing_lambda = groups["remotion_lambda_required"]["missing"]
         missing_account = not social_auto_upload["account_name_set"]
-        return 1 if missing_lambda or script_required_missing or missing_account else 0
+        return 1 if missing_lambda or script_required_missing or research_required_missing or missing_account else 0
     return 1
 
 

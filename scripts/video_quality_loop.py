@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -19,6 +21,25 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_harness.policy import policy_get
+
+
+GENERATED_SOURCE_LOCK = ROOT / "runtime" / "locks" / "remotion-generated-source.lock"
+REQUIRED_PREMIUM_SHOWCASE_CHECKS = {
+    "premium_visual_language",
+    "topic_specific_scene_design",
+    "not_generic_radar_or_cards",
+    "not_ppt_or_slide_deck",
+    "cinematic_motion_depth",
+    "information_motion_primitives",
+    "knowledge_sharing_content",
+    "motion_comfort",
+    "readability_and_safe_area",
+    "reference_level_depth_or_clear_gap",
+}
+PREMIUM_VISUAL_CHECKS = REQUIRED_PREMIUM_SHOWCASE_CHECKS - {"knowledge_sharing_content"}
+PREMIUM_VISUAL_SCORE_KEYS = {"visual_premium", "motion_polish", "topic_specificity", "overall"}
+PREMIUM_KNOWLEDGE_SCORE_KEYS = {"knowledge_value"}
+MIN_PREMIUM_SCORE = 8.0
 
 
 def utc_now() -> str:
@@ -61,6 +82,23 @@ def run_command(cmd: list[str], *, env: dict[str, str] | None = None, timeout: i
     if proc.returncode != 0:
         raise RuntimeError(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr[-2000:]}")
     return result
+
+
+@contextmanager
+def generated_source_render_lock(run_dir: Path, attempt: int):
+    GENERATED_SOURCE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with GENERATED_SOURCE_LOCK.open("a+", encoding="utf-8") as handle:
+        handle.write(f"{utc_now()} waiting run={run_dir.name} attempt={attempt}\n")
+        handle.flush()
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.write(f"{utc_now()} acquired run={run_dir.name} attempt={attempt}\n")
+        handle.flush()
+        try:
+            yield
+        finally:
+            handle.write(f"{utc_now()} released run={run_dir.name} attempt={attempt}\n")
+            handle.flush()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def record_stage(
@@ -197,10 +235,11 @@ def reroute_agent_visual_failures(run_dir: Path, decision: dict[str, Any]) -> di
     agent_visual_failure = route == "storyboard" or "video_attempt_exception" in failed or "blank" in hint or "black frame" in hint or "overlap" in hint
     if agent_visual_failure and not dependency_failure:
         updated = dict(decision)
-        updated["repair_route"] = "content"
+        updated["repair_route"] = "hard_fail"
+        updated["repair_domain"] = "agent_visual_compiler"
         updated["repair_hint"] = (
             f"{decision.get('repair_hint') or 'agent_visual render failed'} "
-            "Regenerate agent_visual.component_code/css; do not repair by switching to storyboard."
+            "Repair premium_director_spec/compiler layout and rerun the render loop; do not switch to storyboard or content-only backtrack."
         )
         return updated
     return decision
@@ -224,12 +263,132 @@ def semantic_feedback_from_audit(run_dir: Path, audit_path: Path, attempt: int, 
             "video_attempt": attempt,
             "failed_checks": failed_checks,
             "repair_hint": (decision or audit).get("repair_hint"),
-            "instruction": "Revise content and regenerate agent_visual TSX/CSS so the rendered video has source-grounded constructive insight and matches run artifacts.",
+            "instruction": "Revise content and regenerate premium_director_spec so the compiled Remotion video has source-grounded constructive insight, premium topic-specific visuals, and matches run artifacts.",
         },
     }
     pending = run_dir / "optimization" / "video" / "pending_content_feedback.json"
     write_json(pending, feedback)
     return pending
+
+
+def numeric_score(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def premium_showcase_evidence_fields(premium: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str] | None, str]:
+    audit = premium.get("audit") if isinstance(premium.get("audit"), dict) else {}
+    checks = premium.get("checks")
+    if not isinstance(checks, dict):
+        checks = audit.get("checks")
+    scores = premium.get("scores")
+    if not isinstance(scores, dict):
+        scores = audit.get("scores")
+    issues = premium.get("issues")
+    if not isinstance(issues, list):
+        issues = audit.get("issues")
+    clean_issues = [str(item).strip() for item in issues if str(item).strip()] if isinstance(issues, list) else None
+    repair_hint = str(
+        premium.get("repair_hint")
+        or premium.get("repair_brief")
+        or audit.get("repair_hint")
+        or audit.get("repair_brief")
+        or ""
+    ).strip()
+    return (
+        checks if isinstance(checks, dict) else None,
+        scores if isinstance(scores, dict) else None,
+        clean_issues,
+        repair_hint,
+    )
+
+
+def enrich_premium_showcase_audit(premium: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(premium)
+    checks, scores, issues, repair_hint = premium_showcase_evidence_fields(enriched)
+    if checks is not None:
+        enriched["checks"] = checks
+    if scores is not None:
+        enriched["scores"] = scores
+    if issues is not None:
+        enriched["issues"] = issues
+    if repair_hint:
+        enriched["repair_hint"] = repair_hint
+    return enriched
+
+
+def preserve_premium_showcase_failure_evidence(
+    run_dir: Path,
+    premium_path: Path,
+    premium_prompt_path: Path,
+    premium: dict[str, Any],
+    *,
+    repair_route: str,
+    repair_domain: str,
+    repair_hint: str,
+) -> dict[str, Any]:
+    enriched = enrich_premium_showcase_audit(premium)
+    enriched.setdefault("status", "fail")
+    enriched["repair_route"] = repair_route
+    enriched["repair_domain"] = repair_domain
+    if not enriched.get("repair_hint"):
+        enriched["repair_hint"] = repair_hint
+    write_json(premium_path, enriched)
+    root_path = run_dir / "premium_showcase_audit.json"
+    if premium_path.resolve() != root_path.resolve():
+        copy_artifact(premium_path, root_path)
+    if premium_prompt_path.exists():
+        root_prompt_path = run_dir / "premium_showcase_audit_prompt.json"
+        if premium_prompt_path.resolve() != root_prompt_path.resolve():
+            copy_artifact(premium_prompt_path, root_prompt_path)
+    return enriched
+
+
+def premium_showcase_repair_route(premium: dict[str, Any]) -> tuple[str, str, str]:
+    status_reason = premium.get("status_reason") if isinstance(premium.get("status_reason"), dict) else {}
+    checks, scores, _issues, _repair_hint = premium_showcase_evidence_fields(premium)
+    failed = set(str(item) for item in (premium.get("failed_checks") or status_reason.get("failed_checks") or []))
+    if checks:
+        failed.update(str(key) for key, value in checks.items() if not bool(value))
+    missing_required = set(str(item) for item in (status_reason.get("missing_required_checks") or []))
+    if checks:
+        missing_required.update(REQUIRED_PREMIUM_SHOWCASE_CHECKS - set(str(key) for key in checks.keys()))
+    low_scores = set(str(item) for item in (status_reason.get("low_scores") or []))
+    if scores:
+        low_scores.update(str(key) for key, value in scores.items() if key in PREMIUM_VISUAL_SCORE_KEYS | PREMIUM_KNOWLEDGE_SCORE_KEYS and numeric_score(value) < MIN_PREMIUM_SCORE)
+    reference_gap = isinstance(premium.get("reference_gap_report"), dict) and str((premium.get("reference_gap_report") or {}).get("status") or "") == "gap"
+    visual_or_motion_gap = bool(
+        failed
+        & (PREMIUM_VISUAL_CHECKS | {"premium_showcase_audit"})
+    ) or bool(low_scores & PREMIUM_VISUAL_SCORE_KEYS) or bool(missing_required) or reference_gap
+    if visual_or_motion_gap:
+        details: list[str] = []
+        if low_scores:
+            details.append(f"low premium scores: {sorted(low_scores)}")
+        if missing_required:
+            details.append(f"missing showcase checks: {sorted(missing_required)}")
+        if reference_gap:
+            details.append("reference showcase videos unavailable")
+        if failed:
+            details.append(f"failed showcase checks: {sorted(failed)}")
+        return (
+            "hard_fail",
+            "premium_visual_compiler",
+            "Premium showcase audit failed at the visual/compiler bar; " + "; ".join(details),
+        )
+    if failed == {"knowledge_sharing_content"} or low_scores == {"knowledge_value"}:
+        return (
+            "content",
+            "knowledge_sharing_content",
+            "Premium showcase audit failed only on knowledge-sharing content.",
+        )
+    return (
+        "hard_fail",
+        "premium_showcase_audit",
+        "Premium showcase audit failed; inspect premium_showcase_audit.json for the gap.",
+    )
 
 
 def run_content_backtrack(run_dir: Path, audit_path: Path, attempt: int, decision: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -242,6 +401,13 @@ def run_content_backtrack(run_dir: Path, audit_path: Path, attempt: int, decisio
 
 
 def render_attempt(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: str) -> dict[str, Any]:
+    with generated_source_render_lock(run_dir, attempt):
+        result = _render_attempt_unlocked(run_dir, attempt_dir, attempt, render_mode)
+    result["generated_source_lock"] = str(GENERATED_SOURCE_LOCK)
+    return result
+
+
+def _render_attempt_unlocked(run_dir: Path, attempt_dir: Path, attempt: int, render_mode: str) -> dict[str, Any]:
     run_id = run_dir.name
     prepare = run_command([sys.executable, "render/prepare_remotion_input.py", str(run_dir)], timeout=120)
     props = run_dir / "remotion_input_props.json"
@@ -325,6 +491,18 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
     deterministic_path = attempt_dir / "visual_audit_deterministic.json"
     gemini_path = attempt_dir / "gemini_visual_audit.json"
     gemini_prompt_path = attempt_dir / "gemini_visual_audit_prompt.json"
+    premium_path = attempt_dir / "premium_showcase_audit.json"
+    premium_prompt_path = attempt_dir / "premium_showcase_audit_prompt.json"
+    for stale_path in [
+        metadata_path,
+        deterministic_path,
+        gemini_path,
+        gemini_prompt_path,
+        premium_path,
+        premium_prompt_path,
+    ]:
+        if stale_path.exists():
+            stale_path.unlink()
     try:
         metadata_meta = run_command(
             [sys.executable, "scripts/check_render_metadata.py", str(run_dir), "--video", str(video_path), "--output", str(metadata_path)],
@@ -361,6 +539,7 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
         return decision
 
     try:
+        gemini_timeout = int(os.environ.get("SEARCHPO_GEMINI_VISUAL_AUDIT_TIMEOUT", "600"))
         gemini_meta = run_command(
             [
                 sys.executable,
@@ -372,8 +551,10 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
                 str(gemini_path),
                 "--prompt-output",
                 str(gemini_prompt_path),
+                "--timeout",
+                str(gemini_timeout),
             ],
-            timeout=300,
+            timeout=gemini_timeout + 120,
         )
     except RuntimeError:
         gemini = read_json(gemini_path) if gemini_path.exists() else {"status": "fail", "repair_route": "hard_fail", "failed_checks": ["gemini_visual_audit"], "repair_hint": "Gemini visual audit crashed"}
@@ -391,6 +572,72 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
         "gemini": gemini,
         "gemini_command": locals().get("gemini_meta"),
     }
+    if decision["status"] != "pass":
+        return decision
+
+    try:
+        premium_meta = run_command(
+            [
+                sys.executable,
+                "scripts/premium_showcase_audit.py",
+                str(run_dir),
+                "--video",
+                str(video_path),
+                "--output",
+                str(premium_path),
+                "--prompt-output",
+                str(premium_prompt_path),
+            ],
+            timeout=360,
+        )
+    except RuntimeError:
+        premium = read_json(premium_path) if premium_path.exists() else {"status": "fail", "failed_checks": ["premium_showcase_audit"], "repair_hint": "Premium showcase audit crashed"}
+        premium_route, premium_domain, premium_hint = premium_showcase_repair_route(premium)
+        premium = preserve_premium_showcase_failure_evidence(
+            run_dir,
+            premium_path,
+            premium_prompt_path,
+            premium,
+            repair_route=premium_route,
+            repair_domain=premium_domain,
+            repair_hint=premium_hint,
+        )
+        decision.update(
+            {
+                "status": "fail",
+                "repair_route": premium_route,
+                "repair_domain": premium_domain,
+                "repair_hint": premium.get("repair_hint") or premium_hint,
+                "failed_checks": premium.get("failed_checks") or ["premium_showcase_audit"],
+                "premium_showcase": premium,
+                "feedback_audit_path": str(premium_path),
+            }
+        )
+        return decision
+    premium = read_json(premium_path)
+    decision.update({"premium_showcase": premium, "premium_showcase_command": premium_meta})
+    if premium.get("status") != "pass":
+        premium_route, premium_domain, premium_hint = premium_showcase_repair_route(premium)
+        premium = preserve_premium_showcase_failure_evidence(
+            run_dir,
+            premium_path,
+            premium_prompt_path,
+            premium,
+            repair_route=premium_route,
+            repair_domain=premium_domain,
+            repair_hint=premium_hint,
+        )
+        decision.update(
+            {
+                "status": "fail",
+                "repair_route": premium_route,
+                "repair_domain": premium_domain,
+                "repair_hint": premium.get("repair_hint") or premium_hint,
+                "failed_checks": premium.get("failed_checks") or ["premium_showcase_audit"],
+                "premium_showcase": premium,
+                "feedback_audit_path": str(premium_path),
+            }
+        )
     return decision
 
 
@@ -398,8 +645,11 @@ def promote_attempt(run_dir: Path, attempt_dir: Path, render_info: dict[str, Any
     copy_artifact(attempt_dir / "render_metadata_check.json", run_dir / "render_metadata_check.json")
     copy_artifact(attempt_dir / "visual_audit_deterministic.json", run_dir / "visual_audit_deterministic.json")
     copy_artifact(attempt_dir / "gemini_visual_audit.json", run_dir / "gemini_visual_audit.json")
+    copy_artifact(attempt_dir / "premium_showcase_audit.json", run_dir / "premium_showcase_audit.json")
     if (attempt_dir / "gemini_visual_audit_prompt.json").exists():
         copy_artifact(attempt_dir / "gemini_visual_audit_prompt.json", run_dir / "gemini_visual_audit_prompt.json")
+    if (attempt_dir / "premium_showcase_audit_prompt.json").exists():
+        copy_artifact(attempt_dir / "premium_showcase_audit_prompt.json", run_dir / "premium_showcase_audit_prompt.json")
     run_command(
         [
             sys.executable,
@@ -450,6 +700,13 @@ def promote_attempt(run_dir: Path, attempt_dir: Path, render_info: dict[str, Any
         artifacts={"gemini_visual_audit": run_dir / "gemini_visual_audit.json"},
         gates=[("visual_audit_passed", "pass", "Gemini visual audit passed before publish")],
     )
+    record_stage(
+        run_dir,
+        name="premium_showcase_audit",
+        title="Premium Remotion showcase audit",
+        artifacts={"premium_showcase_audit": run_dir / "premium_showcase_audit.json"},
+        gates=[("premium_showcase_audit_passed", "pass", "Generated MP4 reached the premium director visual bar")],
+    )
 
 
 def main() -> int:
@@ -483,6 +740,10 @@ def main() -> int:
             render_info = {}
             decision = {"status": "fail", "repair_route": "hard_fail", "repair_hint": str(exc)[:1000], "failed_checks": ["video_attempt_exception"]}
         decision = reroute_agent_visual_failures(run_dir, decision)
+        route = str(decision.get("repair_route") or decision.get("route") or "hard_fail")
+        repair_domain = decision.get("repair_domain")
+        decision["repair_route"] = route
+        decision["route"] = route
 
         decision_path = attempt_dir / "video_revision_decision.json"
         write_json(
@@ -492,7 +753,9 @@ def main() -> int:
                 "created_at": utc_now(),
                 "attempt": attempt,
                 "status": decision.get("status"),
+                "route": route,
                 "repair_route": decision.get("repair_route"),
+                "repair_domain": repair_domain,
                 "repair_hint": decision.get("repair_hint"),
                 "failed_checks": decision.get("failed_checks") or [],
                 "semantic_backtracks_used": semantic_backtracks,
@@ -507,10 +770,14 @@ def main() -> int:
             status = "pass"
             break
 
-        route = str(decision.get("repair_route") or "hard_fail")
         if route == "content" and semantic_backtracks < max_semantic_backtracks and attempt < max_attempts:
             semantic_backtracks += 1
-            backtrack_meta = run_content_backtrack(run_dir, attempt_dir / "gemini_visual_audit.json", attempt, decision)
+            backtrack_meta = run_content_backtrack(
+                run_dir,
+                Path(decision.get("feedback_audit_path") or attempt_dir / "gemini_visual_audit.json"),
+                attempt,
+                decision,
+            )
             attempts[-1]["content_backtrack"] = backtrack_meta
             write_json(decision_path, attempts[-1])
             continue

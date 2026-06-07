@@ -22,6 +22,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from agent_harness.policy import policy_get
+from agent_harness.content_guard import dismissive_verification_hits, public_content_payload
 from agent_harness.evidence import strong_research_review_errors
 from agent_harness.service_artifacts import RENDER_TO_PLANNING_TYPE, bounded_text
 from env_utils import first_env, env_value
@@ -67,9 +68,22 @@ def score_content(
     min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
     prompt = json.dumps({
         "task": "Score this short-video content package for Douyin quality. Return JSON only.",
+        "score_calibration": {
+            "6": "adequate but visibly weak for a publishable short video; one important dimension still needs work",
+            "7": "solid baseline; acceptable structure and source safety, but not yet a strong publishable package",
+            "8": "strong publishable quality for this dimension: concrete, source-grounded, mobile-readable, and clearly tailored to the topic",
+            "9": "exceptional; unusually sharp, memorable, and polished while staying inside evidence boundaries",
+            "10": "rare; near-perfect for the specific dimension",
+            "important": [
+                "Do not reserve 8+ only for hype, virality certainty, or unsupported certainty.",
+                "Careful caveats and source boundaries can score 8 or 9 when they improve trust instead of weakening the hook.",
+                "A technical explainer can earn 8+ when it has a concrete opening conflict, a clear mechanism, an actionable judgment framework, and topic-specific visuals.",
+                "Score each dimension independently; do not cap every dimension at 7 merely because the subject is technical or evidence-bounded."
+            ]
+        },
         "scoring_dimensions": {
             "hook_strength": "1-10: Does the title/opening grab attention in first 2 seconds?",
-            "retention_structure": "1-10: Does it quickly move from problem to mechanism, tradeoff, and verification path so viewers have a reason to keep watching?",
+            "retention_structure": "1-10: Does it quickly move from problem to mechanism, architecture position, failure boundary, and judgment framework so viewers have a reason to keep watching?",
             "information_density": "1-10: Is the voiceover packed with useful info, no filler?",
             "emotional_tension": "1-10: Does it create curiosity, surprise, or urgency?",
             "claim_safety": "1-10: Are claims properly bounded? No hype without evidence?",
@@ -79,7 +93,7 @@ def score_content(
             "constructive_interpretation": "1-10: Does it provide a useful, source-grounded explanation instead of generic hype?",
             "format_fit": "1-10: Does the chosen duration, orientation, storyboard motion, and animation style fit the subject instead of forcing every topic into the same short vertical template?",
             "custom_visual_fit": "1-10: Does agent_visual define a topic-specific Remotion visual instead of generic reusable cards?",
-            "open_source_explainer_value": "1-10: For GitHub/open-source topics, does it explain repo value through problem, mechanism/architecture, usage or demo path, tradeoff/risk, and verification steps?",
+            "open_source_explainer_value": "1-10: For GitHub/open-source topics, does it explain repo value through problem, mechanism/architecture, usage or demo path, tradeoff/risk, failure boundary, and adoption judgment framework?",
         },
         "required_output": {
             "scores": {
@@ -108,11 +122,16 @@ def score_content(
             "tags": polish.get("tags"),
             "cards": polish.get("cards"),
             "storyboard": polish.get("storyboard"),
+            "premium_director_spec": polish.get("premium_director_spec") or polish.get("visual_recipe"),
             "agent_visual": {
                 "enabled": (polish.get("agent_visual") or {}).get("enabled"),
                 "render_mode": (polish.get("agent_visual") or {}).get("render_mode"),
                 "description": (polish.get("agent_visual") or {}).get("description"),
-                "component_code_preview": str((polish.get("agent_visual") or {}).get("component_code") or "")[:1600],
+                "component_code_preview": str(
+                    (polish.get("agent_visual") or {}).get("component_code")
+                    or (polish.get("agent_visual") or {}).get("module_code")
+                    or ""
+                )[:1600],
                 "css_preview": str((polish.get("agent_visual") or {}).get("css") or "")[:1000],
             },
             "video_profile": polish.get("video_profile") or polish.get("videoProfile"),
@@ -140,10 +159,12 @@ def score_content(
         "fail_if": [
             "The content could have been written without reading the source.",
             "It makes project capability, ranking, benchmark, or adoption claims not supported by evidence_bundle.",
-            "It does not explain the problem/mechanism/tradeoff/evaluation path for an open-source project or tool.",
-            "For a GitHub/open-source topic, it gives only a trend or README summary and does not explain why a developer should care, how the project works, what could go wrong, and how to verify it.",
+            "It does not explain the problem/mechanism/architecture fit/failure boundary/judgment framework for an open-source project or tool.",
+            "For a GitHub/open-source topic, it gives only a trend or README summary and does not explain why a developer should care, how the project works, what could go wrong, and how to judge whether it fits.",
             "The video_profile forces a 12-second vertical radar treatment even though the source depth requires a longer explainer or a different presentation format.",
             "agent_visual is missing, disabled, generic, or not clearly tailored to this topic.",
+            "premium_director_spec is missing, generic, card-only, or not clearly tailored to this topic.",
+            "It tells viewers to verify, wait, observe, try it themselves, or otherwise shifts the knowledge burden to the viewer instead of teaching a mechanism and judgment framework.",
             "It presents private Douyin thresholds, fixed traffic-pool sizes, completion-rate cutoffs, or a definitive shadowban/限流 diagnosis as fact without official platform-rule evidence.",
             "It asks viewers for fake likes, follows, shares, comment spam, or other engagement bait.",
             "It contains raw URLs, GitHub links, website links, or source paths in public copy.",
@@ -155,7 +176,7 @@ def score_content(
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.1,
+            "temperature": 0,
             "responseMimeType": "application/json",
         },
     }
@@ -245,7 +266,7 @@ def content_value_beats(polish: dict[str, Any], candidate: dict[str, Any]) -> di
         "mechanism": ["机制", "架构", "原理", "流程", "怎么", "模块", "接口", "抽象", "调用链"],
         "usage_or_demo": ["demo", "示例", "quick start", "快速开始", "运行", "安装", "使用", "输入输出"],
         "tradeoff": ["取舍", "边界", "风险", "限制", "不适合", "代价", "坑"],
-        "verification": ["验证", "源码", "README", "测试", "CI", "benchmark", "跑通", "检查"],
+        "judgment_framework": ["判断", "框架", "适用", "失败边界", "源码", "README", "测试", "CI", "benchmark", "检查"],
     }
     found = {
         beat: any(term.lower() in combined.lower() for term in terms)
@@ -263,6 +284,32 @@ def content_value_beats(polish: dict[str, Any], candidate: dict[str, Any]) -> di
         "beat_count": sum(1 for ok in found.values() if ok),
         "voiceover_chinese_chars": cn_chars,
         "video_duration_seconds": duration_seconds,
+    }
+
+
+def deterministic_content_metrics(polish: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    value_beats = content_value_beats(polish, candidate)
+    duration_seconds = int(value_beats.get("video_duration_seconds") or 0)
+    voiceover_chars = int(value_beats.get("voiceover_chinese_chars") or 0)
+    chars_per_second = round(voiceover_chars / duration_seconds, 2) if duration_seconds > 0 else 0.0
+    beat_count = int(value_beats.get("beat_count") or 0)
+    density_score = min(10.0, round((beat_count * 1.6) + min(chars_per_second, 5.0) * 0.8, 2))
+    dismissive_hits = dismissive_verification_hits(public_content_payload(polish))
+    return {
+        "knowledge_density": {
+            "voiceover_chinese_chars": voiceover_chars,
+            "video_duration_seconds": duration_seconds,
+            "chars_per_second": chars_per_second,
+            "beat_count": beat_count,
+            "score": density_score,
+            "required_beats": ["problem", "mechanism", "usage_or_demo", "tradeoff", "judgment_framework"],
+            "found_beats": value_beats.get("found_beats") or {},
+        },
+        "dismissive_phrase_penalty": {
+            "hit_count": len(dismissive_hits),
+            "hits": dismissive_hits,
+            "penalty": 10 if dismissive_hits else 0,
+        },
     }
 
 
@@ -302,8 +349,12 @@ def deterministic_blocking_checks(
             blockers.append("open-source explainer voiceover is too short to deliver useful repo analysis")
         if value_beats["beat_count"] < 4:
             blockers.append(
-                "open-source explainer is missing core value beats: problem, mechanism, usage/demo, tradeoff, verification"
+                "open-source explainer is missing core value beats: problem, mechanism, usage/demo, tradeoff, judgment framework"
             )
+    dismissive_hits = dismissive_verification_hits(public_content_payload(polish))
+    if dismissive_hits:
+        blockers.append(f"public content contains banned dismissive verification phrasing: {dismissive_hits}")
+    deterministic_metrics = deterministic_content_metrics(polish, candidate)
     return {
         "candidate_terms": terms,
         "candidate_referenced": candidate_referenced,
@@ -311,6 +362,9 @@ def deterministic_blocking_checks(
         "evidence_sources_present": bool(evidence_bundle.get("sources")),
         "cross_check_status": cross_check_review.get("status") or "missing",
         "content_value_beats": value_beats,
+        "knowledge_density": deterministic_metrics["knowledge_density"],
+        "dismissive_phrase_penalty": deterministic_metrics["dismissive_phrase_penalty"],
+        "dismissive_verification_hits": dismissive_hits,
         "blocking_issues": blockers,
     }
 
@@ -443,6 +497,7 @@ def main() -> int:
         scene_plan=scene_plan,
     )
     blocking_checks = deterministic_blocking_checks(polish, candidate, evidence_bundle, cross_check_review)
+    deterministic_metrics = deterministic_content_metrics(polish, candidate)
     target_report = score_target_report(result, blocking_checks)
     model_verdict = str(result.get("verdict") or "improve").lower()
     if blocking_checks["blocking_issues"] or model_verdict == "fail":
@@ -472,6 +527,7 @@ def main() -> int:
         "suggestions": result.get("suggestions") or [],
         "model_verdict": model_verdict,
         "verdict": verdict,
+        **deterministic_metrics,
         "blocking_checks": blocking_checks,
         **target_report,
     }

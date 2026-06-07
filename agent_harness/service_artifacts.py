@@ -224,11 +224,11 @@ def build_topic_brief_artifact(
         "audience": "Developers, creators, and operators evaluating whether this signal is worth attention.",
         "audience_hint": "Developers, creators, and operators evaluating whether this signal is worth attention.",
         "core_question": f"What concrete problem does {title} appear to address, and what evidence supports that interpretation?",
-        "angle": "Lead with the problem, mechanism, tradeoff, and next verification step instead of a generic source summary.",
+        "angle": "Lead with the problem, mechanism, architecture position, tradeoff, failure boundary, and judgment framework instead of a generic source summary.",
         "key_points": facts[:5],
         "visual_opportunities": [
             "Show primary source, supplemental sources, and open questions as separate evidence layers.",
-            "Use a problem -> mechanism -> tradeoff -> verification path scene sequence.",
+            "Use a problem -> mechanism -> architecture position -> failure boundary -> judgment framework scene sequence.",
             "Convert source hosts into a compact source-map card instead of showing raw URLs.",
         ],
         "risk_notes": risk_notes[:8],
@@ -263,7 +263,7 @@ def build_script_artifact(
     structure = {
         "hook": segments[0]["text"] if segments else "",
         "context": topic_brief.get("core_question") or "",
-        "conflict": "What is directly evidenced versus what still requires hands-on verification.",
+        "conflict": "What is directly evidenced versus where the mechanism, fit, or failure boundary remains uncertain.",
         "evidence": [fact.get("id") for fact in facts[:5]],
         "takeaway": topic_brief.get("angle") or "",
         "cta": bounded_text(polish.get("douyin_desc") or "", 160),
@@ -369,7 +369,7 @@ def visual_intent_for(planning_type: str) -> str:
         "comparison": "Separate known facts from open questions.",
         "quote": "Expose a short source-backed quote or paraphrase.",
         "summary": "Compress the key point into a readable scene.",
-        "cta": "End with a bounded verification or discussion prompt.",
+        "cta": "End with a bounded judgment framework or practical adoption lens.",
     }.get(planning_type, "Use a readable evidence-bounded scene.")
 
 
@@ -465,7 +465,13 @@ def build_video_spec_artifact(
             "mode": (render_payload.get("agentVisual") or {}).get("mode"),
             "render_mode": (render_payload.get("agentVisual") or {}).get("render_mode"),
             "description": (render_payload.get("agentVisual") or {}).get("description"),
+            "source": (render_payload.get("agentVisual") or {}).get("source"),
+            "recipe_scene_count": (render_payload.get("agentVisual") or {}).get("recipe_scene_count"),
         },
+        "premium_director_spec": render_payload.get("premiumDirectorSpec")
+        or render_payload.get("premium_director_spec")
+        or render_payload.get("visualRecipe")
+        or render_payload.get("visual_recipe"),
         "video_profile": render_payload.get("videoProfile") or render_payload.get("video_profile") or {},
         "scenes": scenes,
         "assets": assets,

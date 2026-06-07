@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from agent_harness.storyboard import validate_storyboard  # noqa: E402
 from agent_harness.agent_visual import normalize_agent_visual, require_agent_visual  # noqa: E402
+from agent_harness.premium_director import compile_premium_agent_visual, normalize_premium_director_spec  # noqa: E402
 from agent_harness.video_profile import normalize_video_profile  # noqa: E402
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
@@ -151,16 +152,36 @@ export const AgentVisualGenerated: FC<AgentVisualProps> = (props) => {{
 
 
 def write_agent_visual_source(payload: dict[str, Any]) -> dict[str, Any]:
+    spec_raw = (
+        payload.get("premiumDirectorSpec")
+        or payload.get("premium_director_spec")
+        or payload.get("visualRecipe")
+        or payload.get("visual_recipe")
+    )
     raw = payload.get("agentVisual") or payload.get("agent_visual")
     required = bool(payload.get("agentVisualRequired"))
     try:
-        visual = require_agent_visual(raw) if required else normalize_agent_visual(raw)
+        if spec_raw:
+            spec = normalize_premium_director_spec(
+                spec_raw,
+                polish=payload,
+                video_profile=payload.get("videoProfile") or payload.get("video_profile"),
+            )
+            payload["premiumDirectorSpec"] = spec
+            payload["premium_director_spec"] = spec
+            visual = require_agent_visual(compile_premium_agent_visual(spec, reason="prepare remotion premium director compiler"))
+        else:
+            visual = require_agent_visual(raw) if required else normalize_agent_visual(raw)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
     GENERATED_VISUAL_TSX.parent.mkdir(parents=True, exist_ok=True)
     if visual.get("enabled"):
-        GENERATED_VISUAL_TSX.write_text(_agent_visual_source(str(visual.get("component_code") or "")), encoding="utf-8")
+        module_code = str(visual.get("module_code") or "")
+        if module_code:
+            GENERATED_VISUAL_TSX.write_text(module_code, encoding="utf-8")
+        else:
+            GENERATED_VISUAL_TSX.write_text(_agent_visual_source(str(visual.get("component_code") or "")), encoding="utf-8")
         GENERATED_VISUAL_CSS.write_text(str(visual.get("css") or ""), encoding="utf-8")
     else:
         if required:
@@ -244,6 +265,8 @@ def main() -> int:
                 "video_profile": payload.get("videoProfile"),
                 "agent_visual_required": bool(payload.get("agentVisualRequired")),
                 "agent_visual_enabled": bool((payload.get("agentVisual") or {}).get("enabled")),
+                "premium_director_spec_present": bool(payload.get("premiumDirectorSpec")),
+                "premium_director_scene_count": len((payload.get("premiumDirectorSpec") or {}).get("visual_scenes") or []),
                 "agent_visual_source": str(GENERATED_VISUAL_TSX),
                 "agent_visual_css": str(GENERATED_VISUAL_CSS),
                 "audio_duration_sec": manifest.get("audio_duration_sec"),

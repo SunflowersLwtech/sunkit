@@ -299,7 +299,7 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
               heading: '热度不是结论，但能说明关注方向',
               label: '公开指标',
               value: data.audienceMetricLine,
-              points: ['来源', '关注', '验证'],
+              points: ['来源', '关注', '判断'],
             },
           },
         ]
@@ -308,7 +308,7 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
       {
         type: 'terminal' as const,
         props: {
-          kicker: '开发者会先这样验证',
+          kicker: '开发者会先这样判断',
           title: '最小上手路径',
           prompt: '$',
           lines: ['clone / install', 'run quick start', 'inspect examples', 'check tests'],
@@ -319,7 +319,7 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
         props: {
           kicker: '机制不要只靠文字讲',
           heading: '把 repo 还原成一条工作流',
-          nodes: ['输入', '核心模块', '输出', '验证门槛'],
+          nodes: ['输入', '核心模块', '输出', '失败边界'],
           caption: '这类场景让 agent 用结构图解释机制，而不是堆段落。',
         },
       },
@@ -340,7 +340,7 @@ export const deriveStoryboardFromCards = (data: DerivableFields): Storyboard => 
     })),
     {
       type: 'cta',
-      props: {kicker: '先别急着下结论', text: data.cta, footer: data.verificationNextStep || data.footer},
+      props: {kicker: '判断框架', text: data.cta, footer: data.verificationNextStep || data.footer},
     },
   ];
   return {version: 1, style: {theme: 'radar'}, scenes};

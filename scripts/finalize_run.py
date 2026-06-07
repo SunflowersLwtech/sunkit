@@ -75,6 +75,7 @@ def main() -> int:
         render_metadata_status = _status(run_dir / "render_metadata_check.json")
         deterministic_audit_status = _status(run_dir / "visual_audit_deterministic.json")
         gemini_audit_status = _status(run_dir / "gemini_visual_audit.json", default="missing")
+        premium_showcase_audit_status = _status(run_dir / "premium_showcase_audit.json", default="missing")
 
         errors = publish_conflict_errors(snapshot_before, args.publish_mode)
         required_files = {
@@ -92,6 +93,8 @@ def main() -> int:
             errors.append(f"deterministic visual audit status is {deterministic_audit_status}")
         if gemini_audit_status != "pass":
             errors.append(f"Gemini visual audit status is {gemini_audit_status}")
+        if premium_showcase_audit_status != "pass":
+            errors.append(f"premium showcase audit status is {premium_showcase_audit_status}")
         if upload_check.get("publish_mode") != args.publish_mode:
             errors.append(
                 f"douyin upload check mode mismatch: {upload_check.get('publish_mode')} != {args.publish_mode}"
@@ -166,6 +169,7 @@ def main() -> int:
             "render_metadata_status": render_metadata_status,
             "deterministic_visual_audit_status": deterministic_audit_status,
             "gemini_visual_audit_status": gemini_audit_status,
+            "premium_showcase_audit_status": premium_showcase_audit_status,
             "douyin_upload_check": upload_check,
             "post_publish_verification": post_verify,
             "errors": errors,

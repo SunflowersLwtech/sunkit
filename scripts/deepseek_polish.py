@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -24,12 +25,22 @@ if str(ROOT / "scripts") not in sys.path:
 from agent_harness.policy import policy_get, policy_format, unsupported_claim_regex, unsupported_terms
 from agent_harness.evidence import strong_research_review_errors
 from agent_harness.agent_visual import agent_visual_text_items, require_agent_visual
+from agent_harness.content_guard import (
+    dismissive_verification_hits,
+    public_content_payload,
+    scrub_dismissive_verification_text,
+)
+from agent_harness.premium_director import compile_premium_agent_visual, normalize_premium_director_spec
 from agent_harness.storyboard import card_scenes, storyboard_text_items, validate_storyboard
 from agent_harness.video_profile import choose_video_profile, normalize_video_profile
 from env_utils import env_value
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 UNSAFE_RE = unsupported_claim_regex()
+VIEWER_BURDEN_QUESTION_RE = re.compile(
+    r"(?P<question>(?:你|大家|观众|评论区|会不会|要不要|该不该|怎么选|怎么判断)[^。！？!?\n]{0,140}[？?])\s*$"
+)
+JUDGMENT_FRAMEWORK_ENDING = "判断顺序是：先看机制是否解决真实问题，再看它放在架构哪一层，最后看失败边界和维护成本是否可承受。"
 
 
 def utc_now() -> str:
@@ -116,11 +127,240 @@ def unsafe_hits_for(polished: dict[str, Any]) -> list[str]:
     return sorted(set(match.group(0) for match in UNSAFE_RE.finditer(rendered_polish_text(polished))))
 
 
+def dismissive_hits_for(polished: dict[str, Any]) -> list[str]:
+    return dismissive_verification_hits(public_content_payload(polished))
+
+
+def viewer_question_endings_for(polished: dict[str, Any]) -> list[str]:
+    hits: list[str] = []
+    for key in ("voiceover_text", "douyin_desc"):
+        text = str(polished.get(key) or "").strip()
+        match = VIEWER_BURDEN_QUESTION_RE.search(text)
+        if match:
+            hits.append(f"{key}:{match.group('question')}")
+    return hits
+
+
+def scrub_polish_payload(polished: dict[str, Any]) -> dict[str, Any]:
+    cleaned = scrub_dismissive_verification_text(polished)
+    if isinstance(cleaned, dict):
+        def fix_provider_typos(value: Any) -> Any:
+            if isinstance(value, str):
+                return value.replace("关键次", "刚开始")
+            if isinstance(value, list):
+                return [fix_provider_typos(item) for item in value]
+            if isinstance(value, dict):
+                return {key: fix_provider_typos(item) for key, item in value.items()}
+            return value
+
+        cleaned = fix_provider_typos(cleaned)
+        for key in ("voiceover_text", "douyin_desc"):
+            text = str(cleaned.get(key) or "").strip()
+            if VIEWER_BURDEN_QUESTION_RE.search(text):
+                cleaned[key] = VIEWER_BURDEN_QUESTION_RE.sub(JUDGMENT_FRAMEWORK_ENDING, text).strip()
+    return cleaned
+
+
+
+def apply_premium_director_visual(
+    candidate: dict[str, Any],
+    content_plan: dict[str, Any],
+    polished: dict[str, Any],
+    video_profile: dict[str, Any] | None = None,
+    *,
+    reason: str = "deepseek premium director compiler",
+) -> dict[str, Any]:
+    spec = normalize_premium_director_spec(
+        polished.get("premium_director_spec") or polished.get("visual_recipe"),
+        candidate=candidate,
+        content_plan=content_plan,
+        polish=polished,
+        video_profile=video_profile or polished.get("video_profile"),
+    )
+    polished["premium_director_spec"] = spec
+    polished["agent_visual"] = compile_premium_agent_visual(spec, reason=reason)
+    return polished
+
+
+def compatibility_storyboard_from_premium(data: dict[str, Any]) -> dict[str, Any]:
+    spec = data.get("premium_director_spec") if isinstance(data.get("premium_director_spec"), dict) else {}
+    arc = spec.get("knowledge_arc") if isinstance(spec.get("knowledge_arc"), dict) else {}
+    objects = spec.get("topic_objects") if isinstance(spec.get("topic_objects"), list) else []
+    object_labels = [
+        bounded_text(item.get("label"), 28)
+        for item in objects
+        if isinstance(item, dict) and str(item.get("label") or "").strip()
+    ]
+    scenes = spec.get("visual_scenes") if isinstance(spec.get("visual_scenes"), list) else []
+    scene_titles = [
+        bounded_text(item.get("title"), 34)
+        for item in scenes
+        if isinstance(item, dict) and str(item.get("title") or "").strip()
+    ]
+    title = bounded_text(data.get("polished_title") or arc.get("hook") or "机制判断框架", 52)
+    mechanism = bounded_text(arc.get("mechanism") or data.get("voiceover_text") or "先把机制拆清楚", 58)
+    architecture = bounded_text(arc.get("architecture_position") or "再看它放在系统里的位置", 58)
+    failure = bounded_text(arc.get("failure_boundary") or "最后看失败边界是否可控", 58)
+    judgment = bounded_text(arc.get("judgment_framework") or "用机制、适用场景和失败边界做判断", 78)
+    visual_story_scenes: list[dict[str, Any]] = []
+    for visual_scene in scenes:
+        if not isinstance(visual_scene, dict):
+            continue
+        scene_type = str(visual_scene.get("scene_type") or "")
+        scene_title = bounded_text(visual_scene.get("title") or title, 56)
+        objective = bounded_text(visual_scene.get("objective") or "", 90)
+        beats = [
+            bounded_text(item, 64)
+            for item in (visual_scene.get("teaching_beats") or [])
+            if str(item or "").strip()
+        ][:5]
+        if scene_type == "HeroProblemScene":
+            visual_story_scenes.append(
+                {
+                    "type": "statement",
+                    "props": {
+                        "kicker": "开场冲突",
+                        "title": scene_title or title,
+                        "sub": objective or mechanism,
+                    },
+                }
+            )
+        elif scene_type in {"MechanismExplodedView", "ArchitectureFlowScene", "TimelineBuildScene"}:
+            visual_story_scenes.append(
+                {
+                    "type": "flow",
+                    "props": {
+                        "kicker": "机制怎么跑",
+                        "heading": scene_title or architecture,
+                        "nodes": beats or object_labels or scene_titles or ["输入", "运行", "检查", "重跑"],
+                        "caption": objective,
+                    },
+                }
+            )
+        elif scene_type == "CodeOrTerminalScene":
+            visual_story_scenes.append(
+                {
+                    "type": "terminal",
+                    "props": {
+                        "kicker": "验收规则",
+                        "title": scene_title or "CLAUDE.md 示例",
+                        "prompt": "$",
+                        "lines": beats
+                        or [
+                            "context: write standards before loop",
+                            "acceptance: npm test && npm run lint",
+                            "review: split PRs over 20 files",
+                        ],
+                    },
+                }
+            )
+        elif scene_type in {"MetricComparisonScene", "DecisionMatrixScene"}:
+            rows = beats or [mechanism, failure, judgment]
+            visual_story_scenes.append(
+                {
+                    "type": "compare_table",
+                    "props": {
+                        "kicker": "取舍判断",
+                        "heading": scene_title or "适用与失败边界",
+                        "leftLabel": "信号",
+                        "rightLabel": "怎么判断",
+                        "rows": rows,
+                    },
+                }
+            )
+        elif scene_type == "KnowledgeTakeawayScene":
+            visual_story_scenes.append(
+                {
+                    "type": "cta",
+                    "props": {
+                        "kicker": "判断框架",
+                        "text": bounded_text(judgment, 48),
+                        "footer": objective or "证据边界内",
+                    },
+                }
+            )
+        elif scene_type in {"RepoFileTreeReveal"}:
+            visual_story_scenes.append(
+                {
+                    "type": "bullets",
+                    "props": {
+                        "kicker": "看哪里",
+                        "heading": scene_title,
+                        "items": beats or object_labels or scene_titles,
+                    },
+                }
+            )
+        if len(visual_story_scenes) >= 7:
+            break
+    if visual_story_scenes:
+        if not any(scene.get("type") == "statement" for scene in visual_story_scenes):
+            visual_story_scenes.insert(0, {"type": "statement", "props": {"title": title, "sub": mechanism}})
+        if not any(scene.get("type") == "cta" for scene in visual_story_scenes):
+            visual_story_scenes.append({"type": "cta", "props": {"text": judgment, "footer": "证据边界内"}})
+        return validate_storyboard(
+            {
+                "version": 1,
+                "style": {
+                    "theme": "minimal",
+                    "density": "rich",
+                    "motion": "standard",
+                    "chrome": {"topbar": False, "progress": True, "beam": False},
+                },
+                "scenes": visual_story_scenes[:8],
+            }
+        )
+    storyboard = {
+        "version": 1,
+        "style": {
+            "theme": "minimal",
+            "density": "rich",
+            "motion": "calm",
+            "chrome": {"topbar": False, "progress": True, "beam": False},
+        },
+        "scenes": [
+            {"type": "statement", "props": {"title": title, "sub": mechanism}},
+            {
+                "type": "flow",
+                "props": {
+                    "kicker": "机制路径",
+                    "heading": architecture,
+                    "nodes": (object_labels or scene_titles or ["问题", "机制", "架构", "失败边界"])[:5],
+                },
+            },
+            {
+                "type": "compare_table",
+                "props": {
+                    "kicker": "判断框架",
+                    "heading": "适用与失败边界",
+                    "leftLabel": "看什么",
+                    "rightLabel": "怎么判断",
+                    "rows": [
+                        f"机制|{mechanism}|是否解释真实问题",
+                        f"架构|{architecture}|是否放在合适位置",
+                        f"边界|{failure}|失败成本是否可控",
+                    ],
+                },
+            },
+            {"type": "cta", "props": {"text": judgment, "footer": "证据边界内"}},
+        ],
+    }
+    return validate_storyboard(storyboard)
+
+
 def validate_polish(candidate: dict[str, Any], polished: dict[str, Any]) -> None:
     validate_candidate_reference(candidate, polished)
     unsafe_hits = unsafe_hits_for(polished)
     if unsafe_hits:
         raise RuntimeError(f"DeepSeek candidate contains unsupported claim terms: {unsafe_hits}")
+    dismissive_hits = dismissive_hits_for(polished)
+    if dismissive_hits:
+        raise RuntimeError(f"DeepSeek candidate contains banned dismissive verification phrasing: {dismissive_hits}")
+    viewer_question_hits = viewer_question_endings_for(polished)
+    if viewer_question_hits:
+        raise RuntimeError(
+            "DeepSeek candidate ends by asking the viewer to decide instead of teaching a judgment framework: "
+            f"{viewer_question_hits}"
+        )
 
 
 def parse_json_object(content: str) -> dict[str, Any]:
@@ -139,15 +379,32 @@ def normalize_polish_payload(data: dict[str, Any]) -> dict[str, Any]:
     if missing:
         raise RuntimeError(f"DeepSeek response missing fields: {', '.join(missing)}")
     tags = require_list(data["tags"], "tags", 5)
+    spec_input = data.get("premium_director_spec") or data.get("visual_recipe")
+    if spec_input:
+        try:
+            data["premium_director_spec"] = normalize_premium_director_spec(spec_input, polish=data, video_profile=data.get("video_profile"))
+        except ValueError as exc:
+            raise RuntimeError(f"DeepSeek response premium_director_spec is invalid: {exc}") from exc
     storyboard = data.get("storyboard")
     if storyboard:
         try:
             data["storyboard"] = validate_storyboard(storyboard)
         except ValueError as exc:
-            raise RuntimeError(f"DeepSeek response storyboard is invalid: {exc}") from exc
+            if data.get("premium_director_spec"):
+                data["storyboard"] = compatibility_storyboard_from_premium(data)
+                data["_storyboard_repair_error"] = str(exc)
+            else:
+                raise RuntimeError(f"DeepSeek response storyboard is invalid: {exc}") from exc
+    elif data.get("premium_director_spec"):
+        data["storyboard"] = compatibility_storyboard_from_premium(data)
     cards = data.get("cards") or (card_scenes(data.get("storyboard")) if data.get("storyboard") else [])
     try:
-        data["agent_visual"] = require_agent_visual(data.get("agent_visual") or data.get("agentVisual"))
+        if data.get("premium_director_spec"):
+            data["agent_visual"] = require_agent_visual(
+                compile_premium_agent_visual(data["premium_director_spec"], reason="deepseek normalized director spec")
+            )
+        else:
+            data["agent_visual"] = require_agent_visual(data.get("agent_visual") or data.get("agentVisual"))
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     min_cards = 4 if any("cards must be 4" in str(item) for item in policy_get("deepseek.constraints", [])) else 1
@@ -166,7 +423,7 @@ def normalize_polish_payload(data: dict[str, Any]) -> dict[str, Any]:
         )
     data["tags"] = tags
     data["cards"] = clean_cards
-    return data
+    return scrub_polish_payload(data)
 
 
 def parse_deepseek_payload(content: str) -> dict[str, Any]:
@@ -207,7 +464,7 @@ def deepseek_constraints(video_seconds: int, *, variant_count: int = 1, video_pr
             f"Return one JSON object with exactly one key `variants`, containing exactly {variant_count} objects."
         )
         constraints.append(
-            "Each variants item must contain exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, agent_visual, video_profile, caveats."
+            "Each variants item must contain exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, premium_director_spec, agent_visual, video_profile, caveats."
         )
     return constraints
 
@@ -303,11 +560,15 @@ def deepseek_body(
         "suggested_video_profile": normalized_video_profile,
         "content_quality_requirement": [
             "Use research_brief and fact_bank to choose a concrete topic angle and visual scene path.",
-            "Explain the concrete user problem, mechanism, practical fit, caveat, and next verification step.",
-            "Every strong public claim must be traceable to evidence_bundle source_facts or explicitly framed as an unverified observation.",
+            "Explain the concrete user problem, mechanism, architecture position, practical fit, failure boundary, and adoption judgment framework.",
+            "Voiceover must sound like a top-tier technical explainer: every sentence should either clarify mechanism, locate the system layer, explain practical fit, define failure boundary, or sharpen the judgment framework.",
+            "Synchronize voiceover beats with premium_director_spec.visual_scenes; each scene should teach one concrete concept rather than act like a title slide.",
+            "Every strong public claim must be traceable to evidence_bundle source_facts or explicitly framed with a clear evidence boundary.",
             "For open-source projects, cover what the repo appears to do, why a developer would care, tradeoffs, and what to inspect before adopting.",
-            "For GitHub/open-source topics, do not stop at a radar summary: include problem, mechanism or architecture, practical fit, tradeoff/risk, and a concrete verification path.",
-            "The rendered provider video is agent_visual. Write custom TSX/CSS for the current topic; do not depend on the default storyboard scene renderer.",
+            "For GitHub/open-source topics, do not stop at a radar summary: include problem, mechanism or architecture, practical fit, tradeoff/risk, failure boundary, and a concrete judgment framework.",
+            "Do not tell the viewer to verify, wait, or keep observing. Teach the reusable mechanism and decision framework inside the evidence boundary.",
+            "Do not end voiceover_text or douyin_desc with a viewer question such as whether they would use it or how they would choose. End with a stated judgment framework.",
+            "The rendered provider video is compiled from premium_director_spec. Author topic-specific visual intent; do not depend on the default storyboard scene renderer.",
             "Choose video_profile.duration_seconds, orientation, motion, and animation_style for the content depth; respect the suggested_video_profile unless you have a source-grounded reason to override it.",
         ],
     }
@@ -322,6 +583,7 @@ def deepseek_body(
             "tags": (previous_polish or {}).get("tags"),
             "cards": (previous_polish or {}).get("cards"),
             "storyboard": (previous_polish or {}).get("storyboard"),
+            "premium_director_spec": (previous_polish or {}).get("premium_director_spec"),
             "agent_visual": (previous_polish or {}).get("agent_visual"),
             "video_profile": (previous_polish or {}).get("video_profile"),
             "caveats": (previous_polish or {}).get("caveats"),
@@ -333,6 +595,7 @@ def deepseek_body(
             "failed_dimensions": revision_feedback.get("failed_dimensions") or {},
             "suggestions": revision_feedback.get("suggestions") or [],
             "revision_brief": revision_feedback.get("revision_brief") or {},
+            "full_feedback": revision_feedback,
         }
         user["revision_rules"] = [
             "Return a full replacement JSON object, not a patch.",
@@ -340,6 +603,10 @@ def deepseek_body(
             "Preserve the selected candidate boundary and required_entity_terms reference.",
             "Do not introduce facts outside evidence_bundle or claims not supported by source_facts.",
             "Keep caveats when evidence is thin; improve the explanation, not the claim strength.",
+            "Treat every required_changes, required_voiceover_structure, required_visual_structure, must_change, and must_not_do entry in gemini_feedback.full_feedback as a hard revision constraint.",
+            "If the feedback names storyboard changes, rewrite storyboard.scenes directly with concrete scene types; do not rely on premium_director_spec alone.",
+            "If the feedback names a target voiceover length or exact opening/final sentence, obey it unless it conflicts with evidence boundaries.",
+            "Do not compress a 55-second explainer into a short summary; keep enough Mandarin voiceover detail for the configured duration.",
         ]
         user["content_quality_requirement"].extend(
             str(item)
@@ -372,12 +639,51 @@ def deepseek_body(
         "tags": ["string"],
         "cards": [{"label": "string", "value": "string", "detail": "string"}],
         "storyboard": storyboard_schema,
+        "premium_director_spec": {
+            "schema_version": 1,
+            "profile": {
+                "orientation": "vertical|horizontal",
+                "aspect_ratio": "9:16|16:9",
+                "duration_seconds": "integer between 18 and 120",
+                "style_family": "apple_keynote_showcase",
+                "motion_comfort": "comfortable",
+            },
+            "knowledge_arc": {
+                "hook": "topic-specific problem framing",
+                "mechanism": "mechanism explanation",
+                "architecture_position": "where it sits in a real system",
+                "practical_fit": "where it is useful",
+                "tradeoff": "main tradeoff",
+                "failure_boundary": "where it fails or becomes costly",
+                "judgment_framework": "how to decide whether to adopt or care",
+                "takeaway": "non-generic knowledge takeaway",
+            },
+            "topic_objects": [
+                {"id": "obj_1", "kind": "repo_file|api_surface|architecture_node|metric|failure_boundary", "label": "string", "detail": "string", "source_ref": "source id or evidence field"}
+            ],
+            "visual_scenes": [
+                {
+                    "id": "scene id",
+                    "scene_type": "HeroProblemScene|MechanismExplodedView|RepoFileTreeReveal|ArchitectureFlowScene|MetricComparisonScene|DecisionMatrixScene|TimelineBuildScene|CodeOrTerminalScene|KnowledgeTakeawayScene",
+                    "title": "short on-screen title",
+                    "objective": "what knowledge this scene teaches",
+                    "teaching_beats": ["2-4 short beats the voiceover should teach in this scene"],
+                    "object_refs": ["topic object ids"],
+                    "layout": "full_canvas_keynote",
+                    "motion_beats": ["reveal|build|pan|morph|path_draw|metric_count|object_focus|dwell"],
+                }
+            ],
+            "motion_beats": [{"type": "reveal|build|pan|morph|path_draw|metric_count|object_focus|dwell", "target": "string", "intensity": "calm|restrained|medium"}],
+            "content_constraints": {
+                "source_boundary": "claims stay inside evidence",
+                "knowledge_takeaway_required": True,
+                "forbid_dismissive_verification_language": True,
+            },
+        },
         "agent_visual": {
             "enabled": True,
             "render_mode": "full_canvas",
-            "description": "short note on why this custom Remotion visual fits the topic",
-            "component_code": "string: TSX function body only, no import/export. Must contain a return statement. Variables available: data, frame, fps, durationInFrames, width, height, progress, audioPulse, React, AbsoluteFill, interpolate, spring, useMemo, Img, staticFile, Series, Sequence.",
-            "css": "string: custom CSS for this visual, preferably classes prefixed with agent-",
+            "description": "short note on why the premium_director_spec fits the topic. Runtime will compile this locally; do not include raw TSX/CSS unless explicitly needed for compatibility.",
         },
         "video_profile": {
             "duration_seconds": "integer between 18 and 120",
@@ -400,7 +706,7 @@ def deepseek_body(
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
         ],
         "temperature": temperature,
-        "max_tokens": int(policy_get("deepseek.max_tokens", 1800)),
+        "max_tokens": int(os.environ.get("SEARCHPO_DEEPSEEK_MAX_TOKENS") or policy_get("deepseek.max_tokens", 1800)),
     }
     thinking_type = str(policy_get("deepseek.thinking_type", "") or "").strip()
     if thinking_type:
@@ -546,6 +852,9 @@ def correct_deepseek_polish(
     user["correction_rules"] = [
         "Return a complete replacement JSON object with the required keys only.",
         "Remove every forbidden claim term named in validation_error.",
+        "Remove any phrasing that tells viewers to verify, wait, observe, or test for themselves; replace it with mechanism, architecture position, failure boundary, and judgment framework.",
+        "If the rejected voiceover ends with a viewer question, replace the ending with a concrete judgment framework statement.",
+        "Keep or rebuild premium_director_spec with at least five visual_scenes, four distinct scene_type values, three topic_objects, and three motion_beats.",
         "Keep the selected candidate boundary and required_entity_terms reference.",
     ]
     body["messages"][1]["content"] = json.dumps(user, ensure_ascii=False)
@@ -567,7 +876,7 @@ def deepseek_variant_chat(
     video_seconds: int = 12,
     video_profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    variant_count = int(policy_get("deepseek.variant_count", 3))
+    variant_count = int(os.environ.get("SEARCHPO_POLISH_VARIANT_COUNT") or policy_get("deepseek.variant_count", 3))
     body = deepseek_body(
         model,
         candidate,
@@ -776,8 +1085,20 @@ def main() -> int:
             video_seconds=video_seconds,
             video_profile=video_profile,
         )
+    polished = scrub_polish_payload(polished)
     polished_video_profile = normalize_video_profile(polished.get("video_profile"), fallback=video_profile)
+    polished = apply_premium_director_visual(
+        candidate,
+        content_plan,
+        polished,
+        polished_video_profile,
+        reason=f"deepseek {args.mode} premium director compiler",
+    )
+    polished = scrub_polish_payload(polished)
+    validate_polish(candidate, polished)
     unsafe_hits = unsafe_hits_for(polished)
+    dismissive_hits = dismissive_hits_for(polished)
+    status = "pass" if not unsafe_hits and not dismissive_hits else "fail"
     result = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -786,7 +1107,7 @@ def main() -> int:
         "attempt": args.attempt,
         "mode": args.mode,
         "selected_candidate_id": candidate.get("candidate_id"),
-        "status": "pass" if not unsafe_hits else "fail",
+        "status": status,
         "polished_title": bounded_text(polished["polished_title"], 80),
         "voiceover_text": bounded_text(polished["voiceover_text"], 1000),
         "script_text_hash": sha256_text(str(polished["voiceover_text"] or "")),
@@ -795,10 +1116,13 @@ def main() -> int:
         "tags": polished["tags"],
         "cards": polished["cards"],
         "storyboard": polished.get("storyboard"),
+        "premium_director_spec": polished.get("premium_director_spec"),
         "agent_visual": polished.get("agent_visual"),
         "video_profile": polished_video_profile,
         "caveats": polished.get("caveats") or [],
         "unsafe_claim_hits": unsafe_hits,
+        "dismissive_verification_hits": dismissive_hits,
+        "storyboard_repair_error": polished.get("_storyboard_repair_error"),
         "correction_applied": bool(polished.get("_correction_applied")),
         "initial_error": polished.get("_initial_error"),
         "usage": polished.get("_raw_usage"),
@@ -814,6 +1138,8 @@ def main() -> int:
     print(json.dumps({"deepseek_polish": str(output_path), "status": result["status"]}, ensure_ascii=False, indent=2))
     if unsafe_hits:
         raise SystemExit(f"DeepSeek polish generated unsupported claim terms: {unsafe_hits}")
+    if dismissive_hits:
+        raise SystemExit(f"DeepSeek polish generated banned dismissive verification phrasing: {dismissive_hits}")
     return 0
 
 

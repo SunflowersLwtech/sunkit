@@ -18,8 +18,36 @@
     "renderer": {"type": "object"},
     "storyboard": {"type": "object"},
     "agent_visual": {"type": "object"},
+    "premium_director_spec": {"$ref": "#/$defs/premiumDirectorSpec"},
     "video_profile": {"type": "object"},
     "scenes": {"type": "array", "minItems": 1},
     "assets": {"type": "array"}
+  },
+  "$defs": {
+    "premiumDirectorSpec": {
+      "type": "object",
+      "required": ["schema_version", "profile", "knowledge_arc", "topic_objects", "visual_scenes", "motion_beats", "content_constraints"],
+      "properties": {
+        "schema_version": {"type": "number"},
+        "source": {"type": "string"},
+        "profile": {
+          "type": "object",
+          "required": ["orientation", "aspect_ratio", "duration_seconds", "style_family", "motion_comfort"],
+          "properties": {
+            "orientation": {"enum": ["vertical", "horizontal"]},
+            "aspect_ratio": {"enum": ["9:16", "16:9"]},
+            "duration_seconds": {"type": "number", "minimum": 18},
+            "style_family": {"type": "string"},
+            "motion_comfort": {"type": "string"},
+            "safe_space_px": {"type": "number"}
+          }
+        },
+        "knowledge_arc": {"type": "object"},
+        "topic_objects": {"type": "array", "minItems": 3},
+        "visual_scenes": {"type": "array", "minItems": 5},
+        "motion_beats": {"type": "array", "minItems": 3},
+        "content_constraints": {"type": "object"}
+      }
+    }
   }
 }

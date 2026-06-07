@@ -69,7 +69,7 @@ SIDE_EFFECT_TIERS: dict[str, SideEffectTier] = {
         allows_live_upload=False,
         allowed_effects=("provider_api", "local_remotion_render", "ignored_runtime_artifacts", "douyin_adapter_preflight"),
         forbidden_effects=("aws_lambda_s3", "douyin_upload"),
-        required_env_groups=("script_agents_required",),
+        required_env_groups=("script_agents_required", "research_required"),
         success_criteria=("artifact_manifest_bound", "deterministic_visual_audit_pass", "gemini_visual_audit_pass", "douyin_contract_gate_pass"),
     ),
     "lambda": SideEffectTier(
@@ -85,7 +85,7 @@ SIDE_EFFECT_TIERS: dict[str, SideEffectTier] = {
         allows_live_upload=False,
         allowed_effects=("provider_api", "aws_lambda_s3_render", "ignored_runtime_artifacts", "douyin_adapter_preflight"),
         forbidden_effects=("douyin_upload",),
-        required_env_groups=("script_agents_required", "remotion_lambda_required"),
+        required_env_groups=("script_agents_required", "research_required", "remotion_lambda_required"),
         success_criteria=("lambda_site_redeployed", "artifact_manifest_bound", "deterministic_visual_audit_pass", "gemini_visual_audit_pass", "douyin_contract_gate_pass"),
     ),
     "live": SideEffectTier(
@@ -101,7 +101,7 @@ SIDE_EFFECT_TIERS: dict[str, SideEffectTier] = {
         allows_live_upload=True,
         allowed_effects=("provider_api", "aws_lambda_s3_render", "ignored_runtime_artifacts", "douyin_live_upload"),
         forbidden_effects=(),
-        required_env_groups=("script_agents_required", "remotion_lambda_required", "douyin_account_required"),
+        required_env_groups=("script_agents_required", "research_required", "remotion_lambda_required", "douyin_account_required"),
         success_criteria=("artifact_manifest_bound", "deterministic_visual_audit_pass", "gemini_visual_audit_pass", "remote_identity_verified"),
     ),
 }

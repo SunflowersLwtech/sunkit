@@ -13,6 +13,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,56 @@ def latest_run_dir() -> Path:
     if not LATEST_RUN_PATH.exists():
         raise SystemExit("runtime/latest_run.txt is missing; run data_prep/scripts/run_pipeline.py first")
     return Path(LATEST_RUN_PATH.read_text(encoding="utf-8").strip()).resolve()
+
+
+def audit_video_path(video_path: Path, run_dir: Path, max_bytes: int, proxy_dir: Path | None = None) -> tuple[Path, dict[str, Any]]:
+    size = video_path.stat().st_size
+    if size <= max_bytes:
+        return video_path, {"mode": "original", "original_video_path": str(video_path), "original_size_bytes": size}
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise SystemExit(f"Rendered video is {size} bytes, above inline Gemini audit limit {max_bytes}, and ffmpeg is unavailable for proxy generation.")
+    proxy_root = proxy_dir or run_dir
+    proxy_root.mkdir(parents=True, exist_ok=True)
+    proxy = proxy_root / "gemini_visual_audit_proxy.mp4"
+    proc = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "34",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            str(proxy),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if proc.returncode != 0 or not proxy.is_file():
+        raise SystemExit(f"Could not create Gemini audit proxy for oversized video: {proc.stderr[-1200:]}")
+    proxy_size = proxy.stat().st_size
+    if proxy_size > max_bytes:
+        raise SystemExit(f"Gemini audit proxy remains above inline limit: {proxy_size} > {max_bytes}")
+    return proxy, {
+        "mode": "proxy",
+        "original_video_path": str(video_path),
+        "original_size_bytes": size,
+        "audited_video_path": str(proxy),
+        "audited_size_bytes": proxy_size,
+        "ffmpeg_stderr_tail": proc.stderr[-1200:],
+    }
 
 
 def generated_json(model: str, api_key: str, parts: list[dict[str, Any]], timeout: float, env_file: Path) -> dict[str, Any]:
@@ -112,6 +164,15 @@ def generated_json(model: str, api_key: str, parts: list[dict[str, Any]], timeou
         return json.loads(match.group(0))
 
 
+def normalize_audit_object(value: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(value.get("checks"), dict) or value.get("verdict"):
+        return value
+    nested = value.get("required_output")
+    if isinstance(nested, dict) and (isinstance(nested.get("checks"), dict) or nested.get("verdict")):
+        return nested
+    return value
+
+
 def build_prompt(run_dir: Path, video_path: Path) -> str:
     selected = read_json(run_dir / "selected_candidate.json")
     render_payload = read_json(run_dir / "render_payload.json")
@@ -141,17 +202,26 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
                     "speech_pronunciation_safe": "boolean; true when the voiceover does not read raw slashes, URLs, or symbols",
                     "audio_visual_alignment_safe": "boolean; true when caption/card timing follows the spoken beat",
                     "publish_ready": "boolean",
-                    "content_has_constructive_insight": "boolean; true when the video explains problem, mechanism, tradeoff, and verification path from evidence",
+                    "content_has_constructive_insight": "boolean; true when the video explains problem, mechanism, architecture position, failure boundary, and judgment framework from evidence",
+                    "premium_director_visual_fit": "boolean; true when the video looks like a topic-specific premium Remotion/Keynote showcase rather than a generic radar/card template",
                 },
                 "issues": ["array of concrete issues; empty if pass"],
             },
-            "fail_if": policy_get("gemini_visual_audit.fail_if", []),
+            "fail_if": [
+                *policy_get("gemini_visual_audit.fail_if", []),
+                "The video tells viewers to verify, wait, observe, try it themselves, or otherwise shifts the knowledge burden to the viewer instead of teaching a mechanism and judgment framework.",
+                "The visual language is mostly generic cards, radar chrome, dashboard panels, or reusable Searchpo template layout rather than a topic-specific premium director scene plan.",
+            ],
             "forbidden_claim_terms": unsupported_terms(),
             "enhanced_checks": policy_get("gemini_visual_audit.enhanced_checks", []),
             "important": policy_get("gemini_visual_audit.important", ""),
             "selected_candidate": selected,
             "render_payload": render_payload,
             "video_profile": render_payload.get("videoProfile") or render_payload.get("video_profile") or {},
+            "premium_director_spec": render_payload.get("premiumDirectorSpec")
+            or render_payload.get("premium_director_spec")
+            or polish.get("premium_director_spec")
+            or polish.get("visual_recipe"),
             "evidence_bundle": evidence_bundle,
             "cross_check_review": cross_check_review,
             "deepseek_polish": {
@@ -223,13 +293,10 @@ def main() -> int:
         video_path = ROOT / video_path
     if not video_path.is_file():
         raise SystemExit(f"Rendered video missing: {video_path}")
+    output_path = Path(args.output).resolve() if args.output else run_dir / "gemini_visual_audit.json"
+    audit_path, audit_media = audit_video_path(video_path, run_dir, max_bytes, proxy_dir=output_path.parent)
     video_size = video_path.stat().st_size
-    if video_size > max_bytes:
-        raise SystemExit(
-            f"Rendered video is {video_size} bytes, above inline Gemini audit limit {max_bytes}. "
-            "Lower render size or raise SEARCHPO_GEMINI_INLINE_VIDEO_MAX_BYTES after confirming API limits."
-        )
-    mime_type = mimetypes.guess_type(video_path.name)[0] or "video/mp4"
+    mime_type = mimetypes.guess_type(audit_path.name)[0] or "video/mp4"
     prompt = build_prompt(run_dir, video_path)
     prompt_path = Path(args.prompt_output).resolve() if args.prompt_output else run_dir / "gemini_visual_audit_prompt.json"
     write_json(
@@ -240,10 +307,11 @@ def main() -> int:
             "model": model,
             "video_path": str(video_path),
             "video_sha256": sha256_file(video_path),
+            "audit_media": audit_media,
             "prompt": prompt,
         },
     )
-    video_data = base64.b64encode(video_path.read_bytes()).decode("ascii")
+    video_data = base64.b64encode(audit_path.read_bytes()).decode("ascii")
     audit = generated_json(
         model,
         api_key,
@@ -254,6 +322,7 @@ def main() -> int:
         args.timeout,
         env_file,
     )
+    audit = normalize_audit_object(audit)
     verdict = str(audit.get("verdict") or "").lower()
     checks = audit.get("checks") if isinstance(audit.get("checks"), dict) else {}
     status = "pass" if verdict == "pass" and all(bool(value) for value in checks.values()) else "fail"
@@ -268,6 +337,7 @@ def main() -> int:
         "video_path": str(video_path),
         "video_sha256": sha256_file(video_path),
         "video_size_bytes": video_size,
+        "audit_media": audit_media,
         "prompt_artifact": str(prompt_path),
         "deterministic_visual_audit": str(run_dir / "visual_audit_deterministic.json")
         if (run_dir / "visual_audit_deterministic.json").exists()
@@ -276,7 +346,6 @@ def main() -> int:
         **classification,
         "elapsed_reference": time.time(),
     }
-    output_path = Path(args.output).resolve() if args.output else run_dir / "gemini_visual_audit.json"
     write_json(output_path, result)
     print(json.dumps({"gemini_visual_audit": str(output_path), "status": status}, ensure_ascii=False, indent=2))
     if status != "pass":

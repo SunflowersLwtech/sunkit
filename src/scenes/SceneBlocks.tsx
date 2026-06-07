@@ -69,7 +69,7 @@ const splitRow = (row: string, fallbackIndex: number): [string, string, string] 
   if (parts.length === 2) {
     return [`维度 ${fallbackIndex + 1}`, parts[0], parts[1]];
   }
-  return [`维度 ${fallbackIndex + 1}`, row, '待验证'];
+  return [`维度 ${fallbackIndex + 1}`, row, '判断边界'];
 };
 
 const fitLines = (value: string, maxLines: number, maxBoxWidth: number, maxFontSize: number) =>
@@ -238,7 +238,7 @@ const CompareTableScene: React.FC<SceneBlockProps> = ({scene, data}) => {
         <div className="compare-table-head">
           <span>维度</span>
           <span>{text(scene.props, ['leftLabel'], '当前方案', 14)}</span>
-          <span>{text(scene.props, ['rightLabel'], '验证边界', 14)}</span>
+          <span>{text(scene.props, ['rightLabel'], '失败边界', 14)}</span>
         </div>
         {rows.map((row, index) => {
           const [label, left, right] = splitRow(row, index);
@@ -289,7 +289,7 @@ const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => 
               </div>
             );
           })}
-          <div className="terminal-status">verified boundary: source-backed, not hype</div>
+          <div className="terminal-status">evidence boundary: source-backed, not hype</div>
         </div>
       </div>
     </AbsoluteFill>
@@ -298,7 +298,7 @@ const TerminalScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => 
 
 const FlowScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
   const enter = useEnter(2);
-  const nodes = list(scene.props.nodes || scene.props.steps || scene.props.items, ['输入', '核心模块', '输出', '验证门槛'], 5);
+  const nodes = list(scene.props.nodes || scene.props.steps || scene.props.items, ['输入', '核心模块', '输出', '失败边界'], 5);
   return (
     <AbsoluteFill className="scene scene-flow" style={{opacity: enter}}>
       <Kicker tone="cyan">{text(scene.props, ['kicker'], '机制怎么跑', 18)}</Kicker>
@@ -345,7 +345,7 @@ const ChartScene: React.FC<SceneBlockProps> = ({scene, data, audioPulse}) => {
         <div className="chart-copy">
           <h2>{text(scene.props, ['heading', 'title'], data.displayTitle, 56)}</h2>
           <div className="chart-value">{text(scene.props, ['value', 'stat'], data.audienceMetricLine, 28)}</div>
-          <p>{text(scene.props, ['label'], '热度只当信号，结论要看验证路径。', 48)}</p>
+          <p>{text(scene.props, ['label'], '热度只当信号，结论要看判断框架。', 48)}</p>
         </div>
         <svg className="chart-svg" viewBox="0 0 920 340" role="img">
           {[0, 1, 2, 3].map((line) => (
@@ -426,7 +426,7 @@ const CtaScene: React.FC<SceneBlockProps> = ({scene, data}) => {
   const enter = useEnter(2);
   return (
     <AbsoluteFill className="scene scene-cta" style={{opacity: enter}}>
-      <Kicker tone="red">{text(scene.props, ['kicker'], '先别急着下结论', 18)}</Kicker>
+      <Kicker tone="red">{text(scene.props, ['kicker'], '判断框架', 18)}</Kicker>
       <div className="cta-text" style={{transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`}}>
         {text(scene.props, ['text'], data.cta, 48)}
       </div>

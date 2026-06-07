@@ -17,6 +17,7 @@ from agent_harness.core import Artifact, Gate, HarnessContext, StageResult, utc_
 from agent_harness.douyin_distribution import evaluate_douyin_distribution_gate
 from agent_harness.evidence import strong_research_review_errors, write_evidence_artifacts
 from agent_harness.policy import content_profile, policy_format, policy_get, unsupported_terms
+from agent_harness.premium_director import compile_premium_agent_visual, normalize_premium_director_spec
 from agent_harness.research import run_research_enrichment
 from agent_harness.service_artifacts import (
     build_scene_plan_artifact,
@@ -425,13 +426,6 @@ def build_video_payload(
             raise RuntimeError(f"DeepSeek polish storyboard did not pass validation: {exc}") from exc
     elif polish:
         raise RuntimeError("DeepSeek polish storyboard is required; default storyboard fallback is not allowed in provider mode")
-    agent_visual: dict[str, Any] | None = None
-    if polish:
-        try:
-            agent_visual = require_agent_visual((polish or {}).get("agent_visual") or (polish or {}).get("agentVisual"))
-        except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
-
     cards = (polish or {}).get("cards") or (card_scenes(storyboard) if storyboard else []) or profile_cards
     if not polish and len(cards) < len(profile_cards):
         cards = list(cards) + profile_cards[len(cards):]
@@ -494,6 +488,22 @@ def build_video_payload(
         storyboard_style["motion"] = video_profile["motion"]
         storyboard["style"] = storyboard_style
 
+    premium_director_spec: dict[str, Any] | None = None
+    agent_visual: dict[str, Any] | None = None
+    if polish:
+        try:
+            premium_director_spec = normalize_premium_director_spec(
+                (polish or {}).get("premium_director_spec") or (polish or {}).get("visual_recipe"),
+                candidate=candidate,
+                polish=polish,
+                video_profile=video_profile,
+            )
+            agent_visual = require_agent_visual(
+                compile_premium_agent_visual(premium_director_spec, reason="render payload premium director compiler")
+            )
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(f"premium director spec is required for provider render: {exc}") from exc
+
     return {
         "badge": badge,
         "title": _sanitize_display(display_title, 90),
@@ -510,6 +520,8 @@ def build_video_payload(
         "verificationNextStep": verification_next_step,
         "cards": cards,
         "storyboard": storyboard,
+        "premium_director_spec": premium_director_spec,
+        "premiumDirectorSpec": premium_director_spec,
         "agentVisual": agent_visual or {"enabled": False},
         "agentVisualRequired": bool(polish),
         "videoProfile": video_profile,
@@ -1744,6 +1756,53 @@ class PublishPackageStage:
         )
 
 
+def public_content_preflight_text(render_payload: dict[str, Any], polish: dict[str, Any], post_dir: Path) -> str:
+    visual = render_payload.get("agentVisual") or render_payload.get("agent_visual") or {}
+    if not isinstance(visual, dict):
+        visual = {}
+    public_render_payload = {
+        "title": render_payload.get("title"),
+        "displayTitle": render_payload.get("displayTitle"),
+        "speechTitle": render_payload.get("speechTitle"),
+        "summary": render_payload.get("summary"),
+        "metricLine": render_payload.get("metricLine"),
+        "audienceMetricLine": render_payload.get("audienceMetricLine"),
+        "voiceoverText": render_payload.get("voiceoverText"),
+        "cta": render_payload.get("cta"),
+        "footer": render_payload.get("footer"),
+        "cards": render_payload.get("cards"),
+        "storyboard": render_payload.get("storyboard"),
+        "premiumDirectorSpec": render_payload.get("premiumDirectorSpec"),
+        "agentVisual": {
+            "description": visual.get("description"),
+            "visible_text": visual.get("visible_text"),
+        },
+    }
+    public_polish = {
+        "polished_title": polish.get("polished_title"),
+        "voiceover_text": polish.get("voiceover_text"),
+        "douyin_title": polish.get("douyin_title"),
+        "douyin_desc": polish.get("douyin_desc"),
+        "tags": polish.get("tags"),
+        "cards": polish.get("cards"),
+        "storyboard": polish.get("storyboard"),
+        "caveats": polish.get("caveats"),
+        "premium_director_spec": polish.get("premium_director_spec"),
+    }
+    post_texts = []
+    for name in ("douyin_title.txt", "douyin_desc.txt", "douyin_tags.txt"):
+        path = post_dir / name
+        if path.exists():
+            post_texts.append(path.read_text(encoding="utf-8"))
+    return " ".join(
+        [
+            json.dumps(public_render_payload, ensure_ascii=False),
+            json.dumps(public_polish, ensure_ascii=False),
+            *post_texts,
+        ]
+    )
+
+
 @dataclass(frozen=True)
 class ContentPreflightStage:
     name: str = "content_preflight"
@@ -1756,12 +1815,10 @@ class ContentPreflightStage:
         if post_dir is None:
             post_dir = context.run_dir / "post"
         unsafe_terms = unsupported_terms()
-        generated_text = " ".join(
-            [
-                json.dumps(context.state.get("render_payload") or {}, ensure_ascii=False),
-                json.dumps(context.state.get("deepseek_polish") or {}, ensure_ascii=False),
-                (post_dir / "douyin_desc.txt").read_text(encoding="utf-8"),
-            ]
+        generated_text = public_content_preflight_text(
+            context.state.get("render_payload") or {},
+            context.state.get("deepseek_polish") or {},
+            Path(post_dir),
         )
         unsafe_hits = [term for term in unsafe_terms if term.lower() in generated_text.lower()]
         cross_check_path = context.run_dir / "cross_check_review.json"

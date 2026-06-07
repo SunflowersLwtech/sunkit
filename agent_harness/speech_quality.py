@@ -36,6 +36,14 @@ def normalize_repo_slashes_for_speech(text: str) -> str:
 
 def normalize_voiceover_text(text: str) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
+
+    def normalize_io(match: re.Match[str]) -> str:
+        context = f"{clean[max(0, match.start() - 24):match.start()]} {clean[match.end():match.end() + 24]}"
+        if re.search(r"Google|Search|\b20\d{2}\b|大会|发布会", context, re.I):
+            return "I O"
+        return "输入输出"
+
+    clean = re.sub(r"(?<![A-Za-z])I\s*[/，,／]\s*O(?![A-Za-z])", normalize_io, clean, flags=re.I)
     clean = URL_RE.sub(lambda m: m.group(0).replace("https://", "").replace("http://", "").replace("/", " 的 "), clean)
     clean = normalize_repo_slashes_for_speech(clean)
     clean = re.sub(r"(?<=\w)\.sh\b", " shell 脚本", clean)
@@ -79,23 +87,23 @@ def verification_next_step_for_candidate(candidate: dict[str, Any]) -> str:
         return str(
             policy_get(
                 "content.profiles.operator_topic.verification_next_step",
-                "下一步应补充 demo、源码细节或真实使用记录，再判断是否值得发布。",
+                "判断时先看机制是否成立、架构位置是否清楚、失败边界是否可控。",
             )
         )
     signals = candidate.get("signals") or {}
     if signals.get("has_demo_keyword"):
-        return "下一步应跑通 demo 或复核官方说明，再决定是否发布。"
+        return "判断时把 demo 路径、适用负载和失败边界分开看。"
     if signals.get("has_code_signal"):
-        return "下一步应检查源码、安装路径和最小示例，再判断是否值得推荐。"
-    return "下一步应补充官方来源、demo 或真实使用记录，再判断是否值得发布。"
+        return "判断时看源码入口、安装路径、最小示例和维护边界是否匹配。"
+    return "判断时先区分来源证据、机制线索、适用场景和失败边界。"
 
 
 def unverified_quality_warning(candidate: dict[str, Any]) -> str | None:
     level = evidence_level_for_candidate(candidate)
     if level.endswith("unverified"):
-        return "未发现 demo、源码细节或真实使用证据，默认按观察稿处理。"
+        return "未发现 demo、源码细节或真实使用证据，只能做证据边界内的机制拆解。"
     if level == "operator_topic_unverified":
-        return "指定主题未附外部来源，默认按待验证观察稿处理。"
+        return "指定主题未附外部来源，只能做证据边界内的判断框架。"
     return None
 
 

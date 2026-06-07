@@ -135,7 +135,7 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
             "heading": _first_text(raw, ("heading", "title"), "", 56),
             "leftLabel": _first_text(raw, ("leftLabel",), "已知", 14),
             "left": _first_text(raw, ("left",), "", 90),
-            "rightLabel": _first_text(raw, ("rightLabel",), "待证", 14),
+            "rightLabel": _first_text(raw, ("rightLabel",), "边界", 14),
             "right": _first_text(raw, ("right",), "", 90),
         }
     if scene_type == "compare_table":
@@ -143,7 +143,7 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
             "kicker": _first_text(raw, ("kicker",), "横向比较", 18),
             "heading": _first_text(raw, ("heading", "title"), "", 56),
             "leftLabel": _first_text(raw, ("leftLabel",), "当前方案", 14),
-            "rightLabel": _first_text(raw, ("rightLabel",), "验证边界", 14),
+            "rightLabel": _first_text(raw, ("rightLabel",), "失败边界", 14),
             "rows": _normalize_items(raw.get("rows") or raw.get("items"), limit=76, max_items=4),
         }
     if scene_type == "terminal":
@@ -184,7 +184,7 @@ def normalize_scene_props(scene_type: str, props: Any) -> dict[str, Any]:
         }
     if scene_type == "cta":
         return {
-            "kicker": _first_text(raw, ("kicker",), "先别急着下结论", 18),
+            "kicker": _first_text(raw, ("kicker",), "判断框架", 18),
             "text": _first_text(raw, ("text",), "", 48),
             "footer": _first_text(raw, ("footer",), "", 80),
         }
@@ -339,7 +339,7 @@ def derive_default_storyboard(
                     "heading": "热度不是结论，但能说明关注方向",
                     "label": "公开指标",
                     "value": audience_metric,
-                    "points": ["来源", "关注", "验证"],
+                    "points": ["来源", "关注", "判断"],
                 },
             }
         )
@@ -349,7 +349,7 @@ def derive_default_storyboard(
                 {
                     "type": "terminal",
                     "props": {
-                        "kicker": "开发者会先这样验证",
+                        "kicker": "开发者会先这样判断",
                         "title": "最小上手路径",
                         "prompt": "$",
                         "lines": ["clone / install", "run quick start", "inspect examples", "check tests"],
@@ -360,7 +360,7 @@ def derive_default_storyboard(
                     "props": {
                         "kicker": "机制不要只靠文字讲",
                         "heading": "把 repo 还原成一条工作流",
-                        "nodes": ["输入", "核心模块", "输出", "验证门槛"],
+                        "nodes": ["输入", "核心模块", "输出", "失败边界"],
                         "caption": "这类场景让 agent 用结构图解释机制，而不是堆段落。",
                     },
                 },
@@ -392,7 +392,7 @@ def derive_default_storyboard(
         {
             "type": "cta",
             "props": {
-                "kicker": "先别急着下结论",
+                "kicker": "判断框架",
                 "text": cta,
                 "footer": verification_next_step or footer,
             },

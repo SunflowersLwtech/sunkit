@@ -21,7 +21,40 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from agent_harness.policy import policy_get
+from agent_harness.content_guard import dismissive_verification_hits
 from build_captions import orphan_caption_texts
+
+
+SCENE_GRAMMAR_FAMILIES = {
+    "HeroProblemScene": "hero_problem",
+    "MechanismExplodedView": "mechanism_exploded_view",
+    "RepoFileTreeReveal": "repo_file_tree",
+    "ArchitectureFlowScene": "architecture_flow",
+    "MetricComparisonScene": "metric_comparison",
+    "DecisionMatrixScene": "decision_matrix",
+    "TimelineBuildScene": "timeline_build",
+    "CodeOrTerminalScene": "code_terminal",
+    "KnowledgeTakeawayScene": "knowledge_takeaway",
+}
+
+MOTION_GRAMMAR_FAMILIES = {
+    "camera_push": "camera_depth",
+    "camera_pan": "camera_depth",
+    "pan": "camera_depth",
+    "parallax": "depth_layers",
+    "mask_reveal": "mask_reveal",
+    "path_draw": "vector_path_build",
+    "metric_count": "metric_counter",
+    "morph": "metric_morph",
+    "typewriter": "code_terminal_type",
+    "object_focus": "object_focus",
+    "dwell": "readable_dwell",
+    "reveal": "basic_reveal",
+    "build": "basic_build",
+}
+
+CINEMATIC_MOTION = {"camera_push", "camera_pan", "pan", "parallax"}
+INFORMATION_MOTION = {"mask_reveal", "path_draw", "metric_count", "morph", "typewriter"}
 
 
 def utc_now() -> str:
@@ -81,6 +114,144 @@ def _layout(run_dir: Path) -> dict[str, Any]:
     height = int(props.get("height") or 1920)
     orientation = str(props.get("orientation") or ("horizontal" if width > height else "vertical"))
     return {"width": width, "height": height, "orientation": orientation}
+
+
+def _premium_director_contract_checks(run_dir: Path) -> tuple[list[str], dict[str, Any]]:
+    props = read_json(run_dir / "remotion_input_props.json")
+    errors: list[str] = []
+    spec = (
+        props.get("premiumDirectorSpec")
+        or props.get("premium_director_spec")
+        or props.get("visualRecipe")
+        or props.get("visual_recipe")
+    )
+    agent_visual = props.get("agentVisual") if isinstance(props.get("agentVisual"), dict) else {}
+    required = bool(props.get("agentVisualRequired"))
+    check: dict[str, Any] = {
+        "agent_visual_required": required,
+        "agent_visual_enabled": bool(agent_visual.get("enabled")),
+        "agent_visual_source": agent_visual.get("source"),
+        "premium_director_spec_present": isinstance(spec, dict),
+        "scene_count": 0,
+        "distinct_scene_types": [],
+        "scene_grammar_family_count": 0,
+        "scene_grammar_families": [],
+        "topic_object_count": 0,
+        "motion_beat_count": 0,
+        "motion_grammar_types": [],
+        "motion_grammar_family_count": 0,
+        "motion_grammar_families": [],
+        "cinematic_motion_types": [],
+        "information_motion_types": [],
+        "full_canvas_keynote_scene_count": 0,
+    }
+    public_payload = {
+        "title": props.get("title"),
+        "summary": props.get("summary"),
+        "metricLine": props.get("metricLine"),
+        "audienceMetricLine": props.get("audienceMetricLine"),
+        "qualityWarnings": props.get("qualityWarnings"),
+        "verificationNextStep": props.get("verificationNextStep"),
+        "cards": props.get("cards"),
+        "storyboard": props.get("storyboard"),
+        "voiceoverText": props.get("voiceoverText"),
+        "cta": props.get("cta"),
+        "footer": props.get("footer"),
+    }
+    banned_hits = dismissive_verification_hits(public_payload)
+    check["dismissive_verification_hits"] = banned_hits
+    if banned_hits:
+        errors.append(f"public payload contains banned dismissive verification phrasing: {banned_hits}")
+    if not required:
+        return errors, check
+    if not agent_visual.get("enabled"):
+        errors.append("provider render requires enabled agentVisual")
+    if agent_visual.get("source") != "premium_director_compiler":
+        errors.append("provider render agentVisual must come from premium_director_compiler")
+    if not isinstance(spec, dict):
+        errors.append("provider render requires premiumDirectorSpec")
+        return errors, check
+    profile = spec.get("profile") if isinstance(spec.get("profile"), dict) else {}
+    scenes = spec.get("visual_scenes") if isinstance(spec.get("visual_scenes"), list) else []
+    scene_types = sorted(
+        {
+            str(scene.get("scene_type") or scene.get("kind") or "")
+            for scene in scenes
+            if isinstance(scene, dict) and (scene.get("scene_type") or scene.get("kind"))
+        }
+    )
+    grammar_families = sorted({SCENE_GRAMMAR_FAMILIES.get(scene_type, scene_type) for scene_type in scene_types})
+    objects = spec.get("topic_objects") if isinstance(spec.get("topic_objects"), list) else []
+    motion_beats = spec.get("motion_beats") if isinstance(spec.get("motion_beats"), list) else []
+    scene_motion_types = sorted(
+        {
+            str(beat)
+            for scene in scenes
+            if isinstance(scene, dict)
+            for beat in (scene.get("motion_beats") if isinstance(scene.get("motion_beats"), list) else [])
+            if str(beat)
+        }
+    )
+    global_motion_types = sorted(
+        {
+            str(beat.get("type") or beat.get("motion") or "")
+            for beat in motion_beats
+            if isinstance(beat, dict) and (beat.get("type") or beat.get("motion"))
+        }
+    )
+    motion_types = sorted({*scene_motion_types, *global_motion_types})
+    motion_families = sorted({MOTION_GRAMMAR_FAMILIES.get(motion_type, motion_type) for motion_type in motion_types})
+    cinematic_motion = sorted(set(motion_types) & CINEMATIC_MOTION)
+    information_motion = sorted(set(motion_types) & INFORMATION_MOTION)
+    full_canvas_scene_count = len(
+        [
+            scene
+            for scene in scenes
+            if isinstance(scene, dict) and str(scene.get("layout") or "").lower() == "full_canvas_keynote"
+        ]
+    )
+    check.update(
+        {
+            "scene_count": len(scenes),
+            "distinct_scene_types": scene_types,
+            "scene_grammar_family_count": len(grammar_families),
+            "scene_grammar_families": grammar_families,
+            "topic_object_count": len(objects),
+            "motion_beat_count": len(motion_beats),
+            "scene_motion_types": scene_motion_types,
+            "global_motion_types": global_motion_types,
+            "motion_grammar_types": motion_types,
+            "motion_grammar_family_count": len(motion_families),
+            "motion_grammar_families": motion_families,
+            "cinematic_motion_types": cinematic_motion,
+            "information_motion_types": information_motion,
+            "full_canvas_keynote_scene_count": full_canvas_scene_count,
+            "profile_orientation": profile.get("orientation"),
+        }
+    )
+    if len(scenes) < 5:
+        errors.append(f"premiumDirectorSpec.visual_scenes must contain at least 5 scenes, got {len(scenes)}")
+    if len(scene_types) < 4:
+        errors.append(f"premiumDirectorSpec must contain at least 4 distinct scene types, got {scene_types}")
+    if len(grammar_families) < 3:
+        errors.append(f"premiumDirectorSpec must contain at least 3 visual grammar families, got {grammar_families}")
+    if full_canvas_scene_count != len(scenes):
+        errors.append(f"premiumDirectorSpec scenes must all use full_canvas_keynote layout, got {full_canvas_scene_count}/{len(scenes)}")
+    if len(motion_types) < 6:
+        errors.append(f"premiumDirectorSpec must contain at least 6 distinct motion grammar types, got {motion_types}")
+    if not cinematic_motion:
+        errors.append("premiumDirectorSpec must include at least one cinematic motion type: camera_push, camera_pan, pan, or parallax")
+    if len(information_motion) < 3:
+        errors.append(f"premiumDirectorSpec must include at least 3 information-design motion types, got {information_motion}")
+    if len(motion_families) < 5:
+        errors.append(f"premiumDirectorSpec must contain at least 5 motion grammar families, got {motion_families}")
+    if len(objects) < 3:
+        errors.append(f"premiumDirectorSpec.topic_objects must contain at least 3 objects, got {len(objects)}")
+    if len(motion_beats) < 3:
+        errors.append(f"premiumDirectorSpec.motion_beats must contain at least 3 beats, got {len(motion_beats)}")
+    if profile.get("orientation") and profile.get("orientation") != props.get("orientation"):
+        errors.append(f"premiumDirectorSpec profile orientation {profile.get('orientation')} does not match payload orientation {props.get('orientation')}")
+    return errors, check
 
 
 def _extract_frames(video: Path, run_dir: Path, duration_frames: int, fps: int) -> tuple[list[dict[str, Any]], list[str]]:
@@ -166,6 +337,9 @@ def main() -> int:
 
     duration_frames, fps = _duration(run_dir)
     layout = _layout(run_dir)
+    premium_errors, premium_check = _premium_director_contract_checks(run_dir)
+    errors.extend(premium_errors)
+    checks["premium_director_contract"] = premium_check
     captions = _caption_segments(run_dir)
     punch_words = {str(item).strip() for item in policy_get("visual_audit.punch_words", [])}
     short_segments = orphan_caption_texts(captions, punch_words)

@@ -65,6 +65,8 @@ export type Payload = {
     description?: string;
     validation_errors?: string[];
   };
+  premiumDirectorSpec?: unknown;
+  visualRecipe?: unknown;
   agentVisualRequired?: boolean;
   qualityWarnings: string[];
   verificationNextStep: string;

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agent_harness.douyin_distribution import evaluate_douyin_distribution_gate
 from agent_harness.evidence import build_evidence_bundle, cross_check_evidence, http_source_url
-from agent_harness.stages import build_claims_ledger, build_douyin_copy, build_main_task_plan, build_video_payload, write_post_artifacts
+from agent_harness.stages import build_claims_ledger, build_douyin_copy, build_main_task_plan, build_video_payload, public_content_preflight_text, write_post_artifacts
 from scripts.content_scorer import deterministic_blocking_checks
 
 
@@ -43,6 +43,30 @@ STRONG_REVIEW = {
 
 
 class PostContractTests(unittest.TestCase):
+    def test_content_preflight_scans_public_text_not_provider_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            post_dir = Path(tmp) / "post"
+            post_dir.mkdir()
+            (post_dir / "douyin_title.txt").write_text("Google 搜索 AI 模式怎么用", encoding="utf-8")
+            (post_dir / "douyin_desc.txt").write_text("讲清机制、适用边界和内容创作者机会。", encoding="utf-8")
+            (post_dir / "douyin_tags.txt").write_text("AI搜索\nGoogle\n", encoding="utf-8")
+            (post_dir / "posting_pack.md").write_text("Operational note: first public pass is contract-check only.", encoding="utf-8")
+            text = public_content_preflight_text(
+                {"title": "Google 搜索 AI 模式", "voiceoverText": "搜索框变成任务入口。"},
+                {
+                    "polished_title": "Google 搜索 AI 模式",
+                    "voiceover_text": "搜索框变成任务入口。",
+                    "douyin_desc": "讲清机制、适用边界和内容创作者机会。",
+                    "initial_error": "DeepSeek candidate contains unsupported claim terms: ['第一']",
+                    "tts_style": "开头第一句稍微更有好奇感。",
+                },
+                post_dir,
+            )
+
+        self.assertNotIn("initial_error", text)
+        self.assertNotIn("开头第一句", text)
+        self.assertNotIn("第一", text)
+
     def test_claims_ledger_covers_public_fields(self) -> None:
         candidate = {
             "candidate_id": "cand-1",

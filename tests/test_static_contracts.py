@@ -32,6 +32,12 @@ class StaticContractTests(unittest.TestCase):
         self.assertIn("legacy card fallback is not allowed", composition)
         self.assertNotIn("deriveStoryboardFromCards", composition)
 
+    def test_render_payload_schema_round_trips_premium_director_spec_aliases(self) -> None:
+        schema = json.loads((ROOT / "contracts" / "schemas" / "render_payload.schema.json").read_text(encoding="utf-8"))
+        self.assertIn("premium_director_spec", schema["properties"])
+        self.assertIn("premiumDirectorSpec", schema["properties"])
+        self.assertEqual(schema["properties"]["premium_director_spec"], schema["properties"]["premiumDirectorSpec"])
+
     def test_contract_finalization_has_no_live_gate_or_live_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
@@ -55,7 +61,12 @@ class StaticContractTests(unittest.TestCase):
                     "cover_path": str(cover_dir / "final.jpg"),
                 },
             )
-            for name in ["render_metadata_check.json", "visual_audit_deterministic.json", "gemini_visual_audit.json"]:
+            for name in [
+                "render_metadata_check.json",
+                "visual_audit_deterministic.json",
+                "gemini_visual_audit.json",
+                "premium_showcase_audit.json",
+            ]:
                 write_json(run_dir / name, {"status": "pass"})
             write_json(post_dir / "douyin_upload_check.json", {"status": "pass", "publish_mode": "contract-check"})
             board = TaskBoard(run_dir / "harness_board.sqlite3")
@@ -82,6 +93,7 @@ class StaticContractTests(unittest.TestCase):
             self.assertEqual(final["execution_profile"], "provider")
             self.assertEqual(final["render_mode"], "local")
             self.assertEqual(final["publish_mode"], "contract-check")
+            self.assertEqual(final["premium_showcase_audit_status"], "pass")
             gate_names = {gate["name"] for gate in final["board_snapshot"]["gates"]}
             self.assertIn("publish_release_gate", gate_names)
             self.assertNotIn("douyin_live_publish_gate", gate_names)

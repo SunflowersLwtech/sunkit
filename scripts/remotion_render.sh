@@ -18,6 +18,7 @@ CRF="${SEARCHPO_RENDER_CRF:-18}"
 AUDIO_BITRATE="${SEARCHPO_RENDER_AUDIO_BITRATE:-192K}"
 IMAGE_FORMAT="${SEARCHPO_RENDER_IMAGE_FORMAT:-jpeg}"
 JPEG_QUALITY="${SEARCHPO_RENDER_JPEG_QUALITY:-95}"
+CONCURRENCY="${SEARCHPO_RENDER_CONCURRENCY:-2}"
 
 resolve_node_bin() {
   local candidates=(
@@ -56,7 +57,8 @@ case "$ACTION" in
       --crf="$CRF" \
       --audio-bitrate="$AUDIO_BITRATE" \
       --image-format="$IMAGE_FORMAT" \
-      --jpeg-quality="$JPEG_QUALITY"
+      --jpeg-quality="$JPEG_QUALITY" \
+      --concurrency="$CONCURRENCY"
     ;;
   cover)
     COVER_OUT="${SEARCHPO_COVER_OUTPUT:-out/searchpo-cover.jpg}"

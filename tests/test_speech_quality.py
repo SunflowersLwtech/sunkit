@@ -9,6 +9,7 @@ from agent_harness.speech_quality import (
     normalize_voiceover_text,
     plan_cover_title_lines,
 )
+from agent_harness.content_guard import scrub_dismissive_verification_text
 from scripts.build_captions import build_caption_segments, orphan_caption_texts
 
 
@@ -52,6 +53,35 @@ class SpeechQualityTests(unittest.TestCase):
             {"text": "Word 等文件直接转成 Markdown", "start_frame": 51, "end_frame": 100},
         ]
         self.assertEqual(orphan_caption_texts(segments, set()), [])
+
+    def test_caption_orphan_detector_allows_single_technical_tokens(self) -> None:
+        segments = [
+            {"text": "python", "start_frame": 0, "end_frame": 20},
+            {"text": "resolver", "start_frame": 21, "end_frame": 40},
+            {"text": "uv", "start_frame": 41, "end_frame": 60},
+            {"text": "pip-tools", "start_frame": 61, "end_frame": 80},
+            {"text": "O", "start_frame": 81, "end_frame": 100},
+        ]
+        self.assertEqual(orphan_caption_texts(segments, set()), ["O"])
+        self.assertIn("输入输出", normalize_voiceover_text("网络 I/O 是瓶颈"))
+        self.assertIn("输入输出", normalize_voiceover_text("网络 I，O 是瓶颈"))
+        self.assertNotIn("I/O", normalize_voiceover_text("网络 I/O 是瓶颈"))
+
+    def test_voiceover_preserves_google_io_event_name(self) -> None:
+        text = normalize_voiceover_text("Google 在 I/O 2026 上更新 AI Mode。")
+        self.assertIn("Google 在 I O 2026", text)
+        self.assertNotIn("输入输出", text)
+
+    def test_scrubber_repairs_first_hand_experience_copy(self) -> None:
+        payload = {
+            "voiceover_text": "如果你提供第一手经验，AI 会更容易引用。",
+            "cards": [{"detail": "AI 优先引用手经验，同质化内容可能被忽略。"}],
+            "summary": "RAG 生成答案并附上来源链接。",
+        }
+        cleaned = scrub_dismissive_verification_text(payload)
+        self.assertEqual(cleaned["voiceover_text"], "如果你提供一手经验，AI 会更容易引用。")
+        self.assertEqual(cleaned["cards"][0]["detail"], "AI 优先引用一手经验，同质化内容可能被忽略。")
+        self.assertEqual(cleaned["summary"], "RAG 生成答案并附上来源标注。")
 
     def test_caption_orphan_detector_allows_platform_punch_words(self) -> None:
         segments = [
