@@ -1,0 +1,17 @@
+# System
+.DS_Store
+.playwright-mcp/
+
+# Separate git repos (tracked independently)
+polanyi-design/
+tests/
+
+# External reference material (large, contains embedded repos)
+reference/
+
+# Unrelated test files
+test/
+
+# Snapshots (auto-generated)
+design-md-snapshot.md
+design-md-overview-snapshot.md
