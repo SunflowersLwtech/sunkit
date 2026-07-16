@@ -55,6 +55,7 @@ The target candidate has:
 - `scripts/run_e2e.sh`: profile-driven E2E from source probes through render and Douyin checks.
 - `docs/`: production structure, claim governance, runbooks, and env ownership.
 - `contracts/schemas/`: JSON contracts for generated payloads and post manifests.
+- `x-threads/`: the merged `github-repo-to-x-threads` skillpack — turns repos, papers, URLs, and ideas into responsible X/Twitter posting packs with image assets and optional official X API publishing. It is Searchpo's X distribution channel next to the Douyin video pipeline. It was merged in with full commit history via `git subtree`; it keeps its own `AGENTS.md`, `skills/RESOLVER.md`, plugin manifests, and installer, and is routed from `skills/RESOLVER.md` here.
 
 `runtime/` is ignored local runtime state. It currently contains historical `oss_agent_layer`, `multica`, and `social-auto-upload` checkouts/runs. Treat it as operational evidence, not tracked source. The tracked harness now lives under `agent_harness/`; `runtime/oss_agent_layer` remains a historical multi-agent prototype, not the current source of truth.
 

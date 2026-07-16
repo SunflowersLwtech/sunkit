@@ -14,6 +14,7 @@ This is the dispatcher for the Searchpo skill bundle. Read the matching `SKILL.m
 | Inspect `.env` key availability, provider/API routing, DeepWiki MCP availability, side-effect capability selection | `skills/searchpo-agent-capabilities/SKILL.md` |
 | Edit `src/`, captions, cover, Remotion metadata, render quality, Lambda render | `skills/remotion-best-practices/SKILL.md` |
 | Validate Claude/Codex bridge map, skill/command/agent frontmatter, bridge sync, install health | `skills/searchpo-plugin-check/SKILL.md` |
+| X/Twitter posting pack, repo/paper-to-X threads, X image assets, official X API publish, posting strategy memory | `x-threads/skills/github-repo-to-x-threads/SKILL.md` |
 
 ## Dispatch Rules
 
@@ -31,3 +32,4 @@ This is the dispatcher for the Searchpo skill bundle. Read the matching `SKILL.m
 - `.mcp.json` declares project MCP servers; DeepWiki belongs to repo research and does not replace canonical evidence.
 - `vendor/anysearch-skill` is the project-vendored AnySearch runtime; do not put API keys there.
 - Runtime artifacts under `runtime/` are evidence, not durable source.
+- `x-threads/` is the merged `github-repo-to-x-threads` skillpack (X/Twitter distribution channel). It keeps its own `AGENTS.md`, resolver, manifests, and installer under `x-threads/`; it is routed from here but not part of the Claude/Codex bridge sync.
