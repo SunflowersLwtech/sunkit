@@ -447,7 +447,7 @@ const TeachingBeatStrip: React.FC<{scene: ShowcaseScene; frame: number; fps: num
     <div
       style={{
         position: 'absolute',
-        right: 72,
+        right: 180,
         top: 136,
         width: 560,
         display: 'grid',
@@ -1487,7 +1487,7 @@ const HeroScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
     );
   }
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 78px 92px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 180px 92px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.82fr 1.18fr' : '1fr', gap: isHorizontal ? 58 : 38, alignItems: 'center'}}>
         <div style={{opacity: soft(enter, 0.78), transform: `translateX(${(1 - enter) * -28}px)`}}>
           <div style={{fontSize: isHorizontal ? 22 : 18, color: scene.tone, fontWeight: 950}}>先把问题钉住</div>
@@ -1593,9 +1593,9 @@ const MechanismScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; fram
         <div
           style={{
             position: 'absolute',
-            left: 74,
+            left: 180,
             top: 118,
-            right: 72,
+            right: 180,
             height: 650,
             transform: `perspective(1500px) translate3d(${Math.sin(frame / 132) * -20}px, ${Math.cos(frame / 148) * 8}px, 0) rotateY(${interpolate(localFrame, [0, 94], [8, 1.5], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}deg)`,
             transformStyle: 'preserve-3d',
@@ -1640,7 +1640,7 @@ const MechanismScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; fram
     );
   }
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '164px 72px 78px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '164px 180px 78px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.8fr 1.2fr' : '1fr', gap: 40, alignItems: 'center'}}>
         <div>
           <div style={{fontSize: 20, color: scene.tone, fontWeight: 950}}>机制不是结论，是因果链</div>
@@ -1741,7 +1741,7 @@ const ArchitectureScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; f
     : model.objects.slice(0, 5).map((object, index) => [clean(object.label, 18), clean(object.detail, 30), object.tone]);
   const route = interpolate(localFrame, [16, sceneFrames * 0.82], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '162px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '162px 180px 82px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? (repoMode ? '1fr' : '1.1fr 0.9fr') : '1fr', gap: 40}}>
         <div
           style={{
@@ -1849,7 +1849,7 @@ const RepoScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
     );
   }
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '162px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '162px 180px 82px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.72fr 1.28fr' : '1fr', gap: 38, alignItems: 'center'}}>
         {isHorizontal ? (
           <div style={{display: 'grid', alignContent: 'center'}}>
@@ -1918,7 +1918,7 @@ const CodeScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: nu
   const active = Math.min(profile.lines.length - 1, Math.floor(interpolate(localFrame, [8, 96], [0, profile.lines.length], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})));
   const terminalEntry = spring({frame: localFrame - 2, fps, config: {damping: 18, stiffness: 220}});
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 180px 82px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: '1fr', gap: 36, placeItems: 'center'}}>
         <div
           style={{
@@ -1988,7 +1988,7 @@ const MetricScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame: 
     {label: guardLabelFor(model, 14), role: '审查债务', detail: clean(model.arc.failure_boundary || '验收条件缺失时放大错误', 42), tone: palette.coral, x: 492, y: 118},
   ];
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 180px 82px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.92fr 1.08fr' : '1fr', gap: 42, alignItems: 'center'}}>
         <div>
           <div style={{fontSize: 18, color: scene.tone, fontWeight: 950}}>不是排名，是取舍坐标</div>
@@ -2143,84 +2143,128 @@ const RepoBoundaryDiagram: React.FC<{model: ShowcaseModel; scene: ShowcaseScene;
   height,
 }) => {
   const isHorizontal = width > height;
-  const reveal = interpolate(localFrame, [10, 146], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const scan = interpolate(localFrame, [34, 172], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const dialTilt = interpolate(localFrame, [0, 190], [-18, 18], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const corePulse = interpolate(Math.sin(frame / 34), [-1, 1], [0.96, 1.07]);
-  const orbitShift = interpolate(frame % 180, [0, 180], [0, 560]);
-  const anchors = [
-    {key: 'fit', label: '适合', detail: clean(model.arc.practical_fit || coreLabelFor(model, 8), 8), tone: palette.green, x: 72, y: 362, path: 'M386 286 C320 302 232 326 148 390'},
-    {key: 'simple', label: '可测', detail: guardLabelFor(model, 8), tone: palette.amber, x: 300, y: 80, path: 'M390 260 C382 206 392 154 402 116'},
-    {key: 'cut', label: '风险', detail: clean(model.arc.failure_boundary || guardLabelFor(model, 8), 8), tone: palette.coral, x: 562, y: 362, path: 'M404 288 C476 304 570 332 670 390'},
+  const reveal = interpolate(localFrame, [8, 148], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const scan = interpolate((frame % 118) / 118, [0, 1], [0, 1]);
+  const activeLine = Math.min(4, Math.floor(interpolate(localFrame, [18, 136], [0, 5], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})));
+  const gateRows = [
+    {
+      label: '重复',
+      check: '任务是否高频、结构化',
+      decision: clean(model.arc.practical_fit || '适合进入循环', 34),
+      tone: palette.green,
+    },
+    {
+      label: '可测',
+      check: '验收条件是否写清',
+      decision: clean(guardLabelFor(model, 12), 34),
+      tone: scene.tone,
+    },
+    {
+      label: '回滚',
+      check: '失败成本是否可控',
+      decision: clean(model.arc.failure_boundary || '模糊任务会放大错误', 34),
+      tone: palette.coral,
+    },
+  ];
+  const terminalLines = [
+    'task = queue.next()',
+    `loop = ${coreLabelFor(model, 14)}`,
+    `gate = ${guardLabelFor(model, 14)}`,
+    'if gate.pass(): merge()',
+    'else: retry_with_trace()',
   ];
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 72px 124px' : '138px 58px 610px'}}>
-      <div style={{height: '100%', display: 'grid', gridTemplateColumns: '1fr', gap: 44, alignItems: 'center'}}>
-        <div style={{position: 'relative', height: isHorizontal ? 618 : 520, minHeight: 0, perspective: 920}}>
-          <svg width="100%" height="100%" viewBox="0 0 780 620" style={{position: 'absolute', inset: 0, overflow: 'visible'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 180px 124px' : '138px 58px 610px'}}>
+      <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.94fr 1.06fr' : '1fr', gap: isHorizontal ? 46 : 28, alignItems: 'center'}}>
+        <div
+          style={{
+            position: 'relative',
+            minHeight: isHorizontal ? 500 : 430,
+            borderRadius: 30,
+            overflow: 'hidden',
+            background: 'rgba(5,11,19,0.78)',
+            border: `1px solid ${scene.tone}78`,
+            boxShadow: `0 34px 100px rgba(0,0,0,0.32), 0 0 90px ${scene.tone}18`,
+            transform: `translateY(${Math.sin(frame / 110) * 7}px)`,
+          }}
+        >
+          <div style={{height: 48, display: 'flex', alignItems: 'center', gap: 10, padding: '0 20px', borderBottom: '1px solid rgba(255,250,240,0.12)'}}>
+            {[palette.coral, palette.amber, palette.green].map((color) => <span key={color} style={{width: 11, height: 11, borderRadius: 99, background: color}} />)}
+            <span style={{marginLeft: 10, color: palette.mist, fontSize: 16, fontWeight: 900, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'}}>claude-loop-runbook.ts</span>
+          </div>
+          <div style={{position: 'absolute', left: 0, right: 0, top: 48 + scan * 330, height: 54, background: `linear-gradient(90deg, transparent, ${scene.tone}24, transparent)`, borderTop: `1px solid ${scene.tone}33`, borderBottom: `1px solid ${scene.tone}22`}} />
+          <div style={{padding: isHorizontal ? '30px 34px' : '24px', display: 'grid', gap: 17, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace'}}>
+            {terminalLines.map((line, index) => {
+              const enter = spring({frame: localFrame - index * 10, fps, config: {damping: 22, stiffness: 118}});
+              const active = index === activeLine;
+              return (
+                <div
+                  key={line}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '54px 1fr',
+                    gap: 14,
+                    alignItems: 'center',
+                    opacity: soft(enter, 0.66),
+                    transform: `translateX(${(1 - enter) * 24}px)`,
+                  }}
+                >
+                  <span style={{color: active ? scene.tone : 'rgba(255,250,240,0.46)', fontSize: 16, fontWeight: 850}}>{String(index + 1).padStart(2, '0')}</span>
+                  <span style={{color: active ? palette.ivory : palette.mist, fontSize: isHorizontal ? 26 : 20, lineHeight: 1.12, fontWeight: active ? 930 : 760}}>
+                    {line}
+                    {active ? <span style={{color: scene.tone}}>_</span> : null}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{position: 'relative', minHeight: isHorizontal ? 500 : 430}}>
+          <svg width="100%" height="100%" viewBox="0 0 760 520" style={{position: 'absolute', inset: 0, overflow: 'visible'}}>
             <defs>
-              <linearGradient id="repoBoundarySurface" x1="0" x2="1">
-                <stop offset="0%" stopColor={palette.green} stopOpacity="0.72" />
-                <stop offset="52%" stopColor={scene.tone} stopOpacity="0.86" />
-                <stop offset="100%" stopColor={palette.coral} stopOpacity="0.78" />
+              <linearGradient id="repoBoundaryRunbookPath" x1="0" x2="1">
+                <stop offset="0%" stopColor={palette.cyan} />
+                <stop offset="50%" stopColor={scene.tone} />
+                <stop offset="100%" stopColor={palette.coral} />
               </linearGradient>
-              <linearGradient id="repoBoundaryOrbit" x1="0" x2="1">
-                <stop offset="0%" stopColor={palette.cyan} stopOpacity="0.1" />
-                <stop offset="46%" stopColor={scene.tone} stopOpacity="0.92" />
-                <stop offset="100%" stopColor={palette.amber} stopOpacity="0.12" />
-              </linearGradient>
-              <radialGradient id="repoBoundaryGlow" cx="50%" cy="52%" r="56%">
-                <stop offset="0%" stopColor={scene.tone} stopOpacity="0.42" />
-                <stop offset="100%" stopColor="transparent" stopOpacity="0" />
-              </radialGradient>
             </defs>
-            <ellipse cx="390" cy="310" rx={304 * corePulse} ry={222 * corePulse} fill="url(#repoBoundaryGlow)" />
-            <g transform={`rotate(${dialTilt} 390 310)`}>
-              <ellipse cx="390" cy="326" rx="286" ry="118" fill="rgba(255,250,240,0.052)" stroke="rgba(255,250,240,0.22)" strokeWidth="2" />
-              <ellipse cx="390" cy="326" rx="244" ry="94" fill="none" stroke="url(#repoBoundaryOrbit)" strokeWidth="6" strokeLinecap="round" strokeDasharray="180 560" strokeDashoffset={-orbitShift} />
-              <path d="M178 350 L390 184 L638 348 L388 484 Z" fill="rgba(255,250,240,0.075)" stroke="url(#repoBoundarySurface)" strokeWidth="2.5" />
-              <path d="M390 184 L390 484" stroke="rgba(255,250,240,0.16)" strokeWidth="2" strokeDasharray="8 12" />
-              <path d="M178 350 L638 348" stroke="rgba(255,250,240,0.16)" strokeWidth="2" strokeDasharray="8 12" />
-            </g>
-            {anchors.map((anchor, index) => (
-              <g key={`beam-${anchor.key}`} opacity={0.5 + reveal * 0.45}>
-                <path d={anchor.path} fill="none" stroke={anchor.tone} strokeWidth="3" strokeLinecap="round" strokeDasharray="560" strokeDashoffset={560 * (1 - reveal)} />
-                <circle cx={anchor.key === 'simple' ? 402 : anchor.key === 'fit' ? 148 : 670} cy={anchor.key === 'simple' ? 116 : 390} r={9 + Math.sin(frame / 23 + index) * 2} fill={anchor.tone} />
-              </g>
-            ))}
-            <g transform={`translate(390 300) scale(${corePulse})`}>
-              <circle r="108" fill={palette.paper} opacity="0.95" />
-              <circle r="82" fill="none" stroke={scene.tone} strokeWidth="4" opacity="0.78" />
-              <circle r="48" fill={scene.tone} opacity="0.18" />
-              <text x="0" y="14" textAnchor="middle" fill={palette.dark} fontSize="30" fontWeight="990">{guardLabelFor(model, 8)}</text>
-            </g>
-            <path d="M256 536 C320 492 504 492 578 536" fill="none" stroke="rgba(255,250,240,0.22)" strokeWidth="2" strokeDasharray="10 12" />
-            <rect x="318" y="526" width={158 * scan} height="5" rx="3" fill={scene.tone} opacity="0.78" />
+            <path d="M46 86 C182 42 294 126 362 206 C454 316 564 332 708 264" fill="none" stroke="rgba(255,250,240,0.12)" strokeWidth="24" strokeLinecap="round" />
+            <path d="M46 86 C182 42 294 126 362 206 C454 316 564 332 708 264" fill="none" stroke="url(#repoBoundaryRunbookPath)" strokeWidth="7" strokeLinecap="round" strokeDasharray="980" strokeDashoffset={980 * (1 - reveal)} />
+            <path d={`M${70 + scan * 520} 40 L${168 + scan * 520} 82 L${-20 + scan * 520} 474 L${-130 + scan * 520} 430 Z`} fill={`${scene.tone}16`} stroke={`${scene.tone}36`} strokeWidth="2" opacity="0.62" />
           </svg>
-          {anchors.map((anchor, index) => {
-            const enter = spring({frame: localFrame - index * 16, fps, config: {damping: 22, stiffness: 112}});
-            const hot = reveal * anchors.length > index + 0.58;
-            return (
-              <div
-                key={anchor.key}
-                style={{
-                  position: 'absolute',
-                  left: anchor.x,
-                  top: anchor.y,
-                  width: index === 1 ? 150 : 168,
-                  color: palette.ivory,
-                  borderLeft: `4px solid ${anchor.tone}`,
-                  paddingLeft: 16,
-                  opacity: soft(enter, 0.68),
-                  filter: `drop-shadow(0 18px 40px ${anchor.tone}28)`,
-                  transform: `translateY(${(1 - enter) * 18 + Math.sin(frame / 76 + index) * 5}px) scale(${hot ? 1.035 : 0.96})`,
-                }}
-              >
-                <div style={{fontSize: 38, lineHeight: 0.96, fontWeight: 990}}>{anchor.label}</div>
-                <div style={{marginTop: 10, fontSize: 28, lineHeight: 1.0, fontWeight: 930, color: anchor.tone}}>{anchor.detail}</div>
-              </div>
-            );
-          })}
+          <div style={{position: 'absolute', left: 34, top: 20, right: 34, display: 'grid', gap: 17}}>
+            <div style={{fontSize: 18, color: scene.tone, fontWeight: 950}}>适用边界不是口号，是三道门槛</div>
+            {gateRows.map((row, index) => {
+              const enter = spring({frame: localFrame - 12 - index * 16, fps, config: {damping: 22, stiffness: 112}});
+              const hot = reveal * gateRows.length > index + 0.5;
+              return (
+                <div
+                  key={row.label}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '98px 1fr',
+                    gap: 20,
+                    alignItems: 'center',
+                    minHeight: 118,
+                    padding: '20px 22px',
+                    borderRadius: 26,
+                    background: hot ? row.tone : 'rgba(255,250,240,0.08)',
+                    border: `1px solid ${row.tone}`,
+                    color: hot ? palette.dark : palette.ivory,
+                    boxShadow: `0 28px 78px rgba(0,0,0,0.27), 0 0 76px ${row.tone}22`,
+                    opacity: soft(enter, 0.7),
+                    transform: `translateY(${(1 - enter) * 22 + Math.sin(frame / 78 + index) * 4}px)`,
+                  }}
+                >
+                  <div style={{fontSize: 35, lineHeight: 0.96, fontWeight: 990}}>{row.label}</div>
+                  <div>
+                    <div style={{fontSize: 23, lineHeight: 1.04, fontWeight: 930}}>{row.check}</div>
+                    <div style={{marginTop: 9, fontSize: 18, lineHeight: 1.18, color: hot ? '#31485a' : palette.mist, fontWeight: 740}}>{row.decision}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -2239,7 +2283,7 @@ const DecisionScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame
   const isHorizontal = width > height;
   const searchMode = isSearchTopic(model) && !isRepoTopic(model);
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: searchMode ? (isHorizontal ? '166px 180px 82px' : '138px 58px 610px') : 0}}>
       {searchMode ? (
         <SearchDecisionDiagram model={model} scene={scene} frame={frame} localFrame={localFrame} fps={fps} width={width} height={height} />
       ) : (
@@ -2274,7 +2318,7 @@ const TakeawayScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame
       ['指标', metricLabelFor(model, 10), palette.coral],
     ];
     return (
-      <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 72px 118px' : '138px 58px 610px'}}>
+      <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '142px 180px 118px' : '138px 58px 610px'}}>
         <div style={{height: '100%', display: 'grid', gridTemplateColumns: '1fr', gap: 44, alignItems: 'center'}}>
           <div style={{position: 'relative', height: isHorizontal ? 660 : 430, minHeight: 0}}>
             <svg width="100%" height="100%" viewBox="0 0 720 570" style={{position: 'absolute', inset: 0, overflow: 'visible'}}>
@@ -2360,7 +2404,7 @@ const TakeawayScene: React.FC<{model: ShowcaseModel; scene: ShowcaseScene; frame
     );
   }
   return (
-    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 72px 82px' : '138px 58px 610px'}}>
+    <div style={{position: 'absolute', inset: 0, padding: isHorizontal ? '166px 180px 82px' : '138px 58px 610px'}}>
       <div style={{height: '100%', display: 'grid', gridTemplateColumns: isHorizontal ? '0.9fr 1.1fr' : '1fr', gap: 42, alignItems: 'center'}}>
         <div style={{position: 'relative', height: isHorizontal ? 500 : 380, display: 'grid', placeItems: 'center'}}>
           <div style={{position: 'absolute', width: isHorizontal ? 410 : 300, height: isHorizontal ? 410 : 300, borderRadius: 999, border: `2px solid ${scene.tone}`, transform: `scale(${scale})`, boxShadow: `0 0 90px ${scene.tone}22`}} />

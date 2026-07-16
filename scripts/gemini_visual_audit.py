@@ -386,6 +386,8 @@ def build_prompt(run_dir: Path, video_path: Path) -> str:
     cross_check_path = run_dir / "cross_check_review.json"
     evidence_bundle = read_json(evidence_path) if evidence_path.exists() else {}
     cross_check_review = read_json(cross_check_path) if cross_check_path.exists() else {}
+    claims_path = run_dir / "post" / "claims_ledger.json"
+    claims = read_json(claims_path) if claims_path.exists() else {}
     cards = render_payload.get("cards") if isinstance(render_payload.get("cards"), list) else []
     profile = render_payload.get("videoProfile") if isinstance(render_payload.get("videoProfile"), dict) else {}
     expected_orientation = str(render_payload.get("orientation") or profile.get("orientation") or "vertical")
