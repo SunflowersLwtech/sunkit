@@ -1,0 +1,11 @@
+{
+  "name": "polanyi-design",
+  "version": "1.0.0",
+  "description": "Frontend design cognitive engine grounded in Michael Polanyi's tacit knowledge framework. A Claude Code Skill that surfaces expert-level visual judgment.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["frontend", "design", "ui", "tacit-knowledge", "skill"],
+  "skills": "./skills/"
+}

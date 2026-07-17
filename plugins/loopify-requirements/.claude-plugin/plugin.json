@@ -1,0 +1,11 @@
+{
+  "name": "loopify-requirements",
+  "version": "1.0.0",
+  "description": "Convert prompts, vague tasks, and agent workflows into repeatable, verifiable loops with goal/scope/verification/escalation/stop conditions.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["loops", "automation", "requirements", "agents", "skill"],
+  "skills": "./skills/"
+}

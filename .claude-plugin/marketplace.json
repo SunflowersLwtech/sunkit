@@ -1,0 +1,58 @@
+{
+  "name": "sunkit",
+  "owner": {
+    "name": "SunflowersLwtech",
+    "url": "https://github.com/SunflowersLwtech"
+  },
+  "metadata": {
+    "description": "SunflowersLwtech's toolbox: Claude Code skills, agents, commands, and MCP servers in one marketplace.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "polanyi-design",
+      "source": "./plugins/polanyi-design",
+      "description": "Frontend design cognitive engine grounded in Michael Polanyi's tacit knowledge framework. Surfaces expert-level visual judgment in UI design, component architecture, and design systems.",
+      "category": "design",
+      "keywords": ["frontend", "design", "ui", "tacit-knowledge"]
+    },
+    {
+      "name": "loopify-requirements",
+      "source": "./plugins/loopify-requirements",
+      "description": "Convert prompts, vague tasks, and agent workflows into repeatable, verifiable loops with goal/scope/verification/escalation/stop conditions.",
+      "category": "workflow",
+      "keywords": ["loops", "automation", "requirements", "agents"]
+    },
+    {
+      "name": "github-repo-to-x-threads",
+      "source": "./plugins/searchpo/x-threads",
+      "description": "Analyze technical sources and produce Agent-engineering-positioned X content packs with evidence review, quality chain, reusable assets, and image assets.",
+      "category": "content",
+      "keywords": ["github", "x", "twitter", "content", "image-generation"]
+    },
+    {
+      "name": "searchpo",
+      "source": "./plugins/searchpo",
+      "description": "OSS Radar search pipeline: data prep, agent harness, research/impl agents, and the searchpo-full-flow command.",
+      "category": "research",
+      "keywords": ["search", "oss-radar", "pipeline", "agents"]
+    },
+    {
+      "name": "mcp-creator-growth",
+      "source": {
+        "source": "github",
+        "repo": "SunflowersLwtech/mcp_creator_growth"
+      },
+      "description": "Context-aware learning sidebar for AI coding assistants, served as an MCP server (Python, runs via uvx). Lives in its own repository.",
+      "category": "mcp",
+      "keywords": ["mcp", "learning", "web-ui", "sidebar"]
+    },
+    {
+      "name": "search-harness",
+      "source": "./plugins/search-harness",
+      "description": "Domain knowledge and roadmap for building a search harness for coding agents: CLI + skills design notes, API docs, and strategy.",
+      "category": "knowledge",
+      "keywords": ["search", "harness", "domain-knowledge", "roadmap"]
+    }
+  ]
+}

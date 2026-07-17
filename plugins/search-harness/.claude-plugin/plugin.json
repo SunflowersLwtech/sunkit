@@ -1,0 +1,11 @@
+{
+  "name": "search-harness",
+  "version": "0.1.0",
+  "description": "Domain knowledge and roadmap for building a search harness for coding agents: CLI + skills design notes, API docs, and strategy.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["search", "harness", "domain-knowledge", "roadmap", "skill"],
+  "skills": "./skills/"
+}
