@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.oss-radar/schemas/raw_item.schema.json",
+  "title": "RawSourceItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "source_item_id",
+    "url",
+    "title",
+    "collected_at",
+    "raw"
+  ],
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "source_item_id": {
+      "type": "string"
+    },
+    "url": {
+      "type": ["string", "null"],
+      "format": "uri"
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": ["string", "null"]
+    },
+    "published_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "integer", "string", "null", "boolean"]
+      }
+    },
+    "raw_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "raw": {
+      "type": "object"
+    }
+  }
+}

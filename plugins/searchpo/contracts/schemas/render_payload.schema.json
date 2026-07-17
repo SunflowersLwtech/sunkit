@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo Remotion Render Payload",
+  "type": "object",
+  "required": ["title", "displayTitle", "summary", "source", "url", "audioSrc", "voiceoverText", "captions", "durationInFrames", "fps", "footer"],
+  "additionalProperties": true,
+  "properties": {
+    "badge": {"type": "string"},
+    "title": {"type": "string", "minLength": 1},
+    "displayTitle": {"type": "string", "minLength": 1},
+    "speechTitle": {"type": "string"},
+    "summary": {"type": "string", "minLength": 1},
+    "source": {"type": "string"},
+    "url": {"type": "string"},
+    "score": {"type": ["number", "string", "null"]},
+    "metricLine": {"type": "string"},
+    "audienceMetricLine": {"type": "string"},
+    "evidenceLevel": {"type": "string"},
+    "orientation": {"enum": ["vertical", "horizontal"]},
+    "aspectRatio": {"enum": ["9:16", "16:9"]},
+    "width": {"type": "number", "minimum": 1},
+    "height": {"type": "number", "minimum": 1},
+    "videoProfile": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "number"},
+        "source": {"type": "string"},
+        "content_depth": {"type": "string"},
+        "duration_seconds": {"type": "number"},
+        "orientation": {"enum": ["vertical", "horizontal"]},
+        "aspect_ratio": {"enum": ["9:16", "16:9"]},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "motion": {"enum": ["calm", "standard", "punchy"]},
+        "animation_style": {"enum": ["kinetic_text", "diagrammatic", "evidence_cards", "minimal"]},
+        "decision_reason": {"type": "string"}
+      }
+    },
+    "premium_director_spec": {"$ref": "#/$defs/premiumDirectorSpec"},
+    "premiumDirectorSpec": {"$ref": "#/$defs/premiumDirectorSpec"},
+    "visualRecipe": {"$ref": "#/$defs/premiumDirectorSpec"},
+    "agentVisual": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "number"},
+        "enabled": {"type": "boolean"},
+        "mode": {"const": "react_runtime"},
+        "render_mode": {"enum": ["overlay", "full_canvas"]},
+        "component_code": {"type": "string"},
+        "module_code": {"type": "string"},
+        "source": {"type": "string"},
+        "css": {"type": "string"},
+        "description": {"type": "string"},
+        "validation_errors": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "agentVisualRequired": {"type": "boolean"},
+    "qualityWarnings": {"type": "array", "items": {"type": "string"}},
+    "verificationNextStep": {"type": "string"},
+    "videoSpec": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": ["string", "null"]},
+        "id": {"type": ["string", "null"]},
+        "schema_version": {"type": ["number", "null"]}
+      }
+    },
+    "sourceMap": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": ["string", "null"]},
+        "source_count": {"type": "number"}
+      }
+    },
+    "cards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["label", "value", "detail"],
+        "properties": {
+          "label": {"type": "string"},
+          "value": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "storyboard": {
+      "type": "object",
+      "required": ["version", "scenes"],
+      "properties": {
+        "version": {"type": "number"},
+        "style": {
+          "type": "object",
+          "properties": {
+            "theme": {"enum": ["radar", "minimal", "editorial", "engineering"]},
+            "density": {"enum": ["minimal", "standard", "rich"]},
+            "motion": {"enum": ["calm", "standard", "punchy"]},
+            "accent": {"type": "string", "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"},
+            "chrome": {
+              "type": "object",
+              "properties": {
+                "topbar": {"type": "boolean"},
+                "progress": {"type": "boolean"},
+                "beam": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "required": ["type", "props"],
+            "properties": {
+              "type": {"enum": ["statement", "context", "stat", "bullets", "card", "compare", "compare_table", "terminal", "flow", "chart", "code_diff", "code_block", "node_graph", "decision_table", "act_card", "closing", "quote", "cta"]},
+              "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+              "emphasis": {"enum": ["low", "normal", "high"]},
+              "props": {"type": "object"}
+            }
+          }
+        }
+      }
+    },
+    "audioSrc": {"type": ["string", "null"]},
+    "voiceoverText": {"type": ["string", "null"]},
+    "captions": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["text", "startFrame", "endFrame"],
+        "properties": {
+          "text": {"type": "string"},
+          "startFrame": {"type": "number"},
+          "endFrame": {"type": "number"}
+        }
+      }
+    },
+    "durationInFrames": {"type": "number", "minimum": 1},
+    "fps": {"type": "number", "minimum": 1},
+    "cta": {"type": "string"},
+    "footer": {"type": "string"}
+  },
+  "$defs": {
+    "premiumDirectorSpec": {
+      "type": "object",
+      "required": ["schema_version", "profile", "knowledge_arc", "topic_objects", "visual_scenes", "motion_beats", "content_constraints"],
+      "properties": {
+        "schema_version": {"type": "number"},
+        "source": {"type": "string"},
+        "profile": {
+          "type": "object",
+          "required": ["orientation", "aspect_ratio", "duration_seconds", "style_family", "motion_comfort"],
+          "properties": {
+            "orientation": {"enum": ["vertical", "horizontal"]},
+            "aspect_ratio": {"enum": ["9:16", "16:9"]},
+            "duration_seconds": {"type": "number", "minimum": 18},
+            "style_family": {"type": "string"},
+            "motion_comfort": {"type": "string"},
+            "safe_space_px": {"type": "number"}
+          }
+        },
+        "knowledge_arc": {
+          "type": "object",
+          "required": ["hook", "mechanism", "architecture_position", "practical_fit", "failure_boundary", "judgment_framework"],
+          "properties": {
+            "hook": {"type": "string"},
+            "mechanism": {"type": "string"},
+            "architecture_position": {"type": "string"},
+            "practical_fit": {"type": "string"},
+            "tradeoff": {"type": "string"},
+            "failure_boundary": {"type": "string"},
+            "judgment_framework": {"type": "string"},
+            "takeaway": {"type": "string"}
+          }
+        },
+        "topic_objects": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "label"],
+            "properties": {
+              "id": {"type": "string"},
+              "kind": {"type": "string"},
+              "label": {"type": "string"},
+              "detail": {"type": "string"},
+              "source_ref": {"type": "string"}
+            }
+          }
+        },
+        "visual_scenes": {
+          "type": "array",
+          "minItems": 5,
+          "items": {
+            "type": "object",
+            "required": ["id", "scene_type", "title", "objective", "motion_beats"],
+            "properties": {
+              "id": {"type": "string"},
+              "scene_type": {
+                "enum": [
+                  "HeroProblemScene",
+                  "MechanismExplodedView",
+                  "RepoFileTreeReveal",
+                  "ArchitectureFlowScene",
+                  "MetricComparisonScene",
+                  "DecisionMatrixScene",
+                  "TimelineBuildScene",
+                  "CodeOrTerminalScene",
+                  "KnowledgeTakeawayScene"
+                ]
+              },
+              "title": {"type": "string"},
+              "objective": {"type": "string"},
+              "teaching_beats": {"type": "array", "items": {"type": "string"}},
+              "object_refs": {"type": "array", "items": {"type": "string"}},
+              "layout": {"type": "string"},
+              "motion_beats": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "motion_beats": {"type": "array", "minItems": 3},
+        "content_constraints": {"type": "object"}
+      }
+    }
+  }
+}

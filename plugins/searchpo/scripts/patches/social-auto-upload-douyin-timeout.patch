@@ -1,0 +1,24 @@
+diff --git a/uploader/douyin_uploader/main.py b/uploader/douyin_uploader/main.py
+index 83160a4..8619e8c 100644
+--- a/uploader/douyin_uploader/main.py
++++ b/uploader/douyin_uploader/main.py
+@@ -479,7 +479,11 @@ class DouYinVideo(DouYinBaseUploader):
+-        await page.goto("https://creator.douyin.com/creator-micro/content/upload")
++        await page.goto(
++            "https://creator.douyin.com/creator-micro/content/upload",
++            wait_until="domcontentloaded",
++            timeout=90000,
++        )
+@@ -486,7 +490,7 @@ class DouYinVideo(DouYinBaseUploader):
+-        await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload")
++        await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload", timeout=90000)
+@@ -674,7 +678,11 @@ class DouYinNote(DouYinBaseUploader):
+-            await page.goto("https://creator.douyin.com/creator-micro/content/upload")
++            await page.goto(
++                "https://creator.douyin.com/creator-micro/content/upload",
++                wait_until="domcontentloaded",
++                timeout=90000,
++            )
+@@ -681,7 +685,7 @@ class DouYinNote(DouYinBaseUploader):
+-            await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload")
++            await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload", timeout=90000)

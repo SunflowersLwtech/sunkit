@@ -1,0 +1,90 @@
+{
+  "sourceRoot": "skills",
+  "claudeProjectRoot": ".claude/skills",
+  "codexProjectRoot": ".codex/skills",
+  "codexUserRoot": "~/.codex/skills",
+  "commandSourceRoot": "commands",
+  "claudeCommandRoot": ".claude/commands",
+  "codexCommandRoot": ".codex/commands",
+  "agentSourceRoot": "agents",
+  "claudeAgentRoot": ".claude/agents",
+  "codexProjectAgentRoot": ".codex/agents",
+  "codexUserAgentRoot": "~/.codex/agents",
+  "sharedDeps": [
+    "RESOLVER.md",
+    "_AGENT_README.md"
+  ],
+  "skills": [
+    {
+      "name": "searchpo-full-flow",
+      "description": "Visible skill wrapper for running the complete Searchpo provider/live flow."
+    },
+    {
+      "name": "searchpo-main-agent",
+      "description": "End-to-end Searchpo orchestration, release gates, and publish decisions."
+    },
+    {
+      "name": "searchpo-research-agent",
+      "description": "Searchpo source research, AnySearch enrichment, FactBank, TopicBrief, and strengthened cross-checks."
+    },
+    {
+      "name": "searchpo-impl-agent",
+      "description": "Searchpo script execution, Remotion rendering, Gemini audit, and Douyin checks."
+    },
+    {
+      "name": "searchpo-agent-capabilities",
+      "description": "Redacted .env, provider, MCP, and side-effect capability routing for Searchpo agents."
+    },
+    {
+      "name": "searchpo-deepwiki-research",
+      "description": "DeepWiki MCP repository-intelligence workflow for Searchpo GitHub repo research."
+    },
+    {
+      "name": "remotion-best-practices",
+      "description": "Remotion composition, rendering, animation, captions, and Douyin video output guidance."
+    },
+    {
+      "name": "searchpo-plugin-check",
+      "description": "Searchpo Claude/Codex agent, skill, command, resolver, frontmatter, and bridge health checks."
+    }
+  ],
+  "commands": [
+    {
+      "name": "searchpo-full-flow",
+      "description": "Run the provider/live Searchpo full flow through the same command surface in Claude Code and Codex."
+    }
+  ],
+  "agents": [
+    {
+      "name": "searchpo-main-agent",
+      "description": "Searchpo team lead that owns task assignment, release gates, and publish decisions."
+    },
+    {
+      "name": "searchpo-research-agent",
+      "description": "Searchpo research teammate that owns AnySearch enrichment, FactBank, TopicBrief, and cross-check evidence."
+    },
+    {
+      "name": "searchpo-impl-agent",
+      "description": "Searchpo implementation teammate that owns DeepSeek/provider execution, render, audit, and upload/check commands."
+    }
+  ],
+  "agentTeam": {
+    "lead": "searchpo-main-agent",
+    "teammates": [
+      "searchpo-research-agent",
+      "searchpo-impl-agent"
+    ],
+    "researchOwnership": {
+      "anysearch": "searchpo-research-agent",
+      "evidence": "searchpo-research-agent",
+      "cross_check": "searchpo-research-agent"
+    },
+    "providerOwnership": {
+      "deepseek": "searchpo-impl-agent",
+      "gemini": "searchpo-impl-agent",
+      "remotion": "searchpo-impl-agent",
+      "douyin": "searchpo-impl-agent"
+    },
+    "releaseDecisionOwner": "searchpo-main-agent"
+  }
+}

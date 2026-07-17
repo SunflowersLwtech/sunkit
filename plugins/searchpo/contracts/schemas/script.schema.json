@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo Script",
+  "type": "object",
+  "required": ["schema_version", "title", "structure", "voiceover_segments"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "content"},
+    "selected_candidate_id": {"type": ["string", "null"]},
+    "title": {"type": "string"},
+    "language": {"type": "string"},
+    "structure": {"type": "object"},
+    "voiceover_text": {"type": "string"},
+    "voiceover_segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "text"],
+        "properties": {
+          "id": {"type": "string"},
+          "role": {"type": "string"},
+          "text": {"type": "string"},
+          "source_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

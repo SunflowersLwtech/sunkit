@@ -1,0 +1,28 @@
+# github-repo-to-x-threads Documentation Map
+
+Start here when an agent or LLM needs to understand this repository without
+loading every file.
+
+- `AGENTS.md` - repository operating rules, source-of-truth boundaries, safety,
+  and verification gates.
+- `INSTALL_FOR_AGENTS.md` - install, credential, operation, publish, and
+  verification protocol for agents.
+- `CLAUDE.md` - Claude Code entrypoint that points back to the canonical
+  protocol.
+- `skillpack.json` - bundle-level skillpack manifest.
+- `openclaw.plugin.json` - OpenClaw/Hermes-style plugin manifest.
+- `.codex-plugin/plugin.json` - Codex plugin adapter.
+- `.claude-plugin/plugin.json` - Claude plugin adapter.
+- `skills/_AGENT_README.md` - cold-start contract for the skills directory.
+- `skills/RESOLVER.md` - routing table from user intent to skill.
+- `skills/manifest.json` - machine-readable skill index.
+- `skills/github-repo-to-x-threads/SKILL.md` - canonical workflow.
+- `skills/github-repo-to-x-threads/references/` - detailed brand profile,
+  bug-report rewrites, paper-to-system templates, model quality chain, gates,
+  rubrics, posting pack templates, and self-evolution contracts.
+- `skills/github-repo-to-x-threads/scripts/` - deterministic helpers for
+  evidence collection, pack generation, eval, publishing, metrics, and
+  strategy memory.
+- `commands/github-repo-to-x-threads.md` - Claude slash-command adapter.
+- `runbooks/bootstrap.md` - post-scaffold validation runbook.
+- `evals/evals.json` - high-level behavior eval cases.

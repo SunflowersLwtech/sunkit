@@ -1,0 +1,59 @@
+{
+  "name": "github-repo-to-x-threads",
+  "version": "0.1.0",
+  "description": "Responsible technical-source to Agent-engineering X content skill bundle with brand routing, model quality chain, evidence review, reusable assets, image governance, optional official X API publishing, and strategy memory.",
+  "family": "bundle-plugin",
+  "configSchema": {
+    "github_token": {
+      "type": "string",
+      "required": false,
+      "description": "Optional GitHub token for live metadata collection.",
+      "uiHints": {
+        "sensitive": true
+      }
+    },
+    "grok_api_key": {
+      "type": "string",
+      "required": false,
+      "description": "Optional xAI/Grok API key for pre-publish semantic evaluation.",
+      "uiHints": {
+        "sensitive": true
+      }
+    },
+    "x_oauth2_access_token": {
+      "type": "string",
+      "required": false,
+      "description": "Optional OAuth2 user token for explicitly approved official X API publishing.",
+      "uiHints": {
+        "sensitive": true
+      }
+    }
+  },
+  "skills": [
+    "skills/github-repo-to-x-threads"
+  ],
+  "shared_deps": [
+    "skills/_AGENT_README.md",
+    "skills/RESOLVER.md"
+  ],
+  "excluded_from_install": [
+    ".env",
+    ".claude",
+    ".agents",
+    "repo-to-x-workspace",
+    "repo-to-x-output",
+    "repo-to-x-runs"
+  ],
+  "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.4.0"
+    }
+  },
+  "contracts": {
+    "claimSafety": "Separate verified facts, live metadata, inference, and user vision.",
+    "imageGovernance": "Actual generated images are the default for final packs and must be registered in images_manifest.json.",
+    "publishing": "Manual-safe by default; live publishing uses only official X API after explicit user approval.",
+    "brandFit": "Main-account content maps to Agent reliability, build-in-public, paper-to-system, or embodied AI watch, with one reusable asset and one concrete discussion question.",
+    "qualityChain": "Generated packs expose source grounding, brand lane, angle tournament, asset design, draft synthesis, adversarial review, and final gate."
+  }
+}

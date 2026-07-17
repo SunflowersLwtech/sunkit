@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo Source Map",
+  "type": "object",
+  "required": ["schema_version", "sources"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "research"},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"type": "string"},
+          "url": {"type": ["string", "null"]},
+          "host": {"type": ["string", "null"]},
+          "title": {"type": ["string", "null"]},
+          "sha256": {"type": ["string", "null"]},
+          "text_chars": {"type": "number"}
+        }
+      }
+    }
+  }
+}

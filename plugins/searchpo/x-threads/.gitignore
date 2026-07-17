@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+!skills/**/.env.example
+.claude/
+.agents/
+plugins/
+__pycache__/
+*.py[cod]
+.DS_Store
+._*
+repo-to-x-workspace/
+repo-to-x-output/
+repo-to-x-runs/
+*.skill
