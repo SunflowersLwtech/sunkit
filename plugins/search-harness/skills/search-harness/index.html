@@ -1,0 +1,1618 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search-Agent Harness — Architecture v0.1</title>
+<meta name="description" content="A 5-layer outcome-driven harness for orchestrating 20 retrieval sources, 4 co-install tools, and a fallback web-search lane.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,700;1,9..144,300;1,9..144,400&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0e14;
+  --bg-1: #0f141d;
+  --bg-2: #141b26;
+  --bg-3: #1a2231;
+  --ink: #d6dee8;
+  --ink-2: #a8b1bc;
+  --ink-3: #6e7884;
+  --ink-faint: #3a424d;
+  --line: #1c2330;
+  --line-2: #2a313c;
+  --acc: #5cc8ff;
+  --acc-deep: #2d8fc7;
+  --warm: #ffa657;
+  --red: #ff7b72;
+  --green: #7ce38b;
+  --violet: #d2a8ff;
+  --display: 'Fraunces', Georgia, serif;
+  --mono: 'JetBrains Mono', 'SF Mono', 'Menlo', Consolas, monospace;
+  --max-w: 1320px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02','cv03','cv04','cv11','ss01';
+}
+body {
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: -1px -1px;
+  background-attachment: fixed;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(92,200,255,0.06), transparent 70%),
+              radial-gradient(ellipse 60% 50% at 100% 100%, rgba(255,166,87,0.04), transparent 70%);
+  pointer-events: none; z-index: 0;
+}
+main, header, footer, nav { position: relative; z-index: 1; }
+::selection { background: var(--acc); color: var(--bg); }
+
+/* ────────── nav ────────── */
+nav.toc {
+  position: fixed;
+  top: 24px; right: 24px;
+  z-index: 100;
+  background: rgba(15,20,29,0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--line-2);
+  padding: 14px 18px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  display: none;
+}
+@media (min-width: 1100px) { nav.toc { display: block; } }
+nav.toc ol { list-style: none; }
+nav.toc li { padding: 3px 0; }
+nav.toc a {
+  color: var(--ink-3);
+  text-decoration: none;
+  display: flex; gap: 8px;
+  transition: color .15s;
+}
+nav.toc a:hover { color: var(--acc); }
+nav.toc a .num { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+nav.toc .head {
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  text-transform: uppercase;
+}
+nav.toc .ext {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+nav.toc .ext a {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  display: flex; gap: 8px; align-items: center;
+}
+nav.toc .ext a:hover { color: var(--acc); }
+nav.toc .ext svg { flex-shrink: 0; }
+
+/* ────────── containers ────────── */
+.wrap { max-width: var(--max-w); margin: 0 auto; padding: 0 32px; }
+@media (max-width: 720px) { .wrap { padding: 0 20px; } }
+
+/* ────────── hero ────────── */
+.hero {
+  padding: 88px 0 72px;
+  border-bottom: 1px solid var(--line-2);
+  position: relative;
+}
+.hero .crumb {
+  display: flex; gap: 18px; align-items: center;
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  margin-bottom: 56px;
+}
+.hero .crumb .dot {
+  width: 7px; height: 7px;
+  background: var(--acc);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--acc);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.hero h1 {
+  font-family: var(--display);
+  font-weight: 300;
+  font-variation-settings: 'opsz' 144;
+  font-size: clamp(48px, 8.5vw, 132px);
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  color: var(--ink);
+  margin-bottom: 32px;
+}
+.hero h1 .em {
+  font-style: italic;
+  font-weight: 300;
+  color: var(--acc);
+}
+.hero h1 .slash {
+  color: var(--ink-faint);
+  font-style: normal;
+  font-weight: 200;
+  margin: 0 .15em;
+}
+.hero .lead {
+  font-size: 15.5px;
+  max-width: 620px;
+  color: var(--ink-2);
+  line-height: 1.7;
+  margin-bottom: 64px;
+}
+.hero .lead em {
+  color: var(--ink);
+  font-style: italic;
+  font-family: var(--display);
+  font-weight: 400;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--line-2);
+  border: 1px solid var(--line-2);
+}
+.stat {
+  background: var(--bg);
+  padding: 24px 24px 22px;
+}
+.stat .n {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 96;
+  font-size: 52px;
+  font-weight: 300;
+  color: var(--ink);
+  letter-spacing: -0.04em;
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+}
+.stat .n .unit {
+  font-size: 13px;
+  color: var(--ink-3);
+  margin-left: 6px;
+  font-family: var(--mono);
+  letter-spacing: 0;
+}
+.stat .l {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  margin-top: 10px;
+}
+@media (max-width: 720px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stat .n { font-size: 38px; }
+}
+
+/* ────────── section ────────── */
+section.s {
+  padding: 96px 0;
+  border-bottom: 1px solid var(--line-2);
+  position: relative;
+}
+.s-head { margin-bottom: 56px; max-width: 720px; }
+.s-num {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  margin-bottom: 18px;
+}
+.s-num::before {
+  content: '';
+  width: 24px; height: 1px;
+  background: var(--acc);
+}
+.s-num .label { color: var(--acc); }
+.s h2 {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 96;
+  font-weight: 400;
+  font-size: clamp(32px, 4.5vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+  margin-bottom: 18px;
+}
+.s h2 em { font-style: italic; color: var(--ink-2); font-weight: 300; }
+.s .lead {
+  color: var(--ink-2);
+  font-size: 14.5px;
+  line-height: 1.75;
+  max-width: 640px;
+}
+.s .lead a { color: var(--acc); }
+.s h3 {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 48;
+  font-weight: 400;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+.s h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--acc);
+  margin-bottom: 14px;
+  font-weight: 500;
+}
+
+/* ────────── code ────────── */
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  padding: 1px 6px;
+  color: var(--acc);
+}
+.kbd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--warm);
+}
+
+/* ────────── pipeline svg wrapper ────────── */
+.pipe-frame {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  padding: 24px;
+  position: relative;
+}
+.pipe-frame .corner {
+  position: absolute;
+  width: 8px; height: 8px;
+  border: 1px solid var(--acc);
+  background: var(--bg-1);
+}
+.pipe-frame .corner.tl { top: -4px; left: -4px; }
+.pipe-frame .corner.tr { top: -4px; right: -4px; }
+.pipe-frame .corner.bl { bottom: -4px; left: -4px; }
+.pipe-frame .corner.br { bottom: -4px; right: -4px; }
+.pipe-svg { width: 100%; height: auto; display: block; }
+.pipe-frame .caption {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 18px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.pipe-frame .caption .key {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.pipe-frame .caption .swatch {
+  width: 12px; height: 12px;
+  display: inline-block;
+}
+
+/* ────────── lane ────────── */
+.lane { margin-bottom: 48px; }
+.lane:last-child { margin-bottom: 0; }
+.lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  border-bottom: 1px solid var(--line-2);
+  padding-bottom: 14px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+.lane-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  color: var(--acc);
+  text-transform: uppercase;
+}
+.lane-head .arrow {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.lane-head .out {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.lane-head .out em {
+  font-family: var(--display);
+  font-style: italic;
+  color: var(--ink-2);
+  font-weight: 400;
+}
+.lane-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+/* ────────── adapter card ────────── */
+.adapter {
+  background: var(--bg);
+  padding: 18px 18px 16px;
+  position: relative;
+  transition: background .15s;
+  display: flex;
+  flex-direction: column;
+  min-height: 178px;
+}
+.adapter:hover {
+  background: var(--bg-2);
+}
+.adapter:hover .num { color: var(--acc); }
+.adapter header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.adapter .num {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  transition: color .15s;
+}
+.adapter h3 {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+.adapter .auth {
+  margin-left: auto;
+  font-size: 9.5px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--line-2);
+  padding: 1px 6px;
+}
+.adapter .auth.token { color: var(--warm); border-color: rgba(255,166,87,0.25); }
+.adapter .auth.key { color: var(--violet); border-color: rgba(210,168,255,0.25); }
+.adapter .endpoint {
+  font-size: 11px;
+  color: var(--ink-3);
+  word-break: break-all;
+  line-height: 1.55;
+  margin-bottom: 12px;
+  font-weight: 400;
+}
+.adapter .endpoint .v { color: var(--acc); }
+.adapter .signal {
+  font-size: 11px;
+  color: var(--ink-2);
+  line-height: 1.65;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-2);
+}
+.adapter .signal::before {
+  content: '◇ ';
+  color: var(--warm);
+}
+
+/* ────────── co-install layer ────────── */
+.co-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin-bottom: 32px;
+}
+.co {
+  background: var(--bg-1);
+  padding: 22px 22px 22px;
+  position: relative;
+  display: flex; flex-direction: column;
+  min-height: 200px;
+}
+.co .surface {
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+.co .surface.cli { color: var(--green); }
+.co .surface.mcp { color: var(--violet); }
+.co .surface.fallback { color: var(--ink-3); }
+.co h3 {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 48;
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+.co .desc {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.65;
+  margin-bottom: 18px;
+}
+.co .install {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  padding: 8px 10px;
+  margin-top: auto;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.co .install .v { color: var(--warm); }
+
+/* ────────── execution ────────── */
+.exec-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 32px;
+  margin-bottom: 40px;
+}
+@media (max-width: 900px) { .exec-grid { grid-template-columns: 1fr; } }
+
+.dag-svg { width: 100%; height: auto; display: block; }
+
+.gov-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-1);
+}
+.gov-table th, .gov-table td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.gov-table th {
+  background: var(--bg-2);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--ink-3);
+}
+.gov-table tbody tr:last-child td { border-bottom: none; }
+.gov-table .src { color: var(--ink); font-weight: 500; }
+.gov-table code { background: transparent; border: none; padding: 0; color: var(--acc); }
+.gov-table .note { color: var(--ink-3); font-size: 10.5px; }
+
+.cache-tier {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.tier {
+  background: var(--bg-1);
+  padding: 18px 18px 16px;
+}
+.tier .lvl {
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.tier .lvl.hot { color: var(--red); }
+.tier .lvl.warm { color: var(--warm); }
+.tier .lvl.cold { color: var(--acc); }
+.tier .key {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 48;
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.tier .desc { font-size: 11px; color: var(--ink-2); line-height: 1.55; }
+@media (max-width: 720px) { .cache-tier { grid-template-columns: 1fr; } }
+
+/* ────────── evidence + eval ────────── */
+.duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+@media (max-width: 900px) { .duo { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  padding: 28px;
+  display: flex; flex-direction: column;
+}
+.panel .ptag {
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+.panel .ptag.coral { color: var(--warm); }
+.panel .ptag.green { color: var(--green); }
+.panel h3 {
+  font-family: var(--display);
+  font-variation-settings: 'opsz' 96;
+  font-size: 32px;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  margin-bottom: 16px;
+  color: var(--ink);
+}
+.panel h3 em { font-style: italic; color: var(--acc); }
+.panel .desc {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.7;
+  margin-bottom: 24px;
+}
+.panel .checks {
+  list-style: none;
+  margin-top: auto;
+}
+.panel .checks li {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  padding: 8px 0;
+  border-top: 1px dashed var(--line-2);
+  display: flex;
+  gap: 10px;
+}
+.panel .checks li:last-child { padding-bottom: 0; }
+.panel .checks .k {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 28px;
+}
+
+.evidence-svg { width: 100%; height: auto; margin-bottom: 20px; }
+
+/* ────────── three surfaces table ────────── */
+.surf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+}
+.surf-table th, .surf-table td {
+  padding: 16px 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.surf-table thead th {
+  background: var(--bg-2);
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  text-transform: none;
+  border-bottom: 1px solid var(--line-2);
+}
+.surf-table thead th .stag {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-top: 4px;
+}
+.surf-table thead th.skill .stag { color: var(--acc); }
+.surf-table thead th.cli .stag { color: var(--green); }
+.surf-table thead th.mcp .stag { color: var(--violet); }
+.surf-table thead th.web .stag { color: var(--warm); }
+.surf-table tbody tr:last-child td { border-bottom: none; }
+.surf-table th.lbl, .surf-table td.lbl {
+  width: 130px;
+  background: var(--bg);
+  color: var(--ink-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.surf-table td .ex {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  margin-top: 6px;
+  display: block;
+}
+
+/* ────────── footer ────────── */
+footer {
+  padding: 64px 0 80px;
+  border-top: 1px solid var(--line-2);
+}
+.foot {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: end;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.foot .sig {
+  font-family: var(--display);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.foot a { color: var(--acc); text-decoration: none; }
+.foot a:hover { text-decoration: underline; }
+.foot .v { letter-spacing: 0.15em; }
+@media (max-width: 720px) { .foot { grid-template-columns: 1fr; } }
+
+/* ────────── small utility ────────── */
+.spacer-32 { height: 32px; }
+.divider {
+  height: 1px;
+  background: var(--line-2);
+  margin: 56px 0;
+}
+.kicker {
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 300;
+  color: var(--acc);
+}
+.tinytag {
+  display: inline-block;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  padding: 2px 7px;
+  margin-right: 6px;
+  margin-bottom: 4px;
+}
+
+/* ────────── reduced motion ────────── */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<nav class="toc" aria-label="contents">
+  <div class="head">contents</div>
+  <ol>
+    <li><a href="#s01"><span class="num">01</span> Pipeline</a></li>
+    <li><a href="#s02"><span class="num">02</span> Adapters</a></li>
+    <li><a href="#s03"><span class="num">03</span> Co-install</a></li>
+    <li><a href="#s04"><span class="num">04</span> Execution</a></li>
+    <li><a href="#s05"><span class="num">05</span> Evidence &amp; Eval</a></li>
+    <li><a href="#s06"><span class="num">06</span> Surfaces</a></li>
+  </ol>
+  <div class="ext">
+    <a href="https://github.com/SunflowersLwtech/search-harness" target="_blank" rel="noopener" aria-label="View source on GitHub">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+    </a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="crumb">
+      <span class="dot"></span>
+      <span>Working doc · v0.1</span>
+      <span>·</span>
+      <span>Last revised: 2026.05</span>
+    </div>
+    <h1>
+      Search<span class="slash">·</span>Agent<br>
+      <span class="em">Harness</span>
+    </h1>
+    <p class="lead">
+      A five-layer pipeline that turns a stated goal into a verifiable artifact, by routing across <em>twenty</em> retrieval sources, four co-installed tools, and one fallback web-search lane &mdash; with a critic loop and an eval harness scoring every run. Outcome-driven, not signal-driven.
+    </p>
+    <div class="stats" role="list">
+      <div class="stat" role="listitem"><div class="n">20<span class="unit">adapters</span></div><div class="l">Phase 1 sources</div></div>
+      <div class="stat" role="listitem"><div class="n">4<span class="unit">co-install</span></div><div class="l">CLI &amp; MCP</div></div>
+      <div class="stat" role="listitem"><div class="n">5<span class="unit">layers</span></div><div class="l">L0 &rarr; L4</div></div>
+      <div class="stat" role="listitem"><div class="n">15<span class="unit">×</span></div><div class="l">Target leverage</div></div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ═════════════════════════════ §01 PIPELINE ═════════════════════════════ -->
+<section class="s" id="s01">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§01</span><span class="label">Pipeline</span></div>
+      <h2>Goal in. <em>Artifact out.</em></h2>
+      <p class="lead">
+        Seven stages along the spine, two cross-cutting concerns on the side, one feedback loop closing back to the router. The harness owns everything between the user's stated goal and the merge-ready artifact &mdash; retrieval is just the middle four boxes.
+      </p>
+    </div>
+
+    <div class="pipe-frame">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+
+      <svg class="pipe-svg" viewBox="0 0 1100 880" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Search-agent harness pipeline diagram">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </marker>
+          <marker id="arrAcc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="#5cc8ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </marker>
+          <marker id="arrWarm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="#ffa657" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </marker>
+        </defs>
+
+        <!-- column guides -->
+        <line x1="50" y1="40" x2="50" y2="780" stroke="#1c2330" stroke-width="0.5" stroke-dasharray="2 6"/>
+        <line x1="1050" y1="40" x2="1050" y2="780" stroke="#1c2330" stroke-width="0.5" stroke-dasharray="2 6"/>
+
+        <!-- main column boxes, x=370..730, w=360, centered at 550 -->
+        <!-- 1. user goal -->
+        <g>
+          <rect x="370" y="60" width="360" height="58" rx="2" fill="#0f141d" stroke="#2a313c" stroke-width="0.8"/>
+          <text x="550" y="84" text-anchor="middle" fill="#d6dee8" font-family="JetBrains Mono" font-size="14" font-weight="500">User goal</text>
+          <text x="550" y="104" text-anchor="middle" fill="#6e7884" font-family="JetBrains Mono" font-size="11">natural language · issue · repo · log</text>
+        </g>
+        <line x1="550" y1="118" x2="550" y2="148" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 2. task compiler -->
+        <g>
+          <rect x="370" y="148" width="360" height="58" rx="2" fill="#0f141d" stroke="#2a313c" stroke-width="0.8"/>
+          <text x="550" y="172" text-anchor="middle" fill="#d6dee8" font-family="JetBrains Mono" font-size="14" font-weight="500">Task Compiler</text>
+          <text x="550" y="192" text-anchor="middle" fill="#6e7884" font-family="JetBrains Mono" font-size="11">→ JobSpec · stack · freshness · risk budget</text>
+        </g>
+        <line x1="550" y1="206" x2="550" y2="236" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 3. source router -->
+        <g>
+          <rect x="370" y="236" width="360" height="58" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.8"/>
+          <text x="550" y="260" text-anchor="middle" fill="#d6dee8" font-family="JetBrains Mono" font-size="14" font-weight="500">Source Router</text>
+          <text x="550" y="280" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">JobSpec → SourcePlan</text>
+        </g>
+        <!-- side note for router -->
+        <line x1="730" y1="265" x2="800" y2="265" stroke="#5cc8ff" stroke-width="0.5" stroke-dasharray="3 3"/>
+        <g>
+          <rect x="800" y="240" width="220" height="50" rx="2" fill="#141b26" stroke="#5cc8ff" stroke-width="0.5"/>
+          <text x="910" y="262" text-anchor="middle" fill="#5cc8ff" font-family="JetBrains Mono" font-size="11" font-weight="500">DAG planner</text>
+          <text x="910" y="280" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="10.5">two-stage · top-K filter</text>
+        </g>
+        <line x1="550" y1="294" x2="550" y2="324" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 4. adapter mesh -->
+        <g>
+          <rect x="370" y="324" width="360" height="58" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.8"/>
+          <text x="550" y="348" text-anchor="middle" fill="#d6dee8" font-family="JetBrains Mono" font-size="14" font-weight="500">Adapter Mesh</text>
+          <text x="550" y="368" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">20 sources → unified Observation schema</text>
+        </g>
+        <!-- side note for adapter -->
+        <line x1="730" y1="353" x2="800" y2="353" stroke="#5cc8ff" stroke-width="0.5" stroke-dasharray="3 3"/>
+        <g>
+          <rect x="800" y="328" width="220" height="50" rx="2" fill="#141b26" stroke="#5cc8ff" stroke-width="0.5"/>
+          <text x="910" y="350" text-anchor="middle" fill="#5cc8ff" font-family="JetBrains Mono" font-size="11" font-weight="500">rate · cache · contract</text>
+          <text x="910" y="368" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="10.5">per-source bucket · 3-tier</text>
+        </g>
+        <line x1="550" y1="382" x2="550" y2="412" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 5. evidence graph -->
+        <g>
+          <rect x="370" y="412" width="360" height="58" rx="2" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+          <text x="550" y="436" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="14" font-weight="500">Evidence Graph</text>
+          <text x="550" y="456" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">claim ↔ source ↔ citation</text>
+        </g>
+        <line x1="730" y1="441" x2="800" y2="441" stroke="#ffa657" stroke-width="0.5" stroke-dasharray="3 3"/>
+        <g>
+          <rect x="800" y="416" width="220" height="50" rx="2" fill="#141b26" stroke="#ffa657" stroke-width="0.5"/>
+          <text x="910" y="438" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="11" font-weight="500">UnionFind + NLI</text>
+          <text x="910" y="456" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="10.5">entity layer + claim grounding</text>
+        </g>
+        <line x1="550" y1="470" x2="550" y2="500" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 6. agent runtime -->
+        <g>
+          <rect x="370" y="500" width="360" height="78" rx="2" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+          <text x="550" y="524" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="14" font-weight="500">Agent Runtime</text>
+          <text x="550" y="546" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">planner · scout · verifier · critic · builder</text>
+          <text x="550" y="564" text-anchor="middle" fill="#6e7884" font-family="JetBrains Mono" font-size="10.5">role-based, with critic loop &amp; revision</text>
+        </g>
+        <line x1="550" y1="578" x2="550" y2="608" stroke="#5cc8ff" stroke-width="1.2" marker-end="url(#arrAcc)"/>
+
+        <!-- 7. artifact factory -->
+        <g>
+          <rect x="370" y="608" width="360" height="58" rx="2" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+          <text x="550" y="632" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="14" font-weight="500">Artifact Factory</text>
+          <text x="550" y="652" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">ADR · patch · PR · brief · matrix</text>
+        </g>
+
+        <!-- arrow down to eval -->
+        <line x1="550" y1="666" x2="550" y2="710" stroke="#ffa657" stroke-width="1.2" marker-end="url(#arrWarm)"/>
+
+        <!-- 8. eval harness, full width -->
+        <g>
+          <rect x="60" y="710" width="980" height="68" rx="2" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+          <text x="550" y="736" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="14" font-weight="500">Eval Harness</text>
+          <text x="550" y="758" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="11">citation coverage · build &amp; test · license · anti-hallucination · human edit-distance</text>
+        </g>
+
+        <!-- feedback loop, eval back to router, dashed -->
+        <path d="M 60 744 L 30 744 L 30 265 L 370 265" fill="none" stroke="#ff7b72" stroke-width="1.2" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+        <text x="50" y="510" fill="#ff7b72" font-family="JetBrains Mono" font-size="11" transform="rotate(-90 50 510)">below threshold → revise plan</text>
+
+        <!-- left side annotation labels -->
+        <g font-family="JetBrains Mono" font-size="10" fill="#3a424d" letter-spacing="0.1em">
+          <text x="120" y="92">L0</text>
+          <text x="120" y="180">L1.0</text>
+          <text x="120" y="268">L1.1</text>
+          <text x="120" y="356">L2</text>
+          <text x="120" y="444">L3</text>
+          <text x="120" y="540">L4.0</text>
+          <text x="120" y="640">L4.1</text>
+          <text x="120" y="744">EVAL</text>
+        </g>
+      </svg>
+
+      <div class="caption">
+        <span class="key"><span class="swatch" style="background:#2a313c;border:1px solid #5cc8ff"></span> retrieval spine (router → adapters)</span>
+        <span class="key"><span class="swatch" style="background:#1a2231;border:1px solid #ffa657"></span> outcome layer (evidence → artifact → eval)</span>
+        <span class="key"><span class="swatch" style="background:transparent;border:1px dashed #ff7b72"></span> revision loop (eval → router)</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ §02 ADAPTERS ═════════════════════════════ -->
+<section class="s" id="s02">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§02</span><span class="label">Adapters</span></div>
+      <h2>Twenty sources, <em>four lanes,</em> one Hit schema.</h2>
+      <p class="lead">
+        Each adapter exports <code>search</code>, <code>get</code>, and (when supported) <code>batch</code>, normalising every result into a unified <code>Hit</code> record while passing source-unique signals through verbatim. No adapter normalises authority &mdash; that is L3's job.
+      </p>
+    </div>
+
+    <!-- LANE A: CODE & SEARCH -->
+    <div class="lane">
+      <div class="lane-head">
+        <span class="lane-tag">Lane A</span>
+        <h3>Code &amp; Semantic Search</h3>
+        <span class="arrow">→</span>
+        <span class="out">outputs <em>repo signals · code patterns · embeddings</em></span>
+      </div>
+      <div class="lane-grid">
+
+        <article class="adapter">
+          <header>
+            <span class="num">01</span>
+            <h3>GitHub</h3>
+            <span class="auth token">token</span>
+          </header>
+          <div class="endpoint"><span class="v">api.github.com</span>/search/{repos,code,issues}<br>+ <span class="v">/graphql</span> for discussions/gists</div>
+          <div class="signal">stars · forks · license · topic · code search · pushed_at</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">02</span>
+            <h3>GitLab</h3>
+            <span class="auth token">private-token</span>
+          </header>
+          <div class="endpoint"><span class="v">{gitlab.com,gnome,fdo}</span>/api/v4/...<br>multi-instance, license needs N+1</div>
+          <div class="signal">stars · license · pushed_at · 跨实例覆盖</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">19</span>
+            <h3>Sourcegraph</h3>
+            <span class="auth">anon · sse</span>
+          </header>
+          <div class="endpoint"><span class="v">sourcegraph.com</span>/.api/search/stream<br>Accept: text/event-stream</div>
+          <div class="signal">trigram across 2M+ OSS · facets · symbol type · commit SHA</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">20</span>
+            <h3>Exa</h3>
+            <span class="auth key">x-api-key</span>
+          </header>
+          <div class="endpoint"><span class="v">api.exa.ai</span>/search · /contents<br>type: auto · fast · deep · deep-reasoning</div>
+          <div class="signal">neural retrieval · outputSchema grounding · livecrawl freshness · vertical search</div>
+        </article>
+
+      </div>
+    </div>
+
+    <!-- LANE B: PACKAGES & SECURITY -->
+    <div class="lane">
+      <div class="lane-head">
+        <span class="lane-tag">Lane B</span>
+        <h3>Packages &amp; Security</h3>
+        <span class="arrow">→</span>
+        <span class="out">outputs <em>downloads · license · CVE · SLSA · advisory keys</em></span>
+      </div>
+      <div class="lane-grid">
+
+        <article class="adapter">
+          <header>
+            <span class="num">09</span>
+            <h3>npm registry</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">registry.npmjs.org</span>/-/v1/search?text=</div>
+          <div class="signal">downloads.weekly · dependents (inline)</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">10</span>
+            <h3>crates.io</h3>
+            <span class="auth">anon · ua</span>
+          </header>
+          <div class="endpoint"><span class="v">crates.io</span>/api/v1/crates?q=&amp;sort=downloads</div>
+          <div class="signal">recent_downloads (90d rolling) · sort=downloads</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">11</span>
+            <h3>libraries.io</h3>
+            <span class="auth key">key for /search</span>
+          </header>
+          <div class="endpoint"><span class="v">libraries.io</span>/api/{platform}/{name}<br>+ /api/search?api_key=...</div>
+          <div class="signal">SourceRank · dependent_repos_count</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">16</span>
+            <h3>deps.dev</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">api.deps.dev</span>/v3/systems/{npm,pypi,maven,go,cargo,nuget,rubygems}/...</div>
+          <div class="signal">7 ecosystems · SPDX licenses · advisoryKeys → OSV · slsaProvenances · attestations</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">15</span>
+            <h3>OSV.dev</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint">POST <span class="v">api.osv.dev</span>/v1/{query,querybatch}<br>GET /v1/vulns/{id}</div>
+          <div class="signal">package+version → vulns · CVSS 3.1 · affected[] version tree</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">13</span>
+            <h3>CVE / NVD</h3>
+            <span class="auth">anon · key+</span>
+          </header>
+          <div class="endpoint"><span class="v">services.nvd.nist.gov</span>/rest/json/cves/2.0</div>
+          <div class="signal">CVSS · CWE · CPE version tree · references[]</div>
+        </article>
+
+      </div>
+    </div>
+
+    <!-- LANE C: RESEARCH -->
+    <div class="lane">
+      <div class="lane-head">
+        <span class="lane-tag">Lane C</span>
+        <h3>Research</h3>
+        <span class="arrow">→</span>
+        <span class="out">outputs <em>papers · citations · peer review · datasets · models</em></span>
+      </div>
+      <div class="lane-grid">
+
+        <article class="adapter">
+          <header>
+            <span class="num">06</span>
+            <h3>arXiv</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">export.arxiv.org</span>/api/query<br>Atom XML</div>
+          <div class="signal">abstract · category · time window · phrase needs %22quote%22</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">07</span>
+            <h3>OpenAlex</h3>
+            <span class="auth">anon · polite</span>
+          </header>
+          <div class="endpoint"><span class="v">api.openalex.org</span>/works?search=&amp;filter=...</div>
+          <div class="signal">fwci · top_1_percent · concepts · counts_by_year · is_retracted · referenced_works</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">08</span>
+            <h3>OpenReview</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">api2.openreview.net</span>/notes/search → /notes?forum=&lt;id&gt;</div>
+          <div class="signal">public review · decision · rebuttal · two-stage fetch</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">12</span>
+            <h3>Hugging Face Hub</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">huggingface.co</span>/api/{models,datasets,spaces}<br>+ /api/daily_papers</div>
+          <div class="signal">downloads · likes · pipeline_tag · daily papers</div>
+        </article>
+
+      </div>
+    </div>
+
+    <!-- LANE D: COMMUNITY -->
+    <div class="lane">
+      <div class="lane-head">
+        <span class="lane-tag">Lane D</span>
+        <h3>Community &amp; Social</h3>
+        <span class="arrow">→</span>
+        <span class="out">outputs <em>verdicts · gotchas · hype · controversies · accepted answers</em></span>
+      </div>
+      <div class="lane-grid">
+
+        <article class="adapter">
+          <header>
+            <span class="num">03</span>
+            <h3>Stack Exchange</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">api.stackexchange.com</span>/2.3/search/advanced<br>?site={so,dba,sf,codereview,ai}</div>
+          <div class="signal">vote · is_accepted · score · multi-site</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">04</span>
+            <h3>HN Algolia</h3>
+            <span class="auth">anon</span>
+          </header>
+          <div class="endpoint"><span class="v">hn.algolia.com</span>/api/v1/search<br>?numericFilters=created_at_i&gt;...,points&gt;...</div>
+          <div class="signal">created_at_i × points window · vote filter</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">05</span>
+            <h3>Reddit</h3>
+            <span class="auth">anon · oauth+</span>
+          </header>
+          <div class="endpoint"><span class="v">reddit.com</span>/r/{sub}/search.json<br>?t=year&amp;restrict_sr=1</div>
+          <div class="signal">subreddit · upvote_ratio · score · 60–100 req/min when oauth'd</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">17</span>
+            <h3>Lobste.rs</h3>
+            <span class="auth">anon · ua</span>
+          </header>
+          <div class="endpoint"><span class="v">lobste.rs</span>/{hottest,newest}.json<br>+ /t/&lt;tag&gt;.json</div>
+          <div class="signal">tag · score · comment_count · submitter_user</div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">14</span>
+            <h3>twitterapi.io</h3>
+            <span class="auth key">x-api-key</span>
+          </header>
+          <div class="endpoint"><span class="v">api.twitterapi.io</span>/twitter/{advanced_search,user/info,user/last_tweets,replies}</div>
+          <div class="signal">viewCount · isBlueVerified · likeCount · retweetCount · pinnedTweetIds[0] · replies[]<br><span style="color:#ff7b72">free-tier QPS = 1 req / 5s</span></div>
+        </article>
+
+        <article class="adapter">
+          <header>
+            <span class="num">18</span>
+            <h3>Bluesky</h3>
+            <span class="auth token">bearer jwt</span>
+          </header>
+          <div class="endpoint">POST <span class="v">bsky.social</span>/xrpc/com.atproto.server.createSession<br>→ app.bsky.feed.{searchPosts,getAuthorFeed}</div>
+          <div class="signal">likeCount · repostCount · replyCount · did · authed search has no rate limit</div>
+        </article>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ §03 CO-INSTALL ═════════════════════════════ -->
+<section class="s" id="s03">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§03</span><span class="label">Co-install</span></div>
+      <h2>The four <em>local</em> hands.</h2>
+      <p class="lead">
+        Where an HTTP adapter is not the right shape &mdash; rendering JS, walking docs, downloading captions, asking a wiki &mdash; the harness shells out to a local CLI, or to a single MCP when no CLI exists. Web search via the host LLM is reserved as graceful degradation.
+      </p>
+    </div>
+
+    <div class="co-grid">
+
+      <article class="co">
+        <div class="surface cli">CLI · global</div>
+        <h3>Context7</h3>
+        <p class="desc">Authoritative docs grounding for mainstream libraries. Two-step: resolve a libId, then fetch a specific topic. Replaces "search the docs site" for anything Context7 covers.</p>
+        <div class="install"><span class="v">npm install -g ctx7</span> &amp;&amp; npx ctx7 setup<br><br><span class="v">ctx7 library</span> &lt;name&gt; &lt;q&gt; · <span class="v">ctx7 docs</span> &lt;libId&gt; &lt;q&gt;</div>
+      </article>
+
+      <article class="co">
+        <div class="surface cli">CLI · global</div>
+        <h3>Playwright</h3>
+        <p class="desc">Browser automation for JS-rendered pages, login walls, and any GUI surface that refuses to be curled. The escape hatch when sitemap.xml + curl returns shells of pages.</p>
+        <div class="install"><span class="v">npm install -g playwright</span><br>&amp;&amp; npx playwright install chromium</div>
+      </article>
+
+      <article class="co">
+        <div class="surface mcp">MCP · http</div>
+        <h3>DeepWiki</h3>
+        <p class="desc">AI-generated wiki + Q&amp;A across 50k+ OSS repos. Stands in for "read the entire repo to answer one question". Used when GitHub/Sourcegraph give the code but not the why.</p>
+        <div class="install"><span class="v">claude mcp add</span> --transport http<br>deepwiki <span class="v">https://mcp.deepwiki.com/mcp</span></div>
+      </article>
+
+      <article class="co">
+        <div class="surface cli">CLI · global</div>
+        <h3>yt-dlp</h3>
+        <p class="desc">Search 1000+ video sites, dump JSON metadata, fetch auto-generated subtitles. The fastest path to "what was actually said in that talk" without watching it.</p>
+        <div class="install"><span class="v">brew install yt-dlp</span><br><br><span class="v">yt-dlp "ytsearch5:..."</span> · <span class="v">--write-auto-sub</span> --sub-langs en</div>
+      </article>
+
+      <article class="co">
+        <div class="surface fallback">Last resort · host LLM</div>
+        <h3>web_search</h3>
+        <p class="desc">When all 20 adapters and 4 co-install tools come back empty &mdash; fall through to whatever <span class="kicker">web_search</span> the host LLM ships with. Triggering this should fire a metric, not a feature flag.</p>
+        <div class="install" style="color:#6e7884">Claude · Gemini · GPT — all carry one.<br>Not part of the dispatch table by design.</div>
+      </article>
+
+    </div>
+
+    <div style="margin-top: 32px; font-size: 12px; color: var(--ink-3); border-left: 2px solid var(--line-2); padding-left: 16px;">
+      <strong style="color: var(--ink-2);">Official-docs strategy:</strong> Mainstream libraries → <code>ctx7 docs</code>. Specialised sites Context7 does not cover (RFC, IETF, lore.kernel.org, Bugzilla, vendor release notes) → direct curl on HTML &amp; <code>sitemap.xml</code>, with host <code>web_search "site:..."</code> as the deepest fallback.
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ §04 EXECUTION ═════════════════════════════ -->
+<section class="s" id="s04">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§04</span><span class="label">Execution</span></div>
+      <h2>Cheap breadth, then <em>expensive depth.</em></h2>
+      <p class="lead">
+        L1 compiles the SourcePlan into a two-stage DAG. Stage&nbsp;1 fans out cheap searches in parallel; a top-K filter passes only survivors to Stage&nbsp;2 where N+1 enrichments happen. Per-source rate buckets and a three-tier cache do the bookkeeping so adapters stay simple.
+      </p>
+    </div>
+
+    <div class="exec-grid">
+      <div>
+        <h4>Two-stage DAG</h4>
+        <svg class="dag-svg" viewBox="0 0 600 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two-stage DAG fanout">
+          <defs>
+            <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+          </defs>
+
+          <text x="20" y="22" fill="#5cc8ff" font-family="JetBrains Mono" font-size="10" letter-spacing="0.2em">STAGE 1 · BREADTH · PARALLEL</text>
+          <rect x="10" y="30" width="580" height="160" rx="2" fill="none" stroke="#1c2330" stroke-width="0.5" stroke-dasharray="3 3"/>
+
+          <g font-family="JetBrains Mono" font-size="11">
+            <rect x="30" y="50" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="90" y="68" text-anchor="middle" fill="#d6dee8">npm.search</text>
+            <text x="90" y="84" text-anchor="middle" fill="#6e7884" font-size="10">q=polars</text>
+
+            <rect x="160" y="50" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="220" y="68" text-anchor="middle" fill="#d6dee8">github.repos</text>
+            <text x="220" y="84" text-anchor="middle" fill="#6e7884" font-size="10">stars sort</text>
+
+            <rect x="290" y="50" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="350" y="68" text-anchor="middle" fill="#d6dee8">crates.search</text>
+            <text x="350" y="84" text-anchor="middle" fill="#6e7884" font-size="10">downloads sort</text>
+
+            <rect x="420" y="50" width="150" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="495" y="68" text-anchor="middle" fill="#d6dee8">libraries.io</text>
+            <text x="495" y="84" text-anchor="middle" fill="#6e7884" font-size="10">SourceRank</text>
+
+            <rect x="30" y="106" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="90" y="124" text-anchor="middle" fill="#d6dee8">HN algolia</text>
+            <text x="90" y="140" text-anchor="middle" fill="#6e7884" font-size="10">points &gt; 50</text>
+
+            <rect x="160" y="106" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="220" y="124" text-anchor="middle" fill="#d6dee8">SE accepted</text>
+            <text x="220" y="140" text-anchor="middle" fill="#6e7884" font-size="10">is_accepted</text>
+
+            <rect x="290" y="106" width="120" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="350" y="124" text-anchor="middle" fill="#d6dee8">lobste.rs/t</text>
+            <text x="350" y="140" text-anchor="middle" fill="#6e7884" font-size="10">tag · score</text>
+
+            <rect x="420" y="106" width="150" height="42" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="495" y="124" text-anchor="middle" fill="#d6dee8">sourcegraph</text>
+            <text x="495" y="140" text-anchor="middle" fill="#6e7884" font-size="10">trigram · facet</text>
+          </g>
+
+          <text x="20" y="180" fill="#6e7884" font-family="JetBrains Mono" font-size="10">cached · rate-bucketed · all parallel</text>
+
+          <line x1="90" y1="148" x2="220" y2="220" stroke="#5cc8ff" stroke-width="1" marker-end="url(#arr2)"/>
+          <line x1="220" y1="148" x2="270" y2="220" stroke="#5cc8ff" stroke-width="1" marker-end="url(#arr2)"/>
+          <line x1="350" y1="148" x2="320" y2="220" stroke="#5cc8ff" stroke-width="1" marker-end="url(#arr2)"/>
+          <line x1="495" y1="148" x2="380" y2="220" stroke="#5cc8ff" stroke-width="1" marker-end="url(#arr2)"/>
+
+          <rect x="180" y="222" width="240" height="48" rx="2" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+          <text x="300" y="244" text-anchor="middle" fill="#ffa657" font-family="JetBrains Mono" font-size="12" font-weight="500">Top-K filter (K=5)</text>
+          <text x="300" y="262" text-anchor="middle" fill="#a8b1bc" font-family="JetBrains Mono" font-size="10.5">losers never enter Stage 2</text>
+
+          <line x1="300" y1="270" x2="300" y2="304" stroke="#ffa657" stroke-width="1" marker-end="url(#arr2)"/>
+
+          <text x="20" y="296" fill="#ffa657" font-family="JetBrains Mono" font-size="10" letter-spacing="0.2em">STAGE 2 · DEPTH · ON SURVIVORS</text>
+          <rect x="10" y="304" width="580" height="160" rx="2" fill="none" stroke="#1c2330" stroke-width="0.5" stroke-dasharray="3 3"/>
+
+          <g font-family="JetBrains Mono" font-size="11">
+            <rect x="30" y="324" width="125" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="92" y="342" text-anchor="middle" fill="#d6dee8">depsdev.versions</text>
+            <text x="92" y="358" text-anchor="middle" fill="#6e7884" font-size="10">slsa · license</text>
+
+            <rect x="165" y="324" width="125" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="227" y="342" text-anchor="middle" fill="#d6dee8">osv.querybatch</text>
+            <text x="227" y="358" text-anchor="middle" fill="#6e7884" font-size="10">5 pkgs · 1 call</text>
+
+            <rect x="300" y="324" width="125" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="362" y="342" text-anchor="middle" fill="#d6dee8">github.repo</text>
+            <text x="362" y="358" text-anchor="middle" fill="#6e7884" font-size="10">pushed_at</text>
+
+            <rect x="435" y="324" width="135" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="502" y="342" text-anchor="middle" fill="#d6dee8">deepwiki MCP</text>
+            <text x="502" y="358" text-anchor="middle" fill="#6e7884" font-size="10">repo Q&amp;A</text>
+
+            <rect x="100" y="380" width="155" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="177" y="398" text-anchor="middle" fill="#d6dee8">openreview.notes</text>
+            <text x="177" y="414" text-anchor="middle" fill="#6e7884" font-size="10">forum=&lt;id&gt;</text>
+
+            <rect x="265" y="380" width="155" height="42" rx="2" fill="#0f141d" stroke="#ffa657" stroke-width="0.6"/>
+            <text x="342" y="398" text-anchor="middle" fill="#d6dee8">twitterapi.replies</text>
+            <text x="342" y="414" text-anchor="middle" fill="#6e7884" font-size="10">thread expand</text>
+          </g>
+
+          <text x="20" y="450" fill="#6e7884" font-family="JetBrains Mono" font-size="10">batch endpoints preferred · fan-out width = K, not |hits|</text>
+        </svg>
+      </div>
+
+      <div>
+        <h4>Per-source rate governor</h4>
+        <table class="gov-table">
+          <thead>
+            <tr><th>source</th><th>rps</th><th>concurrency</th><th>note</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="src">twitterapi.io</td><td><code>0.2</code></td><td><code>1</code></td><td class="note">free tier: 1 req / 5s</td></tr>
+            <tr><td class="src">sourcegraph</td><td><code>2</code></td><td><code>4</code></td><td class="note">SSE stream</td></tr>
+            <tr><td class="src">github</td><td><code>5</code></td><td><code>8</code></td><td class="note">retry 403/429</td></tr>
+            <tr><td class="src">exa</td><td><code>5</code></td><td><code>8</code></td><td class="note">cost: $0.005/call</td></tr>
+            <tr><td class="src">openalex</td><td><code>10</code></td><td><code>8</code></td><td class="note">polite pool · UA mailto:</td></tr>
+            <tr><td class="src">hn algolia</td><td><code>10</code></td><td><code>16</code></td><td class="note">no auth</td></tr>
+            <tr><td class="src">osv</td><td><code>20</code></td><td><code>16</code></td><td class="note">querybatch first</td></tr>
+            <tr><td class="src">npm registry</td><td><code>10</code></td><td><code>16</code></td><td class="note">cache 1h warm</td></tr>
+          </tbody>
+        </table>
+
+        <div class="spacer-32"></div>
+
+        <h4>Cache · three tiers</h4>
+        <div class="cache-tier">
+          <div class="tier">
+            <div class="lvl hot">tier · hot</div>
+            <div class="key">in-mem · per DAG</div>
+            <div class="desc">TTL = ∞ inside one query. Same (source, params) never hits twice.</div>
+          </div>
+          <div class="tier">
+            <div class="lvl warm">tier · warm</div>
+            <div class="key">disk · per day</div>
+            <div class="desc">CVE 24h · papers 7d · twitter 5min · npm 1h · github 6h · exa 1h</div>
+          </div>
+          <div class="tier">
+            <div class="lvl cold">tier · cold</div>
+            <div class="key">archive · replay</div>
+            <div class="desc">Hit payloads stored. Re-run with new weights without re-hitting APIs.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ §05 EVIDENCE & EVAL ═════════════════════════════ -->
+<section class="s" id="s05">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§05</span><span class="label">Evidence &amp; Eval</span></div>
+      <h2>Verify on the way <em>in,</em> verify on the way <em>out.</em></h2>
+      <p class="lead">
+        The Evidence Graph wires every claim to the source that supports it &mdash; cite or it didn't happen. The Eval Harness checks the harness itself: did the artifact build, did its license clear, did a human have to rewrite it? No eval, no leverage.
+      </p>
+    </div>
+
+    <div class="duo">
+
+      <div class="panel">
+        <div class="ptag coral">L3 · Evidence Graph</div>
+        <h3><em>claim</em> ↔ source ↔ citation</h3>
+        <p class="desc">Three node types, two edge types. Entity layer (UnionFind on canonical ids) collapses duplicate sources of the same thing. Claim layer (NLI / textual entailment) anchors every assertion the agent emits back to one or more original sources.</p>
+        <svg class="evidence-svg" viewBox="0 0 480 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Evidence graph topology">
+          <defs>
+            <marker id="arr3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+          </defs>
+          <g font-family="JetBrains Mono" font-size="11">
+            <ellipse cx="100" cy="60" rx="68" ry="26" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+            <text x="100" y="58" text-anchor="middle" fill="#ffa657" font-weight="500">claim A</text>
+            <text x="100" y="73" text-anchor="middle" fill="#a8b1bc" font-size="9.5">"polars has 0 open CVEs"</text>
+
+            <ellipse cx="100" cy="160" rx="68" ry="26" fill="#1a2231" stroke="#ffa657" stroke-width="0.8"/>
+            <text x="100" y="158" text-anchor="middle" fill="#ffa657" font-weight="500">claim B</text>
+            <text x="100" y="173" text-anchor="middle" fill="#a8b1bc" font-size="9.5">"MIT license"</text>
+
+            <rect x="220" y="40" width="100" height="40" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="270" y="56" text-anchor="middle" fill="#d6dee8">source S1</text>
+            <text x="270" y="70" text-anchor="middle" fill="#6e7884" font-size="9.5">osv.querybatch</text>
+
+            <rect x="220" y="100" width="100" height="40" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="270" y="116" text-anchor="middle" fill="#d6dee8">source S2</text>
+            <text x="270" y="130" text-anchor="middle" fill="#6e7884" font-size="9.5">depsdev.versions</text>
+
+            <rect x="220" y="160" width="100" height="40" rx="2" fill="#0f141d" stroke="#5cc8ff" stroke-width="0.6"/>
+            <text x="270" y="176" text-anchor="middle" fill="#d6dee8">source S3</text>
+            <text x="270" y="190" text-anchor="middle" fill="#6e7884" font-size="9.5">github.licenses</text>
+
+            <rect x="370" y="70" width="90" height="40" rx="2" fill="#0f141d" stroke="#7ce38b" stroke-width="0.6"/>
+            <text x="415" y="86" text-anchor="middle" fill="#d6dee8">entity</text>
+            <text x="415" y="100" text-anchor="middle" fill="#7ce38b" font-size="9.5">polars</text>
+          </g>
+
+          <line x1="168" y1="60" x2="220" y2="60" stroke="#ffa657" stroke-width="1" marker-end="url(#arr3)"/>
+          <line x1="168" y1="68" x2="220" y2="115" stroke="#ffa657" stroke-width="0.8" stroke-dasharray="3 3" marker-end="url(#arr3)"/>
+          <line x1="168" y1="160" x2="220" y2="135" stroke="#ffa657" stroke-width="1" marker-end="url(#arr3)"/>
+          <line x1="168" y1="168" x2="220" y2="180" stroke="#ffa657" stroke-width="1" marker-end="url(#arr3)"/>
+
+          <line x1="320" y1="60" x2="370" y2="85" stroke="#7ce38b" stroke-width="0.8" marker-end="url(#arr3)"/>
+          <line x1="320" y1="120" x2="370" y2="95" stroke="#7ce38b" stroke-width="0.8" marker-end="url(#arr3)"/>
+          <line x1="320" y1="180" x2="370" y2="100" stroke="#7ce38b" stroke-width="0.8" marker-end="url(#arr3)"/>
+        </svg>
+        <ul class="checks">
+          <li><span class="k">01</span><span>Every claim must edge to ≥1 source — orphan claims hard-fail validation.</span></li>
+          <li><span class="k">02</span><span>UnionFind keys: <code>(host,owner,name)</code> for repos, <code>(eco,name,ver)</code> for packages, arXiv↔OpenAlex↔OpenReview for papers.</span></li>
+          <li><span class="k">03</span><span>Conflicting sources surface as parallel edges — not silently averaged.</span></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <div class="ptag green">After-artifact · Eval Harness</div>
+        <h3>The harness <em>tests</em> itself.</h3>
+        <p class="desc">Each query emits a trace. Each trace gets scored on five axes. Aggregate scores feed back into router weights and intent definitions — the only place LLM judgment is allowed at write time, and it's done offline.</p>
+        <ul class="checks" style="margin-top: 0;">
+          <li><span class="k">01</span><span><strong style="color:var(--ink)">Citation coverage</strong> — % of claims with ≥1 supporting source from L3.</span></li>
+          <li><span class="k">02</span><span><strong style="color:var(--ink)">Build &amp; test</strong> — generated patches must <code>go build</code> / <code>npm test</code> green.</span></li>
+          <li><span class="k">03</span><span><strong style="color:var(--ink)">License compliance</strong> — every recommended package SPDX-resolves to allowed list.</span></li>
+          <li><span class="k">04</span><span><strong style="color:var(--ink)">Anti-hallucination</strong> — random claim sample re-checked against original sources by NLI.</span></li>
+          <li><span class="k">05</span><span><strong style="color:var(--ink)">Human edit-distance</strong> — bytes the user changed before merging the artifact.</span></li>
+        </ul>
+        <div style="font-size: 11px; color: var(--ink-3); margin-top: 24px; padding: 12px; border: 1px dashed var(--line-2); background: var(--bg);">
+          <strong style="color: var(--warm);">If edit-distance does not trend toward zero, the harness is delivering 3×, not 15×.</strong> The metric is a forcing function — not a vanity number.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ §06 SURFACES ═════════════════════════════ -->
+<section class="s" id="s06">
+  <div class="wrap">
+    <div class="s-head">
+      <div class="s-num"><span>§06</span><span class="label">Surfaces</span></div>
+      <h2>Four shapes the <em>same capability</em> can take.</h2>
+      <p class="lead">
+        Skills, CLIs, MCPs, and host web search are not competitors &mdash; they are different envelopes for the same atomic operation: "go fetch X". The harness reaches for them in this order, and never higher than necessary.
+      </p>
+    </div>
+
+    <table class="surf-table">
+      <thead>
+        <tr>
+          <th class="lbl"></th>
+          <th class="skill">Skill <span class="stag">SKILL.md folder</span></th>
+          <th class="cli">CLI <span class="stag">global binary</span></th>
+          <th class="mcp">MCP <span class="stag">server endpoint</span></th>
+          <th class="web">web_search <span class="stag">host LLM, last resort</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="lbl">Shape</td>
+          <td>Folder with <code>SKILL.md</code> + adapter code + examples. Loaded by the agent on demand.</td>
+          <td>Local executable on <code>$PATH</code>. <code>gh</code>, <code>ctx7</code>, <code>yt-dlp</code>, <code>npx playwright</code>.</td>
+          <td>Long-running server speaking JSON-RPC over HTTP/stdio. Tool list discovered at session start.</td>
+          <td>The model's built-in browse tool. No setup, no contract.</td>
+        </tr>
+        <tr>
+          <td class="lbl">Examples here</td>
+          <td>Each of the 20 adapters is a skill. So is "how to assemble a SourcePlan".<span class="ex">github · arxiv · osv · openalex · …</span></td>
+          <td>Context7 · Playwright · yt-dlp · gh CLI<span class="ex">+ raw <code>curl</code> for sitemap walks</span></td>
+          <td>DeepWiki<span class="ex">only when no CLI exists</span></td>
+          <td>Claude / Gemini / GPT built-in<span class="ex">graceful degradation only</span></td>
+        </tr>
+        <tr>
+          <td class="lbl">Strength</td>
+          <td>Self-documenting · LLM reads contract before use · cheap to compose</td>
+          <td>Battle-tested · scriptable · zero RPC overhead · works offline</td>
+          <td>Stateful sessions · streaming · vendor-managed updates</td>
+          <td>Universal coverage — anything indexed by Google et al.</td>
+        </tr>
+        <tr>
+          <td class="lbl">Cost</td>
+          <td>Author once per source. Maintenance &lt; CLI.</td>
+          <td>Install per machine. Version drift across hosts.</td>
+          <td>Network hop per call. Auth per session.</td>
+          <td>Opaque ranking · stale snippets · zero independent attribution.</td>
+        </tr>
+        <tr>
+          <td class="lbl">When chosen</td>
+          <td>Default. Every HTTP source becomes a skill first.</td>
+          <td>Source has no public API, or auth/render needs a real binary.</td>
+          <td>Server already exists, no CLI equivalent, capability is genuinely stateful.</td>
+          <td>All twenty adapters and four co-installs returned empty &mdash; fire a metric, then fall through.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div style="margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px;">
+      <div>
+        <h4>Skill schema, abridged</h4>
+        <pre style="font-family:var(--mono); font-size:11px; line-height:1.6; color:var(--ink-2); background:var(--bg-1); border:1px solid var(--line-2); padding:14px; overflow-x:auto;">name: github
+description: search code, repos,
+  issues. Use when the task names a
+  repo, or asks for a code pattern.
+inputs:
+  query: string
+  filters: {language, license, stars}
+outputs:
+  hits[]: {url, title, stars, ...}
+when_to_use: |
+  Code-finding tasks where the user
+  references "GitHub", or any task
+  that needs star/fork/issue signals.
+when_not_to_use: |
+  Pure docs questions → ctx7.
+  Whole-repo Q&amp;A → DeepWiki MCP.</pre>
+      </div>
+      <div>
+        <h4>Dispatch order</h4>
+        <ol style="list-style: none; counter-reset: ord; font-size: 12px; line-height: 1.9;">
+          <li style="counter-increment: ord; padding: 6px 0; border-bottom: 1px dashed var(--line-2);"><span style="color: var(--ink-3); margin-right: 12px;">→ 01</span><span style="color: var(--ink);">Skill matching the intent</span></li>
+          <li style="counter-increment: ord; padding: 6px 0; border-bottom: 1px dashed var(--line-2);"><span style="color: var(--ink-3); margin-right: 12px;">→ 02</span><span style="color: var(--ink);">Skill enrichment fan-out</span></li>
+          <li style="counter-increment: ord; padding: 6px 0; border-bottom: 1px dashed var(--line-2);"><span style="color: var(--ink-3); margin-right: 12px;">→ 03</span><span style="color: var(--ink);">CLI co-install for non-HTTP shapes</span></li>
+          <li style="counter-increment: ord; padding: 6px 0; border-bottom: 1px dashed var(--line-2);"><span style="color: var(--ink-3); margin-right: 12px;">→ 04</span><span style="color: var(--ink);">MCP for stateful capabilities</span></li>
+          <li style="counter-increment: ord; padding: 6px 0;"><span style="color: var(--red); margin-right: 12px;">↘ 05</span><span style="color: var(--ink-3);">host <code>web_search</code> · last resort, fires alert</span></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <div class="sig">Search-Agent Harness, v0.1</div>
+        <div style="margin-top: 8px;">
+          built from Phase&nbsp;1 adapter manifest · Context7/Playwright/DeepWiki/yt-dlp co-install · Exa fallback policy
+        </div>
+        <div style="margin-top: 14px; font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.1em;">
+          NO RIGHTS RESERVED · WORKING DOCUMENT · GH-PAGES READY
+        </div>
+      </div>
+      <div style="text-align: right;">
+        <div class="v" style="color: var(--ink-2);">∎</div>
+        <div style="font-size: 10.5px; margin-top: 8px;">
+          <a href="#s01">↑ Pipeline</a> &nbsp;·&nbsp;
+          <a href="#s02">Adapters</a> &nbsp;·&nbsp;
+          <a href="#s06">Surfaces</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // active TOC highlight on scroll
+  const links = document.querySelectorAll('nav.toc a');
+  const sections = Array.from(document.querySelectorAll('section.s'));
+  function onScroll() {
+    let active = null;
+    const y = window.scrollY + 200;
+    for (const sec of sections) {
+      if (sec.offsetTop <= y) active = sec.id;
+    }
+    links.forEach(a => {
+      const isActive = a.getAttribute('href') === '#' + active;
+      a.style.color = isActive ? 'var(--acc)' : '';
+      const num = a.querySelector('.num');
+      if (num) num.style.color = isActive ? 'var(--acc)' : '';
+    });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
+
+</body>
+</html>
