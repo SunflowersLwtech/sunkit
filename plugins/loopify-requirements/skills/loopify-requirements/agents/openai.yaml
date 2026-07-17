@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loopify Requirements"
+  short_description: "Turn prompts into verifiable loops"
+  default_prompt: "Use $loopify-requirements to convert this request into a verifiable loop plan."
