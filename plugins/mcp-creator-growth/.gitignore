@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+mcp-creator-growth/  # MCP project virtual environment
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Local development
+.env
+.env.local
+*.local.json
+
+# MCP Sidecar data (user-specific)
+.mcp-sidecar/
+
+# OS files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.whl
+*.tar.gz
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node (for webui development)
+node_modules/
+.npm/
+
+# Claude settings (user-specific)
+.claude/
+
+# MCP config (contains absolute paths)
+.mcp.json
+
+# Development files (not for distribution)
+dev/
+
+# Windows temp files
+nul

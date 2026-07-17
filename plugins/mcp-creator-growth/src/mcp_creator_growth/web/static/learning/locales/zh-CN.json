@@ -1,0 +1,104 @@
+{
+    "app": {
+        "title": "学习助手",
+        "description": "AI驱动的学习伴侣"
+    },
+    "status": {
+        "waiting": "等待中",
+        "active": "进行中",
+        "completed": "已完成",
+        "error": "错误",
+        "reconnecting": "重连中...",
+        "connected": "已连接",
+        "disconnected": "已断开",
+        "cancelled": "已取消"
+    },
+    "summary": {
+        "title": "会话摘要",
+        "loading": "加载会话数据...",
+        "noData": "无会话数据"
+    },
+    "terms": {
+        "title": "关键术语",
+        "noData": "无术语数据"
+    },
+    "reasoning": {
+        "title": "推理洞察 (5-Why)",
+        "goal": "目标",
+        "trigger": "触发",
+        "mechanism": "机制",
+        "alternative": "替代方案",
+        "risk": "风险",
+        "nextStep": "下一步",
+        "noData": "无推理数据"
+    },
+    "quiz": {
+        "title": "快速测验",
+        "noData": "无测验问题",
+        "correct": "正确!",
+        "incorrect": "不太对...",
+        "question": "问题",
+        "explanation": "解释"
+    },
+    "progress": {
+        "label": "今日进度",
+        "correct": "正确",
+        "score": "得分"
+    },
+    "buttons": {
+        "cancel": "取消",
+        "submit": "完成学习",
+        "completed": "已完成",
+        "export": "导出",
+        "copy": "复制",
+        "close": "关闭"
+    },
+    "shortcuts": {
+        "submit": "提交",
+        "copy": "复制"
+    },
+    "badges": {
+        "loading": "加载中...",
+        "learningSession": "学习会话"
+    },
+    "toast": {
+        "copySuccess": "已复制到剪贴板!",
+        "copyError": "复制失败",
+        "sessionIdCopied": "会话ID已复制!",
+        "summaryCopied": "摘要已复制!",
+        "reasoningCopied": "推理已复制!",
+        "exportSuccess": "会话已导出!",
+        "exportError": "导出失败",
+        "submitSuccess": "学习完成! Agent已解除阻塞。",
+        "submitError": "提交失败",
+        "cancelSuccess": "会话已取消。Agent已解除阻塞。",
+        "cancelError": "取消失败",
+        "noSession": "无活跃会话",
+        "sessionNotFound": "会话未找到",
+        "connectionLost": "连接断开",
+        "reconnecting": "正在重连...",
+        "reconnected": "已重连!",
+        "languageChanged": "语言已更改",
+        "sessionStorageUnavailable": "会话存储不可用，你的进度将不会保存。"
+    },
+    "errors": {
+        "network": "网络错误，请检查您的连接。",
+        "timeout": "请求超时，请重试。",
+        "server": "服务器错误，请稍后重试。",
+        "validation": "输入无效，请检查您的数据。",
+        "unknown": "发生未知错误。"
+    },
+    "confirm": {
+        "cancel": "确定要取消这个学习会话吗？"
+    },
+    "accessibility": {
+        "toggleTheme": "切换主题",
+        "exportSession": "导出会话",
+        "selectLanguage": "选择语言",
+        "copyToClipboard": "复制到剪贴板"
+    },
+    "complete": {
+        "message": "学习完成！",
+        "hint": "您现在可以关闭此标签页"
+    }
+}

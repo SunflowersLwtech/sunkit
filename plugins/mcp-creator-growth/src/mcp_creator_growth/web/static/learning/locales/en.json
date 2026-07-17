@@ -1,0 +1,104 @@
+{
+    "app": {
+        "title": "Learning Sidecar",
+        "description": "AI-powered learning companion"
+    },
+    "status": {
+        "waiting": "Waiting",
+        "active": "In Progress",
+        "completed": "Completed",
+        "error": "Error",
+        "reconnecting": "Reconnecting...",
+        "connected": "Connected",
+        "disconnected": "Disconnected",
+        "cancelled": "Cancelled"
+    },
+    "summary": {
+        "title": "Session Summary",
+        "loading": "Loading session data...",
+        "noData": "No session data available"
+    },
+    "terms": {
+        "title": "Key Terms",
+        "noData": "No terms available"
+    },
+    "reasoning": {
+        "title": "Reasoning Insights (5-Why)",
+        "goal": "Goal",
+        "trigger": "Trigger",
+        "mechanism": "Mechanism",
+        "alternative": "Alternative",
+        "risk": "Risk",
+        "nextStep": "Next Step",
+        "noData": "No reasoning data available"
+    },
+    "quiz": {
+        "title": "Quick Quizzes",
+        "noData": "No quiz questions available",
+        "correct": "Correct!",
+        "incorrect": "Not quite...",
+        "question": "Question",
+        "explanation": "Explanation"
+    },
+    "progress": {
+        "label": "Today's Progress",
+        "correct": "Correct",
+        "score": "Score"
+    },
+    "buttons": {
+        "cancel": "Cancel",
+        "submit": "Complete Learning",
+        "completed": "Completed",
+        "export": "Export",
+        "copy": "Copy",
+        "close": "Close"
+    },
+    "shortcuts": {
+        "submit": "Submit",
+        "copy": "Copy"
+    },
+    "badges": {
+        "loading": "Loading...",
+        "learningSession": "Learning Session"
+    },
+    "toast": {
+        "copySuccess": "Copied to clipboard!",
+        "copyError": "Copy failed",
+        "sessionIdCopied": "Session ID copied!",
+        "summaryCopied": "Summary copied!",
+        "reasoningCopied": "Reasoning copied!",
+        "exportSuccess": "Session exported!",
+        "exportError": "Export failed",
+        "submitSuccess": "Learning completed! Agent unblocked.",
+        "submitError": "Submit failed",
+        "cancelSuccess": "Session cancelled. Agent unblocked.",
+        "cancelError": "Cancel failed",
+        "noSession": "No active session",
+        "sessionNotFound": "Session not found",
+        "connectionLost": "Connection lost",
+        "reconnecting": "Reconnecting...",
+        "reconnected": "Reconnected!",
+        "languageChanged": "Language changed",
+        "sessionStorageUnavailable": "Session storage is unavailable. Your progress will not be saved."
+    },
+    "errors": {
+        "network": "Network error. Please check your connection.",
+        "timeout": "Request timed out. Please try again.",
+        "server": "Server error. Please try again later.",
+        "validation": "Invalid input. Please check your data.",
+        "unknown": "An unknown error occurred."
+    },
+    "confirm": {
+        "cancel": "Are you sure you want to cancel this learning session?"
+    },
+    "accessibility": {
+        "toggleTheme": "Toggle theme",
+        "exportSession": "Export session",
+        "selectLanguage": "Select language",
+        "copyToClipboard": "Copy to clipboard"
+    },
+    "complete": {
+        "message": "Learning Complete!",
+        "hint": "You may close this tab now"
+    }
+}

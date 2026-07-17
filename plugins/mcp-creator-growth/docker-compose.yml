@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  mcp-creator-growth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-creator-growth:latest
+    container_name: mcp-creator-growth
+    stdin_open: true
+    tty: true
+    environment:
+      - MCP_DEBUG=false
+    volumes:
+      # Mount your project directory for the MCP server to access
+      - ./:/workspace:ro
+      # Persistent storage for learning sessions and debug records
+      - mcp-data:/data/.mcp-sidecar
+    working_dir: /workspace
+    restart: unless-stopped
+
+volumes:
+  mcp-data:
+    driver: local

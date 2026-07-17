@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Learning Sidecar</title>
+    <meta name="description"
+        content="Learning session for AI coding assistants - understand code changes through quizzes and reasoning">
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+
+<body class="page-enter">
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Complete Overlay (shown after submission) -->
+    <div id="complete-overlay" class="complete-overlay" style="display: none;">
+        <svg class="check-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </svg>
+        <span class="complete-message" data-i18n="complete.message">Learning Complete!</span>
+        <span class="complete-hint" data-i18n="complete.hint">You may close this tab now</span>
+    </div>
+
+    <!-- Confetti Container -->
+    <div id="confetti-container" class="confetti-container"></div>
+
+    <!-- Sidecar Header -->
+    <header class="sidecar-header glass">
+        <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+            </svg>
+            <span data-i18n="app.title">Learning Sidecar</span>
+        </div>
+        <div class="controls">
+            <div class="status-pill" id="status-badge">
+                <span class="connection-indicator" id="connection-indicator"></span>
+                <span id="status-text" data-i18n="status.waiting">Waiting</span>
+            </div>
+            <div class="lang-selector">
+                <select id="lang-select" title="Language">
+                    <option value="en">EN</option>
+                    <option value="zh-CN">简中</option>
+                    <option value="zh-TW">繁中</option>
+                </select>
+            </div>
+            <button class="icon-btn" id="export-btn" title="Export session">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+            </button>
+            <button class="icon-btn" id="theme-toggle" title="Toggle theme">
+                <svg id="moon-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                </svg>
+                <svg id="sun-icon" style="display:none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2" />
+                    <path d="M12 20v2" />
+                    <path d="m4.93 4.93 1.41 1.41" />
+                    <path d="m17.66 17.66 1.41 1.41" />
+                    <path d="M2 12h2" />
+                    <path d="M20 12h2" />
+                    <path d="m6.34 17.66-1.41 1.41" />
+                    <path d="m19.07 4.93-1.41 1.41" />
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Summary Section -->
+        <section class="section">
+            <div class="card summary-card card-glow card-elevated gradient-border" id="summary-card">
+                <div class="card-header">
+                    <div class="card-header-left">
+                        <svg class="status-icon completed" id="summary-status-icon" xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                            <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                        <span class="card-header-title" data-i18n="summary.title">Session Summary</span>
+                        <span class="session-id copyable" id="session-id-display"
+                            data-copy-hint="Click to copy">Loading...</span>
+                    </div>
+                    <button class="icon-btn" id="copy-summary-btn" title="Copy to clipboard">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="card-content">
+                    <!-- Skeleton Loading State -->
+                    <div class="badges" id="summary-badges">
+                        <div class="skeleton skeleton-badge"></div>
+                        <div class="skeleton skeleton-badge"></div>
+                    </div>
+                    <div id="summary-text-container">
+                        <div class="skeleton skeleton-text" style="width: 100%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 85%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 70%;"></div>
+                    </div>
+                    <p class="summary-text" id="summary-text" style="display: none;"></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Terms Section -->
+        <section class="section" id="terms-section" style="display: none;">
+            <h2 class="section-title" data-i18n="terms.title">Key Terms</h2>
+            <div class="terms-container" id="terms-container">
+                <!-- Terms will be rendered here -->
+            </div>
+        </section>
+
+        <!-- Reasoning Section -->
+        <section class="section">
+            <h2 class="section-title" data-i18n="reasoning.title">Reasoning Insights (5-Why)</h2>
+            <div class="cards-grid" id="reasoning-container">
+                <!-- Skeleton Loading -->
+                <div class="card card-glow">
+                    <div class="card-content">
+                        <div class="skeleton skeleton-text" style="width: 30%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 100%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 80%;"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quiz Section -->
+        <section class="section">
+            <h2 class="section-title" data-i18n="quiz.title">Quick Quizzes</h2>
+            <div class="cards-grid" id="quiz-container">
+                <!-- Skeleton Loading -->
+                <div class="card quiz-card card-glow">
+                    <div class="card-header">
+                        <div class="skeleton skeleton-text" style="width: 60%;"></div>
+                    </div>
+                    <div class="card-content">
+                        <div class="skeleton skeleton-text" style="width: 100%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 90%; margin-top: 16px;"></div>
+                        <div class="skeleton skeleton-text" style="width: 85%; margin-top: 8px;"></div>
+                        <div class="skeleton skeleton-text" style="width: 88%; margin-top: 8px;"></div>
+                    </div>
+                </div>
+                <div class="card quiz-card card-glow">
+                    <div class="card-header">
+                        <div class="skeleton skeleton-text" style="width: 50%;"></div>
+                    </div>
+                    <div class="card-content">
+                        <div class="skeleton skeleton-text" style="width: 95%;"></div>
+                        <div class="skeleton skeleton-text" style="width: 80%; margin-top: 16px;"></div>
+                        <div class="skeleton skeleton-text" style="width: 82%; margin-top: 8px;"></div>
+                        <div class="skeleton skeleton-text" style="width: 78%; margin-top: 8px;"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Actions Bar -->
+    <div class="actions-bar glass-strong">
+        <button class="btn btn-secondary" id="cancel-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+            </svg>
+            <span data-i18n="buttons.cancel">Cancel</span>
+        </button>
+        <button class="btn btn-primary" id="submit-btn" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span data-i18n="buttons.submit">Complete Learning</span>
+            <span class="spinner" id="submit-spinner" style="display: none;"></span>
+        </button>
+    </div>
+
+    <!-- JavaScript Modules -->
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+
+</html>

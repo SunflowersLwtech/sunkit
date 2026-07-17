@@ -1,0 +1,104 @@
+{
+    "app": {
+        "title": "學習助手",
+        "description": "AI驅動的學習夥伴"
+    },
+    "status": {
+        "waiting": "等待中",
+        "active": "進行中",
+        "completed": "已完成",
+        "error": "錯誤",
+        "reconnecting": "重連中...",
+        "connected": "已連接",
+        "disconnected": "已斷開",
+        "cancelled": "已取消"
+    },
+    "summary": {
+        "title": "會話摘要",
+        "loading": "載入會話資料...",
+        "noData": "無會話資料"
+    },
+    "terms": {
+        "title": "關鍵術語",
+        "noData": "無術語資料"
+    },
+    "reasoning": {
+        "title": "推理洞察 (5-Why)",
+        "goal": "目標",
+        "trigger": "觸發",
+        "mechanism": "機制",
+        "alternative": "替代方案",
+        "risk": "風險",
+        "nextStep": "下一步",
+        "noData": "無推理資料"
+    },
+    "quiz": {
+        "title": "快速測驗",
+        "noData": "無測驗問題",
+        "correct": "正確!",
+        "incorrect": "不太對...",
+        "question": "問題",
+        "explanation": "解釋"
+    },
+    "progress": {
+        "label": "今日進度",
+        "correct": "正確",
+        "score": "得分"
+    },
+    "buttons": {
+        "cancel": "取消",
+        "submit": "完成學習",
+        "completed": "已完成",
+        "export": "匯出",
+        "copy": "複製",
+        "close": "關閉"
+    },
+    "shortcuts": {
+        "submit": "提交",
+        "copy": "複製"
+    },
+    "badges": {
+        "loading": "載入中...",
+        "learningSession": "學習會話"
+    },
+    "toast": {
+        "copySuccess": "已複製到剪貼簿!",
+        "copyError": "複製失敗",
+        "sessionIdCopied": "會話ID已複製!",
+        "summaryCopied": "摘要已複製!",
+        "reasoningCopied": "推理已複製!",
+        "exportSuccess": "會話已匯出!",
+        "exportError": "匯出失敗",
+        "submitSuccess": "學習完成! Agent已解除阻塞。",
+        "submitError": "提交失敗",
+        "cancelSuccess": "會話已取消。Agent已解除阻塞。",
+        "cancelError": "取消失敗",
+        "noSession": "無活躍會話",
+        "sessionNotFound": "會話未找到",
+        "connectionLost": "連線斷開",
+        "reconnecting": "正在重連...",
+        "reconnected": "已重連!",
+        "languageChanged": "語言已更改",
+        "sessionStorageUnavailable": "會話儲存不可用，你的進度將不會保存。"
+    },
+    "errors": {
+        "network": "網路錯誤，請檢查您的連線。",
+        "timeout": "請求逾時，請重試。",
+        "server": "伺服器錯誤，請稍後重試。",
+        "validation": "輸入無效，請檢查您的資料。",
+        "unknown": "發生未知錯誤。"
+    },
+    "confirm": {
+        "cancel": "確定要取消這個學習會話嗎？"
+    },
+    "accessibility": {
+        "toggleTheme": "切換主題",
+        "exportSession": "匯出會話",
+        "selectLanguage": "選擇語言",
+        "copyToClipboard": "複製到剪貼簿"
+    },
+    "complete": {
+        "message": "學習完成！",
+        "hint": "您現在可以關閉此標籤頁"
+    }
+}

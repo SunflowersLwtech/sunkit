@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mcp-creator-growth": {
+      "type": "stdio",
+      "command": "${HOME}/mcp-creator-growth/mcp-creator-growth/bin/python",
+      "args": ["-m", "mcp_creator_growth"],
+      "env": {
+        "MCP_DEBUG": "${MCP_DEBUG:-false}"
+      }
+    }
+  }
+}
