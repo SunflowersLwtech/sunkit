@@ -1,0 +1,11 @@
+{
+  "name": "mcp-creator-growth",
+  "version": "1.1.0",
+  "description": "MCP Creator Growth - Context-aware learning sidebar for AI coding assistants, served as an MCP server.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["mcp", "learning", "web-ui", "sidebar"],
+  "mcpServers": "./.mcp.json"
+}

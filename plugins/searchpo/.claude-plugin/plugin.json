@@ -1,0 +1,14 @@
+{
+  "name": "searchpo",
+  "version": "1.0.0",
+  "description": "OSS Radar search pipeline: data prep, agent harness, research/impl agents, and the searchpo-full-flow command.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["search", "oss-radar", "pipeline", "agents"],
+  "skills": "./skills/",
+  "commands": [
+    "./commands/searchpo-full-flow.md"
+  ]
+}
