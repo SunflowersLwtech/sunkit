@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "github-repo-to-x-threads",
+      "path": "github-repo-to-x-threads",
+      "description": "Turn GitHub repos, papers, URLs, notes, ideas, profile prompts, and support complaints into Agent-engineering-positioned X content packs with brand routing, model quality chain, claim review, image governance, optional official X API publishing, and local strategy memory.",
+      "entrypoint": "github-repo-to-x-threads/SKILL.md",
+      "routing_eval": "github-repo-to-x-threads/routing-eval.jsonl",
+      "triggers": [
+        "repo to X",
+        "Twitter/X thread",
+        "posting pack",
+        "launch/share post",
+        "配图",
+        "official X API publish",
+        "strategy memory",
+        "skill evolution",
+        "Agent 工程实战派",
+        "model quality chain",
+        "bug report rewrite",
+        "profile positioning"
+      ]
+    }
+  ]
+}

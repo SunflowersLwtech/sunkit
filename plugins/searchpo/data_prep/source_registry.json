@@ -1,0 +1,700 @@
+{
+  "version": "2026-05-28.data-prep",
+  "timezone": "Asia/Kuala_Lumpur",
+  "default_collection_window_hours": 48,
+  "sources": [
+    {
+      "id": "github_trending",
+      "priority": "P0",
+      "category": "oss_project",
+      "role": "Fresh OSS repository discovery and repo-level metrics.",
+      "fetch_method": "html",
+      "primary_endpoint": "https://github.com/trending?since=daily&spoken_language_code=",
+      "probe_url": "https://github.com/trending?since=daily&spoken_language_code=",
+      "fallback_endpoint": "https://api.github.com/search/repositories",
+      "auth": "optional_github_token",
+      "schedule": "daily",
+      "rate_policy": "Prefer one trending HTML request per run. Use Search API only for query expansion or fallback.",
+      "queries": [
+        "topic:ai created:>{date_minus_7d}",
+        "topic:agents created:>{date_minus_14d}",
+        "topic:llm created:>{date_minus_14d}",
+        "topic:mcp created:>{date_minus_30d}",
+        "topic:rag created:>{date_minus_30d}",
+        "browser agent",
+        "coding agent",
+        "workflow automation"
+      ],
+      "extract_fields": [
+        "repo_full_name",
+        "url",
+        "description",
+        "language",
+        "stars",
+        "stars_today",
+        "forks",
+        "topics",
+        "owner",
+        "readme_url"
+      ],
+      "search_use": [
+        "discover_new_repos",
+        "verify_repo_metrics",
+        "detect_demo_assets_from_readme"
+      ],
+      "preprocess": [
+        "canonicalize_repo_url",
+        "parse_owner_repo",
+        "fetch_readme_for_top_candidates_only",
+        "extract_demo_keywords_from_readme"
+      ],
+      "source_reliability": 0.85
+    },
+    {
+      "id": "github_search_ai_repos",
+      "priority": "P0",
+      "category": "oss_project",
+      "role": "Query-expanded GitHub repository discovery for agent, MCP, LLM, RAG, and workflow automation projects.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://api.github.com/search/repositories",
+      "probe_url": "https://api.github.com/search/repositories?q=topic:ai&sort=updated&order=desc&per_page=1",
+      "auth": "optional_github_token",
+      "schedule": "daily",
+      "rate_policy": "Use repo search with SEARCHPO_MAX_QUERIES_PER_SOURCE capped query batches; prefer .env GitHub tokens for higher limits.",
+      "queries": [
+        "topic:ai created:>{date_minus_7d}",
+        "topic:agents created:>{date_minus_14d}",
+        "topic:llm created:>{date_minus_14d}",
+        "topic:mcp created:>{date_minus_30d}",
+        "topic:rag created:>{date_minus_30d}",
+        "\"browser agent\"",
+        "\"coding agent\"",
+        "\"workflow automation\""
+      ],
+      "extract_fields": [
+        "full_name",
+        "html_url",
+        "description",
+        "language",
+        "stargazers_count",
+        "forks_count",
+        "open_issues_count",
+        "topics",
+        "created_at",
+        "pushed_at"
+      ],
+      "search_use": [
+        "query_expand_new_repos",
+        "find_non_trending_repo_launches",
+        "verify_repo_activity"
+      ],
+      "preprocess": [
+        "canonicalize_repo_url",
+        "parse_owner_repo",
+        "normalize_repo_metrics",
+        "prefer_recent_activity"
+      ],
+      "source_reliability": 0.86
+    },
+    {
+      "id": "hacker_news_algolia",
+      "priority": "P0",
+      "category": "developer_discussion",
+      "role": "Early technical discussion, objections, and adoption signals.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://hn.algolia.com/api/v1/search_by_date",
+      "probe_url": "https://hn.algolia.com/api/v1/search_by_date?tags=story&query=AI&hitsPerPage=1",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Run keyword batches with hitsPerPage <= 50 and created_at_i filter.",
+      "queries": [
+        "AI agent",
+        "coding agent",
+        "open source AI",
+        "local LLM",
+        "MCP",
+        "RAG",
+        "automation",
+        "developer tool",
+        "Show HN AI",
+        "Launch HN AI"
+      ],
+      "extract_fields": [
+        "objectID",
+        "title",
+        "url",
+        "author",
+        "points",
+        "num_comments",
+        "created_at",
+        "story_text",
+        "comment_text"
+      ],
+      "search_use": [
+        "find_discussion",
+        "identify_pain_points",
+        "cross_source_validation"
+      ],
+      "preprocess": [
+        "drop_dead_or_deleted_items",
+        "resolve_story_url",
+        "keep_comment_count_as_engagement",
+        "flag_launch_or_show_hn"
+      ],
+      "source_reliability": 0.7
+    },
+    {
+      "id": "product_hunt_feed",
+      "priority": "P0",
+      "category": "product_launch",
+      "role": "New AI/SaaS/tool launches with launch copy and product positioning.",
+      "fetch_method": "atom_feed",
+      "primary_endpoint": "https://www.producthunt.com/feed",
+      "probe_url": "https://www.producthunt.com/feed",
+      "auth": "none_for_feed",
+      "schedule": "daily",
+      "rate_policy": "Fetch feed once per run. Do not scrape dynamic pages in the current source set.",
+      "queries": [
+        "AI",
+        "developer tools",
+        "automation",
+        "productivity",
+        "no-code",
+        "agents",
+        "analytics",
+        "video",
+        "voice"
+      ],
+      "extract_fields": [
+        "entry_id",
+        "title",
+        "url",
+        "summary",
+        "published_at",
+        "author",
+        "category_terms"
+      ],
+      "search_use": [
+        "detect_product_launches",
+        "find_demo_ready_tools",
+        "map_commercial_positioning"
+      ],
+      "preprocess": [
+        "canonicalize_product_url",
+        "strip_tracking_params",
+        "flag_marketing_language",
+        "extract_demo_or_try_links_when_available"
+      ],
+      "source_reliability": 0.65
+    },
+    {
+      "id": "devto_ai",
+      "priority": "P1",
+      "category": "developer_article",
+      "role": "Developer tutorials, launch writeups, and tool walkthroughs from Dev.to.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://dev.to/api/articles",
+      "probe_url": "https://dev.to/api/articles?tag=ai&top=7&per_page=1",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Use public API with small per-tag pages; tags are query expansion only.",
+      "queries": [
+        "ai",
+        "machinelearning",
+        "opensource",
+        "programming",
+        "productivity",
+        "webdev"
+      ],
+      "extract_fields": [
+        "id",
+        "title",
+        "url",
+        "description",
+        "published_at",
+        "tag_list",
+        "positive_reactions_count",
+        "comments_count"
+      ],
+      "search_use": [
+        "find_tutorial_walkthroughs",
+        "detect_developer_adoption",
+        "support_demo_or_usage_angle"
+      ],
+      "preprocess": [
+        "canonicalize_article_url",
+        "keep_reaction_and_comment_metrics",
+        "downrank_generic_tutorials"
+      ],
+      "source_reliability": 0.66
+    },
+    {
+      "id": "lobsters_ai",
+      "priority": "P1",
+      "category": "developer_discussion",
+      "role": "Technical discussion and skeptical adoption signal from Lobsters.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://lobste.rs/t/ai.json",
+      "probe_url": "https://lobste.rs/t/ai.json",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Fetch the AI tag JSON once per run and use score/comment count as discussion signal.",
+      "queries": [
+        "ai"
+      ],
+      "extract_fields": [
+        "short_id",
+        "title",
+        "url",
+        "comments_url",
+        "description",
+        "created_at",
+        "score",
+        "comment_count",
+        "tags"
+      ],
+      "search_use": [
+        "find_skeptical_discussion",
+        "identify_technical_objections",
+        "cross_source_validation"
+      ],
+      "preprocess": [
+        "prefer_original_url_over_comments_url",
+        "keep_comment_count_as_engagement",
+        "flag_community_only"
+      ],
+      "source_reliability": 0.72
+    },
+    {
+      "id": "exa_web_search",
+      "priority": "P1",
+      "category": "web_research_enrichment",
+      "role": "High-recall web search over official docs, launch pages, repo mentions, and independent discussion.",
+      "fetch_method": "json_post_api",
+      "primary_endpoint": "https://api.exa.ai/search",
+      "probe_url": "https://api.exa.ai/search",
+      "auth": "exa_api_key",
+      "requires_env_any": [
+        "EXA_API_KEY"
+      ],
+      "timeout_seconds": 8,
+      "schedule": "daily",
+      "rate_policy": "Use only when EXA_API_KEY is present in .env or shell; send the key in x-api-key header and never persist it.",
+      "queries": [
+        "AI agent developer tool launch GitHub demo",
+        "open source LLM agent MCP RAG workflow automation",
+        "new AI productivity tool Product Hunt Hacker News",
+        "AI model demo Hugging Face arXiv code",
+        "developer pain automation self hosted AI tool"
+      ],
+      "extract_fields": [
+        "id",
+        "url",
+        "title",
+        "text",
+        "publishedDate",
+        "score"
+      ],
+      "search_use": [
+        "high_recall_web_discovery",
+        "find_independent_mentions",
+        "fill_source_family_gaps"
+      ],
+      "preprocess": [
+        "canonicalize_url",
+        "prefer_official_docs_and_repo_mentions",
+        "dedupe_by_domain_and_title"
+      ],
+      "source_reliability": 0.74
+    },
+    {
+      "id": "huggingface_models",
+      "priority": "P0",
+      "category": "model_or_space",
+      "role": "Model, Space, and dataset trend discovery.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://huggingface.co/api/models",
+      "probe_url": "https://huggingface.co/api/models?sort=likes&direction=-1&limit=1",
+      "auth": "optional_huggingface_token",
+      "schedule": "daily",
+      "rate_policy": "Use limit <= 50. Track rate-limit headers; prefer .env Hugging Face token when present.",
+      "queries": [
+        "sort=likes&direction=-1&limit=50",
+        "search=agent&sort=lastModified&direction=-1&limit=50",
+        "search=voice&sort=lastModified&direction=-1&limit=50",
+        "search=video&sort=lastModified&direction=-1&limit=50",
+        "search=rag&sort=lastModified&direction=-1&limit=50"
+      ],
+      "extract_fields": [
+        "modelId",
+        "url",
+        "likes",
+        "downloads",
+        "tags",
+        "pipeline_tag",
+        "lastModified",
+        "author"
+      ],
+      "search_use": [
+        "find_model_signals",
+        "find_demo_spaces",
+        "support_paper_to_product_candidates"
+      ],
+      "preprocess": [
+        "canonicalize_model_url",
+        "derive_model_family",
+        "flag_space_or_demo_tags",
+        "normalize_download_and_like_metrics"
+      ],
+      "source_reliability": 0.8
+    },
+    {
+      "id": "libraries_io_search",
+      "priority": "P1",
+      "category": "package_ecosystem",
+      "role": "Package ecosystem discovery, dependency traction, and repository back-links.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://libraries.io/api/search",
+      "probe_url": "https://libraries.io/api/search?q=ai&per_page=1",
+      "auth": "libraries_io_api_key",
+      "requires_env_any": [
+        "LIBRARIES_IO_API_KEY"
+      ],
+      "timeout_seconds": 5,
+      "abort_on_first_error": true,
+      "schedule": "daily",
+      "rate_policy": "Use only when LIBRARIES_IO_API_KEY is present in .env or shell; never log api_key values.",
+      "queries": [
+        "ai agent",
+        "llm",
+        "mcp",
+        "rag",
+        "workflow automation",
+        "browser automation"
+      ],
+      "extract_fields": [
+        "name",
+        "platform",
+        "repository_url",
+        "package_manager_url",
+        "description",
+        "rank",
+        "stars",
+        "dependent_repos_count",
+        "dependents_count",
+        "latest_release_published_at"
+      ],
+      "search_use": [
+        "find_package_adoption",
+        "identify_repo_backlinks",
+        "validate_ecosystem_usage"
+      ],
+      "preprocess": [
+        "prefer_repository_url",
+        "normalize_package_platform",
+        "keep_dependency_metrics"
+      ],
+      "source_reliability": 0.76
+    },
+    {
+      "id": "arxiv_ai_ml_cl",
+      "priority": "P0",
+      "category": "research_paper",
+      "role": "Fresh AI/ML/CL papers that can become product or workflow judgments.",
+      "fetch_method": "atom_api",
+      "primary_endpoint": "https://export.arxiv.org/api/query",
+      "probe_url": "https://export.arxiv.org/api/query?search_query=cat:cs.AI&start=0&max_results=1&sortBy=submittedDate&sortOrder=descending",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Use max_results <= 50 per category. Respect arXiv rate guidance in implementation.",
+      "queries": [
+        "cat:cs.AI",
+        "cat:cs.LG",
+        "cat:cs.CL",
+        "cat:cs.CV",
+        "all:agent",
+        "all:retrieval augmented generation",
+        "all:code generation",
+        "all:video generation"
+      ],
+      "extract_fields": [
+        "arxiv_id",
+        "title",
+        "url",
+        "summary",
+        "authors",
+        "published_at",
+        "updated_at",
+        "categories",
+        "pdf_url"
+      ],
+      "search_use": [
+        "find_paper_to_product_items",
+        "support_claim_sources",
+        "detect_technical_breakthroughs"
+      ],
+      "preprocess": [
+        "canonicalize_arxiv_id",
+        "strip_latex_noise",
+        "extract_method_and_claim_phrases",
+        "penalize_no_demo_or_no_code"
+      ],
+      "source_reliability": 0.9
+    },
+    {
+      "id": "v2ex_hot",
+      "priority": "P1",
+      "category": "cn_developer_discussion",
+      "role": "Chinese developer pain, reactions, and practical adoption signals.",
+      "fetch_method": "json_api",
+      "primary_endpoint": "https://www.v2ex.com/api/topics/hot.json",
+      "probe_url": "https://www.v2ex.com/api/topics/hot.json",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Fetch once per run. Track V2EX rate-limit headers.",
+      "queries": [
+        "AI",
+        "LLM",
+        "Agent",
+        "MCP",
+        "自动化",
+        "开源",
+        "效率工具",
+        "开发者工具"
+      ],
+      "extract_fields": [
+        "id",
+        "title",
+        "url",
+        "content",
+        "member.username",
+        "node.name",
+        "replies",
+        "created",
+        "last_modified"
+      ],
+      "search_use": [
+        "find_chinese_pain_points",
+        "detect_local_adoption_or_complaints",
+        "validate_cn_relevance"
+      ],
+      "preprocess": [
+        "convert_unix_timestamps",
+        "normalize_cn_text",
+        "flag_complaint_or_question_titles",
+        "keep_reply_count_as_engagement"
+      ],
+      "source_reliability": 0.62
+    },
+    {
+      "id": "kr36_feed",
+      "priority": "P1",
+      "category": "cn_tech_business",
+      "role": "Chinese tech, startup, and funding/business context.",
+      "fetch_method": "rss_feed",
+      "primary_endpoint": "https://36kr.com/feed",
+      "probe_url": "https://36kr.com/feed",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Fetch feed once per run. Avoid HTML scraping in the current source set.",
+      "queries": [
+        "AI",
+        "大模型",
+        "智能体",
+        "开源",
+        "融资",
+        "企业服务",
+        "SaaS",
+        "开发者工具"
+      ],
+      "extract_fields": [
+        "guid",
+        "title",
+        "url",
+        "summary",
+        "published_at",
+        "author",
+        "category"
+      ],
+      "search_use": [
+        "commercial_context",
+        "cn_market_signal",
+        "funding_or_startup_validation"
+      ],
+      "preprocess": [
+        "canonicalize_url",
+        "normalize_cn_text",
+        "flag_funding_claims_for_verification",
+        "downrank_pure_press_release"
+      ],
+      "source_reliability": 0.7
+    },
+    {
+      "id": "openai_news_rss",
+      "priority": "P1",
+      "category": "official_vendor_news",
+      "role": "Official OpenAI product, model, and developer-platform release signal.",
+      "fetch_method": "rss_feed",
+      "primary_endpoint": "https://openai.com/news/rss.xml",
+      "probe_url": "https://openai.com/news/rss.xml",
+      "auth": "none",
+      "schedule": "daily",
+      "rate_policy": "Fetch feed once per run; treat official vendor claims as primary-source boundaries, not independent validation.",
+      "queries": [
+        "OpenAI",
+        "API",
+        "agents",
+        "model",
+        "developer"
+      ],
+      "extract_fields": [
+        "guid",
+        "title",
+        "url",
+        "summary",
+        "published_at",
+        "category"
+      ],
+      "search_use": [
+        "official_vendor_release_signal",
+        "support_model_or_api_context",
+        "cross_check_vendor_claims"
+      ],
+      "preprocess": [
+        "canonicalize_url",
+        "keep_official_source_boundary",
+        "require_independent_validation_for_market_claims"
+      ],
+      "source_reliability": 0.82
+    }
+  ],
+  "search_strategy": {
+    "passes": [
+      {
+        "id": "native_pull",
+        "goal": "Collect cheap source-native trending or latest items before expansion.",
+        "target_raw_items": 50,
+        "sources": [
+          "github_trending",
+          "github_search_ai_repos",
+          "hacker_news_algolia",
+          "product_hunt_feed",
+          "devto_ai",
+          "lobsters_ai",
+          "exa_web_search",
+          "huggingface_models",
+          "libraries_io_search",
+          "arxiv_ai_ml_cl",
+          "v2ex_hot",
+          "kr36_feed",
+          "openai_news_rss"
+        ]
+      },
+      {
+        "id": "query_expansion",
+        "goal": "Fill missing topic families only when capped native/query batches produce fewer than 30 viable normalized candidates.",
+        "families": [
+          "agent_workflow",
+          "oss_infra",
+          "demo_signal",
+          "buyer_pain",
+          "commercial_context"
+        ]
+      },
+      {
+        "id": "cross_source_validation",
+        "goal": "Validate filtered candidates before strong claims enter scripting.",
+        "minimum_evidence": "official source plus one independent discussion, demo/code artifact, public homepage/docs, or paper-code/model link"
+      }
+    ],
+    "topic_families": {
+      "agent_workflow": [
+        "AI agent",
+        "coding agent",
+        "browser agent",
+        "MCP",
+        "workflow automation",
+        "智能体",
+        "自动化"
+      ],
+      "oss_infra": [
+        "open source AI",
+        "local LLM",
+        "RAG",
+        "evals",
+        "observability",
+        "开源",
+        "本地大模型",
+        "知识库"
+      ],
+      "demo_signal": [
+        "demo",
+        "playground",
+        "try it",
+        "live preview",
+        "screenshot",
+        "video",
+        "演示",
+        "试用"
+      ],
+      "buyer_pain": [
+        "automate",
+        "replace",
+        "faster",
+        "reduce cost",
+        "self-hosted",
+        "降本",
+        "提效",
+        "私有化"
+      ],
+      "commercial_context": [
+        "SaaS",
+        "API",
+        "pricing",
+        "launch",
+        "beta",
+        "融资",
+        "企业服务"
+      ]
+    },
+    "stop_rules": {
+      "max_raw_items": 100,
+      "target_surviving_candidates": 30,
+      "shortlist_size": 20,
+      "minimum_source_families_in_shortlist": 4,
+      "stop_expansion_if_new_candidates_below": 3
+    }
+  },
+  "backlog_sources": [
+    {
+      "id": "juejin_hot",
+      "reason": "Chinese developer trends; useful after a stable endpoint is selected."
+    },
+    {
+      "id": "zhihu_hot_ai",
+      "reason": "Broad Chinese market interest; likely needs extra anti-scraping care."
+    },
+    {
+      "id": "bilibili_tech",
+      "reason": "Video-native proof of demo interest; useful for content benchmark."
+    },
+    {
+      "id": "linux_do",
+      "reason": "Chinese builder community signal; evaluate after P0/P1 are stable."
+    },
+    {
+      "id": "waytoagi",
+      "reason": "AI tool directory signal; needs custom source check."
+    },
+    {
+      "id": "x_api",
+      "reason": "High-value social signal, but auth/cost keeps it out of the current source set."
+    }
+  ],
+  "paused_sources": [
+    {
+      "id": "reddit_ml_ai",
+      "reason": "Paused until Reddit API access is approved."
+    }
+  ]
+}

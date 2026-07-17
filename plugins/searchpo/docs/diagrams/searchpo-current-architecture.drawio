@@ -1,0 +1,407 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.0.4">
+  <diagram name="Current Architecture">
+    <mxGraphModel dx="1500" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2700" pageHeight="2200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="searchpo current architecture&#xa;three-agent source radar to gated Douyin-ready video pipeline" style="text;whiteSpace=wrap;html=1;strokeColor=none;fillColor=none;fontSize=24;fontStyle=1;fontColor=#333333;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="2500" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_entry" value="1. Entry, Agent Host, and Command Profiles" style="swimlane;whiteSpace=wrap;html=1;startSize=34;container=1;collapsible=0;rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=16;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="2500" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="input_modes" value="Operator input modes&#xa;daily radar&#xa;SEARCHPO_LINK&#xa;SEARCHPO_TOPIC + URL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="30" y="64" width="230" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="agent_hosts" value="Agent host surface&#xa;Codex / Claude Code&#xa;main / research / impl team&#xa;skills/ + commands/ + agents/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="320" y="64" width="250" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="profile_scripts" value="npm profile commands&#xa;e2e = contract safe default&#xa;e2e:provider = providers + local render&#xa;e2e:lambda / e2e:live = explicit side effects" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="640" y="54" width="300" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="run_e2e" value="scripts/run_e2e.sh&#xa;profile router&#xa;contract / provider / lambda / live" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_entry">
+          <mxGeometry x="1010" y="64" width="250" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="env_guards" value="Safety and env guards&#xa;scripts/check_env.py&#xa;scripts/no_live_guard.py&#xa;SEARCHPO_DOUYIN_LIVE only in live profile" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="1330" y="54" width="290" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="side_effect_tiers" value="Side-effect tiers&#xa;agent_harness/side_effect_tiers.py&#xa;contract/provider/lambda/live axes&#xa;success criteria by side effect level" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="1690" y="54" width="310" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="latest_run" value="runtime/latest_run.txt&#xa;current run pointer&#xa;read by harness/render scripts" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_entry">
+          <mxGeometry x="2100" y="64" width="230" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_source" value="2. Source Radar, Policy, and Contracts" style="swimlane;whiteSpace=wrap;html=1;startSize=34;container=1;collapsible=0;rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=16;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="370" width="2500" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="external_sources" value="External source set&#xa;GitHub Trending&#xa;HN Algolia / Product Hunt&#xa;Hugging Face / arXiv&#xa;V2EX / 36Kr" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="lane_source">
+          <mxGeometry x="30" y="76" width="250" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="source_registry" value="data_prep/ source registry&#xa;source_registry.json&#xa;schemas/raw + normalized&#xa;probe_sources.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="lane_source">
+          <mxGeometry x="340" y="76" width="250" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="run_pipeline" value="run_pipeline.py&#xa;fetch + normalize + dedupe&#xa;score + shortlist&#xa;writes runtime artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_source">
+          <mxGeometry x="650" y="76" width="250" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="initial_artifacts" value="Initial run artifacts&#xa;raw / normalized / deduped&#xa;candidate_shortlist.json&#xa;runtime/artifacts/YYYY-MM-DD/run_id" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_source">
+          <mxGeometry x="960" y="66" width="270" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="policy_config" value="config/searchpo_policy.json&#xa;content profiles&#xa;keyword regex + claim safety&#xa;provider prompts + caption gates" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;" vertex="1" parent="lane_source">
+          <mxGeometry x="1300" y="76" width="280" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="contract_schemas" value="contracts/schemas/&#xa;topic/fact/script/scene/video contracts&#xa;render + delivery + Douyin manifests&#xa;static CI guards" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="lane_source">
+          <mxGeometry x="1650" y="76" width="270" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="operator_subject" value="Direct subject path&#xa;SEARCHPO_TOPIC / SEARCHPO_LINK&#xa;subjects.py writes subject_request&#xa;still requires source evidence before copy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="lane_source">
+          <mxGeometry x="1990" y="76" width="300" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_harness" value="3. Tracked Harness and Agent-Owned Gates" style="swimlane;whiteSpace=wrap;html=1;startSize=34;container=1;collapsible=0;rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=16;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="740" width="2500" height="500" as="geometry" />
+        </mxCell>
+        <mxCell id="run_agent_loop" value="agent_harness/run_agent_loop.py&#xa;SyncHarness(default_stages)&#xa;--mode contract/provider&#xa;--resume-from N" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="30" y="76" width="250" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="task_board" value="harness_board.sqlite3&#xa;TaskBoard ledger&#xa;tasks / events / artifacts / gates" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="330" y="66" width="260" height="126" as="geometry" />
+        </mxCell>
+        <mxCell id="main_agent" value="Main agent ownership&#xa;selects / assigns / reviews&#xa;main_task_plan.json&#xa;release gates + final decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="330" y="250" width="260" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="research_agent" value="Research agent ownership&#xa;canonical detail + AnySearch&#xa;FactBank / TopicBrief&#xa;strengthened cross-check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="640" y="250" width="270" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="impl_agent" value="Implementation agent ownership&#xa;runs repo scripts&#xa;provider adapters&#xa;render / audit / publish commands" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="950" y="250" width="270" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_load_select" value="Load + select&#xa;candidate_shortlist.json&#xa;selected_candidate.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="660" y="66" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_evidence" value="Research enrichment gate&#xa;anysearch_research.json&#xa;fact_bank + topic_brief&#xa;source_map + cross_check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="840" y="56" width="210" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_plan" value="Plan content&#xa;topic_brief + fact_bank&#xa;content_plan.json&#xa;main_task_plan.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1080" y="56" width="170" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_providers" value="Content improve + providers&#xa;DeepSeek script / scene / video spec&#xa;Gemini score + TTS&#xa;audio-synced captions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1280" y="56" width="210" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_payload_quality" value="Payload + quality gate&#xa;render_payload.json&#xa;quality_gate.json&#xa;storyboard validated" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1520" y="56" width="190" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="stage_post_preflight" value="Post package + preflight&#xa;claims_ledger.json&#xa;distribution review&#xa;content_preflight_review.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1740" y="56" width="210" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="contract_stop" value="Contract profile stops here&#xa;no media&#xa;no provider calls&#xa;no publish side effect" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1980" y="66" width="210" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="agent_run_summary" value="agent_run.json&#xa;harness loop summary&#xa;board snapshot&#xa;not final production truth" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_harness">
+          <mxGeometry x="2180" y="66" width="250" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="provider_adapters" value="Provider/runtime adapters&#xa;scripts/deepseek_polish.py&#xa;scripts/content_scorer.py&#xa;scripts/gemini_tts.py&#xa;scripts/build_captions.py" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1260" y="250" width="290" height="126" as="geometry" />
+        </mxCell>
+        <mxCell id="post_package_artifacts" value="Run post + service package&#xa;post/posting_pack.md&#xa;douyin_upload_manifest.json&#xa;claims ledger + delivery_package.json&#xa;cross_check_review.md/json" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1590" y="240" width="290" height="146" as="geometry" />
+        </mxCell>
+        <mxCell id="harness_gate_model" value="Gate model&#xa;research evidence before copy&#xa;quality + distribution gates&#xa;live disabled by default" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;" vertex="1" parent="lane_harness">
+          <mxGeometry x="1930" y="250" width="280" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_render" value="4. Remotion Rendering, Artifact Binding, and Visual Audit" style="swimlane;whiteSpace=wrap;html=1;startSize=34;container=1;collapsible=0;rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=16;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1280" width="2500" height="440" as="geometry" />
+        </mxCell>
+        <mxCell id="storyboard_contract" value="Shared storyboard contract&#xa;agent_harness/storyboard.py&#xa;src/storyboard.ts&#xa;video_spec -> scene graph bounds" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="30" y="80" width="270" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare_remotion" value="render/prepare_remotion_input.py&#xa;compiles video_spec -> render_payload&#xa;copies voiceover to public/generated&#xa;writes remotion_input_props.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="360" y="70" width="290" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="remotion_props" value="Run-scoped render input&#xa;remotion_input_props.json&#xa;render_input_manifest.json&#xa;captions + voiceover hashes" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_render">
+          <mxGeometry x="710" y="80" width="260" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="remotion_app" value="Remotion app src/&#xa;Root.tsx calculateMetadata&#xa;Composition.tsx SearchpoRadar&#xa;src/storyboard.ts + scene blocks&#xa;Captions + Cover, 1080x1920" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="1030" y="60" width="300" height="156" as="geometry" />
+        </mxCell>
+        <mxCell id="local_render" value="Local render path&#xa;scripts/remotion_render.sh&#xa;npm run render:run&#xa;out/run-searchpo-radar.mp4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;" vertex="1" parent="lane_render">
+          <mxGeometry x="1390" y="60" width="260" height="116" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda_render" value="Lambda render path&#xa;scripts/lambda_render.sh&#xa;S3 site bundle + Remotion Lambda&#xa;out/run-searchpo-radar-lambda.mp4" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="lane_render">
+          <mxGeometry x="1390" y="230" width="260" height="126" as="geometry" />
+        </mxCell>
+        <mxCell id="preview_outputs" value="Preview outputs only&#xa;out/*.mp4&#xa;out/*cover*.jpg&#xa;never direct publish input" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_render">
+          <mxGeometry x="1710" y="120" width="230" height="126" as="geometry" />
+        </mxCell>
+        <mxCell id="finalize_artifacts" value="scripts/finalize_artifacts.py&#xa;cover health check&#xa;copy preview into run scope&#xa;write artifact_manifest.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="1990" y="80" width="260" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="media_audits" value="Media verification&#xa;video_quality_loop.py&#xa;check_render_metadata.py&#xa;deterministic + Gemini visual audit&#xa;caption / black / silence checks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="1990" y="250" width="260" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="final_media" value="Run-scoped publishable media&#xa;video/final.mp4&#xa;cover/final.jpg&#xa;artifact_manifest hashes" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="lane_render">
+          <mxGeometry x="2290" y="140" width="180" height="126" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_publish" value="5. Douyin Publish Boundary and Final Truth" style="swimlane;whiteSpace=wrap;html=1;startSize=34;container=1;collapsible=0;rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=16;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1760" width="2500" height="390" as="geometry" />
+        </mxCell>
+        <mxCell id="douyin_package" value="Artifact-bound post package&#xa;post/douyin_upload_manifest.json&#xa;title / desc / tags files&#xa;claims + distribution review" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="lane_publish">
+          <mxGeometry x="30" y="88" width="270" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="douyin_check" value="scripts/douyin_upload_check.sh&#xa;manifest + file hash identity&#xa;cover pixel health&#xa;adapter contract/account checks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_publish">
+          <mxGeometry x="360" y="88" width="270" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="live_gate" value="Live publish gate?&#xa;explicit user request&#xa;SEARCHPO_DOUYIN_LIVE=1&#xa;profile must be live" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;fontStyle=1;" vertex="1" parent="lane_publish">
+          <mxGeometry x="710" y="82" width="180" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="social_auto_upload" value="runtime/social-auto-upload&#xa;dreammis/social-auto-upload&#xa;runtime/live-upload.lock serializes runs&#xa;sau douyin upload-video" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="lane_publish">
+          <mxGeometry x="970" y="88" width="260" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="douyin_creator" value="Douyin Creator Center&#xa;creator-micro/content/manage&#xa;remote row identity&#xa;status: 已发布 / 审核中 / 未通过" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="lane_publish">
+          <mxGeometry x="1290" y="88" width="270" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="post_verify" value="post_publish_verification.json&#xa;remote identity required&#xa;title + duration + cover evidence&#xa;submitted alone is not success" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="lane_publish">
+          <mxGeometry x="1620" y="88" width="270" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="finalize_run" value="scripts/finalize_run.py&#xa;delivery_package before final truth&#xa;updates board gates&#xa;writes run_final.json last" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;fontStyle=1;" vertex="1" parent="lane_publish">
+          <mxGeometry x="1950" y="88" width="260" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="final_truth" value="Final release truth&#xa;run_final.json + artifact_manifest.json&#xa;delivery_package.json&#xa;harness_board.sqlite3 gates&#xa;video/final.mp4 + cover/final.jpg" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="lane_publish">
+          <mxGeometry x="2260" y="70" width="220" height="176" as="geometry" />
+        </mxCell>
+        <mxCell id="contract_publish_note" value="Contract-check path&#xa;SEARCHPO_DOUYIN_LIVE=0&#xa;adapter/manifest check only&#xa;no remote publish" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="lane_publish">
+          <mxGeometry x="690" y="270" width="230" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_input_hosts" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="input_modes" target="agent_hosts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_hosts_profiles" value="dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="agent_hosts" target="profile_scripts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_profiles_run" value="npm run" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="profile_scripts" target="run_e2e">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_run_guards" value="guard" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="run_e2e" target="env_guards">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_guards_tiers" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="env_guards" target="side_effect_tiers">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_sources_registry" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="external_sources" target="source_registry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_registry_pipeline" value="probe + fetch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="source_registry" target="run_pipeline">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_pipeline_artifacts" value="shortlist" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="run_pipeline" target="initial_artifacts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_policy_pipeline" value="scoring + filters" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="policy_config" target="run_pipeline">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1440" y="650" />
+              <mxPoint x="775" y="650" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_policy_contracts" value="schema + guards" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="policy_config" target="contract_schemas">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_run_to_sources" value="daily radar branch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="run_e2e" target="source_registry">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1175" y="350" />
+              <mxPoint x="465" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_run_to_operator" value="topic/link branch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="run_e2e" target="operator_subject">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1175" y="350" />
+              <mxPoint x="2180" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_artifacts_latest" value="writes pointer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="initial_artifacts" target="latest_run">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1095" y="350" />
+              <mxPoint x="2215" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_artifacts_harness" value="run_dir" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="initial_artifacts" target="run_agent_loop">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1095" y="720" />
+              <mxPoint x="165" y="720" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_operator_harness" value="subject_request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.75;entryY=0;" edge="1" parent="1" source="operator_subject" target="run_agent_loop">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2140" y="720" />
+              <mxPoint x="220" y="720" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_loop_board" value="records" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.35;entryX=0;entryY=0.4;" edge="1" parent="1" source="run_agent_loop" target="task_board">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_loop_stage" value="executes stages" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.65;entryX=0;entryY=0.5;" edge="1" parent="1" source="run_agent_loop" target="stage_load_select">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="620" y="890" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_stage1_stage2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_load_select" target="stage_evidence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_stage2_stage3" value="pass required" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_evidence" target="stage_plan">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_stage3_stage4" value="provider only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_plan" target="stage_providers">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_stage4_stage5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_providers" target="stage_payload_quality">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_stage5_stage6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_payload_quality" target="stage_post_preflight">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_stage6_contract" value="contract exit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="stage_post_preflight" target="contract_stop">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_harness_summary" value="writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="contract_stop" target="agent_run_summary">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_providers_adapters" value="runs scripts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stage_providers" target="provider_adapters">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_main_plan" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="main_agent" target="stage_plan">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_main_research" value="assigns research" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="main_agent" target="research_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_research_evidence" value="owns enrichment" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=0.5;exitY=0;entryX=0.35;entryY=1;" edge="1" parent="1" source="research_agent" target="stage_evidence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_impl_providers" value="owns execution" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="impl_agent" target="provider_adapters">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_post_artifacts" value="writes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stage_post_preflight" target="post_package_artifacts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_gates_board" value="all gates recorded" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=0.5;exitY=0;entryX=1;entryY=0.5;" edge="1" parent="1" source="harness_gate_model" target="task_board">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2070" y="950" />
+              <mxPoint x="630" y="1000" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_payload_prepare" value="provider continues after preflight" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stage_payload_quality" target="prepare_remotion">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1555" y="1260" />
+              <mxPoint x="505" y="1260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_storyboard_prepare" value="validate scene graph" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="storyboard_contract" target="prepare_remotion">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_prepare_props" value="writes props" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="prepare_remotion" target="remotion_props">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_props_app" value="input props" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="remotion_props" target="remotion_app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_app_local" value="local profile" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.35;entryX=0;entryY=0.5;" edge="1" parent="1" source="remotion_app" target="local_render">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_app_lambda" value="lambda/live profiles" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.75;entryX=0;entryY=0.5;" edge="1" parent="1" source="remotion_app" target="lambda_render">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_local_preview" value="preview mp4/cover" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.35;" edge="1" parent="1" source="local_render" target="preview_outputs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_lambda_preview" value="download preview" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.75;" edge="1" parent="1" source="lambda_render" target="preview_outputs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_preview_finalize" value="bind into run scope" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.4;entryX=0;entryY=0.5;" edge="1" parent="1" source="preview_outputs" target="finalize_artifacts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_finalize_media" value="final media + hashes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.45;" edge="1" parent="1" source="finalize_artifacts" target="final_media">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_media_audits" value="verify before publish" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="final_media" target="media_audits">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2380" y="1690" />
+              <mxPoint x="2120" y="1690" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_media_package" value="artifact-bound paths" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="final_media" target="douyin_package">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2380" y="1740" />
+              <mxPoint x="165" y="1740" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_post_to_package" value="post artifacts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=0.5;exitY=1;entryX=0.4;entryY=0;" edge="1" parent="1" source="post_package_artifacts" target="douyin_package">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1480" y="1740" />
+              <mxPoint x="140" y="1740" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_package_check" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="douyin_package" target="douyin_check">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_check_livegate" value="mode check" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.45;entryX=0;entryY=0.5;" edge="1" parent="1" source="douyin_check" target="live_gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_contract_note" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="live_gate" target="contract_publish_note">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_live_social" value="yes: upload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="live_gate" target="social_auto_upload">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_social_creator" value="submit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="social_auto_upload" target="douyin_creator">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_creator_verify" value="remote identity" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="douyin_creator" target="post_verify">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_verify_finalize" value="live verification" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.35;" edge="1" parent="1" source="post_verify" target="finalize_run">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_contract_finalize" value="contract check" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="contract_publish_note" target="finalize_run">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1780" y="2070" />
+              <mxPoint x="2080" y="2070" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_finalize_truth" value="writes final truth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;flowAnimation=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="finalize_run" target="final_truth">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_board_final" value="board snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;exitX=0.5;exitY=1;entryX=0.25;entryY=0;" edge="1" parent="1" source="task_board" target="final_truth">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="2170" />
+              <mxPoint x="2315" y="2170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

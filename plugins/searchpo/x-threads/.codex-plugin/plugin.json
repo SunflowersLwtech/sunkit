@@ -1,0 +1,37 @@
+{
+  "name": "github-repo-to-x-threads",
+  "version": "0.1.0+codex.20260531170152",
+  "description": "Analyze technical sources and produce Agent-engineering-positioned X content packs with evidence review, model quality chain, reusable assets, and image assets.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/github-repo-to-x-threads",
+  "keywords": [
+    "github",
+    "x",
+    "twitter",
+    "agent-engineering",
+    "brand-positioning",
+    "quality-chain",
+    "skills",
+    "image-generation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Engineering X Content",
+    "shortDescription": "Turn sources into Agent-engineering X content packs.",
+    "longDescription": "Analyze technical sources, route them through an Agent engineering brand gate, separate evidence from inference, expose a model quality chain, generate responsible X content packs with reusable assets and image governance, and optionally publish through the official X API.",
+    "developerName": "SunflowersLwtech",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Content generation",
+      "X publishing"
+    ],
+    "defaultPrompt": [
+      "Create an Agent engineering X content pack",
+      "Rewrite this post with the brand quality chain",
+      "Turn this paper into a paper-to-system thread"
+    ]
+  }
+}

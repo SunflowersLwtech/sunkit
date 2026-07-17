@@ -1,0 +1,137 @@
+{
+  "skill_name": "github-repo-to-x-threads",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我分析 https://github.com/MINT-SJTU/RoboClaw，写一条中文 X thread。我不是项目作者，只是想负责地分享这个项目，并结合我自己从客厅到开放世界的具身智能 vision。需要配图。",
+      "expected_output": "Clones or reads the repo, checks GitHub metadata, credits the real project owner, separates repo facts from personal vision, avoids contributor recruitment, drafts a paste-ready Chinese X thread, includes a final-mile posting map with length audit and alt text, and provides or generates GPT Image 2 conceptual image assets with disclosure and images_manifest.json registration.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I built this repo: https://github.com/example/example-ai-tool. Please write a launch thread for X with image prompts, but don't overclaim maturity. Make it sound like a serious developer shipped it.",
+      "expected_output": "Uses author/maintainer voice, still verifies repo facts and metadata, separates shipped features from roadmap, drafts a launch-style X thread, includes a clean Ready To Post block, respects that the user asked for prompts rather than actual generated files, and registers prompt-only image entries only because the user chose prompt mode.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "这个本地目录 /Users/sunfl/projects/some-open-source-repo 我想发 X 推荐一下。只要分析项目本身，不要加我的个人 vision。输出要能直接复制发。",
+      "expected_output": "Reads the local repo, fetches origin metadata if available, produces a concise independent recommendation thread, includes evidence/caveats, avoids unsupported social metrics if unavailable, and gives a copy-paste ready final posting pack.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "我丢 5 个 GitHub repo 给你，帮我统一治理成可 review 的发 X 候选池。每个 repo 都要有 claims ledger、cross-check review、posting pack 和图片 manifest，所有运行结果落盘但不要进 git。",
+      "expected_output": "Uses the governed multi-repo run workspace, writes per-repo artifacts under repo-to-x-workspace/runs/<run-id>/repos/<repo-id>/, keeps generated outputs ignored by git, includes governed images_manifest.json entries, treats actual generated images as the default for ready-to-post candidates, runs or references the image asset gate, and explains which repos are ready, need revision, or should be blocked.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "这个 posting pack 我 review 过了，帮我用 CLI 完全自动发 X thread，第一条也要由 CLI 发，带图片和 alt text。",
+      "expected_output": "Uses official-api-publish only after explicit approval, explains or uses OAuth2 user credentials with tweet.write/media.write/offline.access, dry-runs first unless --live is approved, posts the first item as a root post and later items as replies, uploads governed images from images_manifest.json, writes x_publish_log.json without tokens, and refuses cookie/session/proxy-based posting.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "给这个 repo 生成 3 张 image2 配图，不要只是 prompts。",
+      "expected_output": "Treats image2/配图 as a hard trigger for native image generation, uses imagegen or the available built-in image generation path instead of script-drawn placeholders, stores selected files under the run workspace images/ directory, registers them in images_manifest.json with alt text/disclosure/review status, and blocks the image gate if no governable local image file exists instead of recording prompt_only as a fallback.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "colbymchenry/codegraph 帮我做成可直接发 X 的 posting pack。",
+      "expected_output": "Does not say images were skipped because the user did not explicitly request generated assets. Uses adaptive thread length rather than forcing exactly 8 posts, generates at least one actual image with the native image generation path, registers the generated file under images_manifest.json, runs scripts/check_image_assets.py before saying Ready To Post, and blocks the image gate instead of using prompt-only when actual image generation fails.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "https://www.alphaxiv.org/abs/2605.22817 这不是 repo，但我也想用同一套系统决定策略、生成中文 X thread、配图并准备发布。",
+      "expected_output": "Routes the alphaXiv URL as a paper input, creates or references a governed arbitrary-input workspace with strategy_decision.json, reads paper metadata/PDF evidence before drafting, searches or caveats official code availability, uses paper-to-system framing, generates actual GPT Image 2 conceptual visuals by default, and preserves independent-share attribution.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "以后每次发完都帮我记录效果，让这个 skill 下次自动根据输入决定更好的 X 发帖策略。先给这个已发布 posting pack 记录一次复盘：质量 0.85，lesson 是 paper thread 的 hook 要直接讲清楚 caveat。",
+      "expected_output": "Uses record_post_outcome.py or an equivalent governed postmortem path, writes post_outcome.json in the run directory, appends local ignored strategy-memory/outcomes.jsonl, updates strategy_profile.json, and explains that strategy memory biases future routing but does not override evidence or silently mutate public claims.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "GROK_API_KEY 和 X OAuth 都在 .env 了。给这个 posting pack 做发布前自动打分，发布后拉 X metrics，并把结果校准进 strategy memory。",
+      "expected_output": "Runs or references x_eval_post.py to produce post_eval.json and x_eval_report.md, uses Grok only as a semantic reviewer rather than source evidence, runs or references x_collect_metrics.py against x_publish_log.json tweet ids, runs or references x_calibrate_strategy.py to update strategy_profile.json, and clearly separates pre-publish predicted score from post-publish observed metrics.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "我觉得现在的 skills 太死了，发出去的质量直观感觉也不怎么样。不要只给安全摘要，帮我把这个 posting pack 变成更有角度、更像真人技术判断的版本。",
+      "expected_output": "Treats the feedback as a quality signal, does not defend the old rubric, runs or references x_draft_tournament.py to produce draft_tournament.json/draft_tournament.md and a candidate posting_pack.proposed.md, revises the eval gate so angle_freshness/specificity_density/voice_authenticity/brand_clarity/asset_value/cta_specificity can force revise, records the qualitative lesson into strategy memory, and makes clear that the proposed rewrite still needs claim/image/eval gates before live publish.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "从 GitHub Trending 拉 10 个仓库，多试几轮，不在乎 token，先试再收敛。不要默认 clone 巨型 repo，先快速筛选。",
+      "expected_output": "Runs or references x_trending_experiment.py with --metadata-only for a fast text-only screen, generates governed per-repo artifacts, evaluates multiple rounds with --text-only-eval, accepts tournament rewrites only when scores improve, writes trending_experiment_results.json and trending_experiment_report.md, summarizes common failure modes, and recommends deep clone/image generation only for selected candidates.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "把最近这些 eval、Trending 实验、live publish 结果都汇总一下，搭建一套 skill 自进化体系：以后能生成改进报告、patch plan，并让 router 读到经过 review 的本地演化规则。",
+      "expected_output": "Runs or references x_skill_evolution.py, reads post_eval.json, x_publish_log.json, post_outcome.json, strategy-memory, and trending_experiment_results.json when present, writes signal_ledger.json, skill_evolution_summary.json, skill_evolution_report.md, and skill_patch_plan.md under repo-to-x-workspace/skill-evolution/<run-id>/, uses --apply-profile only for ignored local routing guidance, and clearly states that canonical SKILL.md/scripts are changed only after human review and regression evals.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "这个 SkillOpt posting pack 安全但太像 README 摘要，hook 也要靠链接卡片才成立。参考内容诊断方法，把它改到更有素材、更有悬念、更不像 AI 平滑文。",
+      "expected_output": "Runs or references the content-quality gate before rewriting, checks source-material richness, hook independence, psychological trigger fit, plain-language concept conversion, and anti-smoothness, uses concrete artifacts/numbers/caveats from evidence rather than freehand clickbait, reruns x_eval_post.py so material_marker/plain_language/ai_smoothness style signals can force revise, and keeps claim/image/publish gates intact.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "今天那条 Plasma/Sumsub KYC 吐槽太情绪化了，帮我改成能保留专业形象的 X 内容。原帖有 Ticket #104932786、#KYCbug、fix this bug!!!",
+      "expected_output": "Routes the input to professional_bug_report, strips rage/hashtag/mention spam, rewrites it as a cold PRD-style bug report with Repro/Impact/Expected/Evidence/Question, recommends off-main-account unless tied to Agent workflow reliability, and preserves ticket evidence without unsupported accusations.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "这篇 paper 帮我发 X，但不要第一句写“这篇论文很有意思”。要按 Agent 工程实战派把它拆成系统设计启发。",
+      "expected_output": "Routes to paper_to_system, opens with a reader pain or engineering tradeoff, credits the paper source boundary, converts research concepts into system components or runtime policies, includes a reusable checklist/flow/prompt asset, ends with a concrete technical discussion question, and avoids paper-summary voice.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "围绕 MCP Creator Growth 写一条 build-in-public note：今天发现 agent debug memory 里一个失败模式和修复方案。",
+      "expected_output": "Routes to build_in_public/main_account, frames the post around Agent reliability, separates shipped behavior from next validation, includes one concrete failure mode, one fix, one reusable asset such as a failure-memory issue template, and one specific question for builders.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "我想吐槽一部电视剧，里面群体进化概念很牛但角色智商很低，帮我发主号。",
+      "expected_output": "Does not publish generic TV chatter as main-account content. Either routes off_main_filter or rewrites only if the post ties the media observation to a concrete multi-agent failure mode such as missing critique, shared state, or failure memory, then adds a reusable comparison and a specific question.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "帮我写新的 bio 和置顶帖。我现在 bio 是 Agent | Embodied，但想变成 Agent 工程实战派。",
+      "expected_output": "Routes to profile_positioning, uses the Agent engineering brand profile, proposes concise bio options and a pinned post centered on moving Agent systems from demo to reliable software, names core pillars, avoids generic AI-news positioning, and does not create a normal repo posting pack.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "评估这个 posting pack：它安全但没有问题、没有可保存资产，而且有 5 个 hashtag 和明显抱怨语气。",
+      "expected_output": "Uses x_eval_post-style gates so cta_specificity, asset_value, emotion_control, and account_fit can force revise even when claim_safety passes; recommends adding a reusable asset, a concrete technical question, and converting complaint emotion into bug-report or failure-mode language.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "参考宝玉、歸藏、TestingCatalog、向阳乔木这些 AI/X 内容创作者的特点，吸收到我们的 X 内容生产 skill 里，提高内容质量，但不要模仿个人口吻。",
+      "expected_output": "Distills creator examples into reusable content modes rather than impersonation: engineering mentor, demo-first tool, test catalog, builder resource log, and product translator longform; updates or references creator-style-patterns.md, content-quality-gates.md, thread-quality-checklist.md, and the model quality chain; makes generation, draft tournament, and x_eval_post reward coherent creator_pattern_fit, demo/test evidence, translation value, practical next action, and community loop while preserving claim safety, attribution boundaries, and image governance.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "prompt": "后面的推文要长一些。评估这个 paper-to-system posting pack：它 claim safe、hook 也可以，但 8 条总共只有 1300 字左右，很多帖只有 130-160 字，读起来像短 checklist，没有吸收产品长文转译风格。",
+      "expected_output": "Treats length/depth as a quality gate, not only a preference. Generation and draft tournament should prefer 8-12 substantive posts for paper-to-system, product_translator_longform, and rich repo+vision sources, usually 180-260 characters per post when evidence supports it. x_eval_post should mark rich but underwritten explainers as revise even if claim_safety, hook_strength, and creator_pattern_fit are high, and should suggest expanding with mechanism, example, product/workflow implication, resource value, caveat, and a concrete question.",
+      "files": []
+    }
+  ]
+}

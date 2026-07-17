@@ -1,0 +1,773 @@
+{
+  "schema_version": 1,
+  "content": {
+    "default_summary": "Fresh signal detected from the daily source sweep.",
+    "source_registry_label": "source registry",
+    "banned_dismissive_verification_patterns": [
+      "自己验证",
+      "你自己动手验证",
+      "待验证案例继续观察",
+      "不能跳过最小验证",
+      "按证据验证[，,、 ]*不急着下结论",
+      "不急着下结论",
+      "别急着下结论",
+      "具体细节未知[，,、 ]*需要自己去试",
+      "待验证",
+      "(?:需要|需|要)验证(?:兼容性|适用性|可用性|效果|结果)?",
+      "需要自己去试",
+      "verify it yourself",
+      "you verify it yourself",
+      "try it yourself"
+    ],
+    "source_labels": {
+      "github_trending": "GitHub Trending",
+      "github_search_ai_repos": "GitHub Search",
+      "hacker_news_algolia": "Hacker News",
+      "product_hunt_feed": "Product Hunt",
+      "devto_ai": "Dev.to",
+      "lobsters_ai": "Lobsters",
+      "exa_web_search": "Exa Web Search",
+      "huggingface_models": "Hugging Face Models",
+      "libraries_io_search": "Libraries.io",
+      "arxiv_ai_ml_cl": "arXiv AI/ML",
+      "v2ex_hot": "V2EX Hot",
+      "kr36_feed": "36Kr",
+      "openai_news_rss": "OpenAI News"
+    },
+    "profiles": {
+      "daily_radar": {
+        "badge": "今日 AI 工具热点",
+        "source": "searchpo",
+        "metric_template": "candidate score {score}",
+        "cta": "先放进候选池，别把热度当结论。",
+        "footer": "来源: searchpo live sources · 发布前保留证据边界",
+        "cards": [
+          {
+            "label": "为什么火",
+            "value": "{title}",
+            "detail": "{summary}"
+          },
+          {
+            "label": "证据边界",
+            "value": "{source_ids}",
+            "detail": "{url}"
+          },
+          {
+            "label": "先别吹",
+            "value": "score {score}",
+            "detail": "code={has_code_signal} demo={has_demo_keyword} source_count={source_count}"
+          }
+        ],
+        "douyin": {
+          "title_template": "searchpo 雷达：{title}",
+          "desc_lines": [
+            "今天的 searchpo 雷达先看这个信号：{title}。",
+            "来源边界：{source}；候选分数 {score}。",
+            "它现在只是进入候选池，只能按证据边界做机制判断。"
+          ],
+          "tags": ["AI工具", "开源项目", "产品观察", "searchpo"]
+        },
+        "plan": {
+          "mode": "deterministic_plan",
+          "angle": "Lead with source-bound candidate evidence and avoid trend or ranking claims.",
+          "execution_steps": [
+            "Use candidate_shortlist.json as the only source of public claims.",
+            "Create a short vertical-video payload from title, summary, source IDs, URL, score, and cheap signals.",
+            "Create Douyin package files for contract-check mode only.",
+            "Block live publishing unless a later command explicitly enables SEARCHPO_DOUYIN_LIVE=1."
+          ],
+          "gates": [
+            "selected candidate has canonical_url",
+            "render payload written",
+            "claim ledger contains only pipeline facts",
+            "live upload remains disabled by default"
+          ]
+        },
+        "posting": {
+          "subject_label": "Candidate",
+          "caveat": "Filtered candidate only; public claims need manual cross-source review before live posting.",
+          "claim_source": "candidate_shortlist.json",
+          "claim_template": "{title} was selected by the searchpo candidate filter."
+        }
+      },
+      "operator_topic": {
+        "badge": "指定主题分析",
+        "source": "指定主题",
+        "metric_template": "指定主题 · 证据边界",
+        "audience_metric_template": "指定主题 · 判断框架",
+        "cta": "把机制、适用场景和失败边界讲清楚。",
+        "footer": "来源: 指定主题 · 未实测内容不做结论",
+        "manual_source_label": "指定主题",
+        "evidence_level": "operator_topic_unverified",
+        "verification_next_step": "判断时先看机制是否成立、架构位置是否清楚、失败边界是否可控。",
+        "cards": [
+          {
+            "label": "用户痛点",
+            "value": "{title}",
+            "detail": "这只是指定主题观察，先说明用户想解决什么。"
+          },
+          {
+            "label": "已知证据",
+            "value": "{evidence_value}",
+            "detail": "{evidence_detail}"
+          },
+          {
+            "label": "证据边界",
+            "value": "无实测，不包装成结论",
+            "detail": "没有 demo、代码运行或真实使用记录时，只提炼机制、适用场景和失败边界。"
+          },
+          {
+            "label": "判断框架",
+            "value": "机制、位置、边界",
+            "detail": "{verification_next_step}"
+          }
+        ],
+        "douyin": {
+          "title_template": "主题分析：{title}",
+          "desc_lines": [
+            "这期按指定主题做一版分析：{title}。",
+            "当前输入来自指定主题，不等同于 searchpo 自动选出的热点结论。",
+            "涉及事实判断时，只在证据边界内解释机制和判断口径。"
+          ],
+          "tags": ["AI工具", "产品观察", "主题分析", "searchpo"]
+        },
+        "plan": {
+          "mode": "operator_topic_plan",
+          "angle": "Analyze the operator-specified topic without pretending it was selected by the daily source radar.",
+          "execution_steps": [
+            "Use subject_request.json as the operator input boundary.",
+            "Create a short vertical-video payload from the topic, optional context, and optional source URL.",
+            "Create Douyin package files for contract-check mode only.",
+            "Block live publishing unless a later command explicitly enables SEARCHPO_DOUYIN_LIVE=1."
+          ],
+          "gates": [
+            "operator topic recorded",
+            "render payload written",
+            "claim ledger marks operator-topic evidence separately from source-radar evidence",
+            "live upload remains disabled by default"
+          ]
+        },
+        "posting": {
+          "subject_label": "Operator topic",
+          "caveat": "Operator-specified topic only; factual claims need source review before live posting.",
+          "claim_source": "subject_request.json",
+          "claim_template": "{title} was supplied by the operator as the analysis topic."
+        }
+      }
+    }
+  },
+  "claims": {
+    "posting_strategy": "Lead with the evidence boundary, not hype. Keep the first public pass as a Douyin candidate radar or operator-topic analysis video.",
+    "boundary_claim": "The post package is a candidate radar package, not a verified ranking or market conclusion.",
+    "unknown_or_unsafe": [
+      "Do not claim market leadership, benchmark rank, funding, or production maturity without extra sources."
+    ],
+    "unsupported_terms": [
+      "best",
+      "first",
+      "only",
+      "ultimate",
+      "game.?changer",
+      "revolutionary",
+      "10x",
+      "唯一",
+      "首个",
+      "最强",
+      "第一",
+      "革命性",
+      "刚开源",
+      "刚发布",
+      "正式发布",
+      "首发"
+    ]
+  },
+  "daily_radar": {
+    "enabled_by_default": false,
+    "requires_explicit_env": "SEARCHPO_ENABLE_DAILY_RADAR=1"
+  },
+  "subject_inputs": {
+    "require_operator_input_by_default": true,
+    "operator_topic": {
+      "input_mode": "operator_topic",
+      "selection_source": "operator_topic",
+      "source_id": "operator_topic",
+      "manual_url_scheme": "manual-topic://",
+      "summary_template": "指定主题分析：{topic}。当前没有外部来源或实测记录时，只能做证据边界内的机制拆解和判断框架。",
+      "risk_flag_without_url": "operator_topic_requires_source_review",
+      "default_score": 8.0,
+      "reliability": {
+        "with_url": 0.7,
+        "without_url": 0.45
+      }
+    }
+  },
+  "research": {
+    "enabled": true,
+    "anysearch_skill_dir": "vendor/anysearch-skill",
+    "timeout_seconds": 30,
+    "max_search_queries": 5,
+    "max_competitive_search_queries": 8,
+    "max_results_per_query": 5,
+    "max_extracts": 6,
+    "min_supplemental_sources": 2,
+    "min_extract_chars": 180,
+    "min_url_relevance_score": 1,
+    "min_extract_relevance_score": 1,
+    "require_independent_hosts": true,
+    "exclude_primary_host": true,
+    "fail_on_unavailable": true,
+    "raw_output_max_chars": 100000,
+    "ignored_hosts": [
+      "api.anysearch.com",
+      "anysearch.com"
+    ],
+    "ignored_url_patterns": [
+      "^https?://(?:www\\.)?w3\\.org/2000/svg/?$",
+      "^https?://(?:www\\.)?w3\\.org/1999/xlink/?$"
+    ],
+    "search_query_templates": [
+      "{title} {host} official documentation source",
+      "{title} GitHub README demo examples",
+      "{title} Product Hunt Hacker News discussion",
+      "{title} Hugging Face arXiv paper model code",
+      "{title} review limitations adoption risks pricing"
+    ],
+    "topic_query_templates": [
+      "{title} official source documentation",
+      "{title} independent review limitations",
+      "{title} GitHub README demo examples",
+      "{title} Hacker News Reddit discussion",
+      "{title} benchmark security adoption risk"
+    ],
+    "link_query_templates": [
+      "{title} {host} official documentation",
+      "{title} {host} GitHub README examples",
+      "{title} independent review limitations",
+      "{title} Hacker News Reddit discussion",
+      "{title} pricing security adoption risk"
+    ],
+    "default_source_buckets": [
+      "canonical_or_official",
+      "independent_technical_analysis",
+      "community_signal",
+      "security_or_risk",
+      "benchmark_or_evaluation"
+    ],
+    "ground_api_ladder": [
+      "For docs/vendor URLs, probe llms-full.txt first when body is 1KB-5MB.",
+      "Probe llms.txt as the index and follow selected documentation links.",
+      "Use robots.txt-discovered sitemap.xml before assuming /sitemap.xml.",
+      "Use one-level root HTML links plus markdown extraction when sitemap misses.",
+      "Use Firecrawl only for JS-heavy, blocked, or SPA pages after the cheaper paths fail."
+    ],
+    "source_scoring": {
+      "canonicality": 2,
+      "independence": 2,
+      "recency": 1,
+      "extractability": 2,
+      "claim_relevance": 3,
+      "conflict_status": 2,
+      "visual_story_value": 1
+    },
+    "strategy_profiles": {
+      "operator_topic": {
+        "strategy_id": "topic_widesearch_cross_check",
+        "source_buckets": [
+          "canonical_or_official",
+          "independent_technical_analysis",
+          "community_signal",
+          "security_or_risk",
+          "benchmark_or_evaluation"
+        ],
+        "provider_hints": [
+          "Treat the operator topic as a seed, not external evidence.",
+          "Select at least two independent extracted hosts before copy generation.",
+          "Prefer direct docs/API/README evidence over generic news summaries."
+        ],
+        "query_templates": [
+          "{title} official documentation source",
+          "{title} independent review limitations",
+          "{title} GitHub README demo examples",
+          "{title} Hacker News Reddit discussion",
+          "{title} benchmark security adoption risk"
+        ]
+      },
+      "github_repo": {
+        "strategy_id": "repo_api_docs_community",
+        "source_buckets": [
+          "github_api_readme",
+          "official_docs",
+          "package_registry",
+          "community_signal",
+          "security_advisory"
+        ],
+        "provider_hints": [
+          "Use GitHub API and README as canonical primary evidence.",
+          "Use DeepWiki only as supporting repo context; it does not satisfy supplemental evidence.",
+          "Cross-check adoption and production claims outside the repository host."
+        ],
+        "query_templates": [
+          "{title} GitHub README examples",
+          "{title} documentation tutorial",
+          "{title} package registry dependents security",
+          "{title} Hacker News Reddit discussion",
+          "{title} limitations alternatives"
+        ]
+      },
+      "api_docs": {
+        "strategy_id": "ground_api_docs_ladder",
+        "source_buckets": [
+          "official_docs",
+          "llms_txt_or_sitemap",
+          "developer_examples",
+          "community_signal",
+          "pricing_or_limits"
+        ],
+        "provider_hints": [
+          "Probe llms-full.txt, llms.txt, robots.txt sitemap, then root links before Firecrawl.",
+          "Reject HTTP 200 pages whose body is too short, a SPA shell, or Page Not Found copy.",
+          "Keep Firecrawl as a fallback, not the default path."
+        ],
+        "query_templates": [
+          "{title} {host} llms.txt docs",
+          "{title} {host} API reference authentication rate limits",
+          "{title} SDK examples GitHub",
+          "{title} pricing limits reliability",
+          "{title} developer discussion limitations"
+        ]
+      },
+      "paper": {
+        "strategy_id": "paper_code_benchmark_cross_check",
+        "source_buckets": [
+          "paper_primary",
+          "code_release",
+          "benchmark_or_evaluation",
+          "independent_summary",
+          "community_signal"
+        ],
+        "provider_hints": [
+          "Prefer paper, code, benchmark, and author/project pages over generic summaries.",
+          "Keep benchmark claims tied to the paper or independent evaluation source."
+        ],
+        "query_templates": [
+          "{title} paper arxiv openreview",
+          "{title} GitHub code implementation",
+          "{title} benchmark evaluation results",
+          "{title} independent analysis limitations",
+          "{title} discussion Hacker News Reddit"
+        ]
+      },
+      "security_package": {
+        "strategy_id": "security_package_advisory",
+        "source_buckets": [
+          "nvd_or_osv",
+          "upstream_repo",
+          "package_registry",
+          "vendor_advisory",
+          "independent_analysis"
+        ],
+        "provider_hints": [
+          "Prefer NVD, OSV, upstream advisory, and package registry data for security claims.",
+          "Do not publish severity or exploitability claims without advisory-backed evidence."
+        ],
+        "query_templates": [
+          "{title} NVD OSV advisory",
+          "{title} GitHub security advisory",
+          "{title} package registry dependents",
+          "{title} exploit mitigation analysis",
+          "{title} release notes fix version"
+        ]
+      },
+      "generic_link": {
+        "strategy_id": "canonical_link_independent_cross_check",
+        "source_buckets": [
+          "canonical_or_official",
+          "independent_technical_analysis",
+          "community_signal",
+          "security_or_risk",
+          "pricing_or_limits"
+        ],
+        "provider_hints": [
+          "Use the supplied link as canonical boundary, then seek independent hosts.",
+          "Avoid restating marketing copy unless independent sources support the claim."
+        ],
+        "query_templates": [
+          "{title} {host} official documentation",
+          "{title} independent review limitations",
+          "{title} GitHub examples",
+          "{title} Hacker News Reddit discussion",
+          "{title} pricing security adoption risk"
+        ]
+      }
+    }
+  },
+  "data_prep": {
+    "regex": {
+      "demo": "\\b(demo|playground|try it|preview|screenshot|video|example|演示|试用)\\b",
+      "code": "\\b(github|repo|code|sdk|api|cli|open source|model|paper|arxiv|开源|代码|模型)\\b",
+      "buyer": "\\b(saas|api|pricing|customer|enterprise|workflow|automation|降本|提效|私有化|企业|工作流)\\b",
+      "pain": "\\b(replace|faster|slow|cost|manual|bug|risk|pain|complaint|坑|慢|贵|手动|替代|风险)\\b",
+      "ad": "\\b(best|ultimate|game.?changer|revolutionary|unlock|10x|限时|重磅|首个|唯一)\\b"
+    },
+    "generic_titles": ["ai", "agent", "llm", "rag"],
+    "risk_thresholds": {
+      "generic_title_min_chars": 8,
+      "old_item_hours": 720,
+      "ad_language_density": 0.08
+    },
+    "score": {
+      "has_code_signal": 2.5,
+      "has_demo_keyword": 1.5,
+      "has_buyer_keyword": 1.2,
+      "has_pain_keyword": 1.0,
+      "metric_strength_divisor": 2.0,
+      "metric_strength_cap": 2.0,
+      "extra_source_weight": 0.5,
+      "extra_source_cap": 1.0,
+      "unknown_freshness": 0.4,
+      "fresh_hours": 72,
+      "fresh_bonus": 1.0,
+      "recent_hours": 720,
+      "recent_bonus": 0.5,
+      "penalties": {
+        "marketing_biased": 0.8,
+        "generic_title": 0.7,
+        "community_only": 0.4
+      },
+      "hard_reject_flags": ["missing_url", "generic_title"],
+      "min_keep_score": 1.0
+    }
+  },
+  "video_profile": {
+    "min_duration_seconds": 18,
+    "max_duration_seconds": null,
+    "force_vertical": false,
+    "duration_seconds": {
+      "radar_signal": 24,
+      "topic_explainer": 60,
+      "source_explainer": 75,
+      "open_source_repo_explainer": 90
+    },
+    "orientation": {
+      "radar_signal": "vertical",
+      "topic_explainer": "vertical",
+      "source_explainer": "vertical",
+      "open_source_repo_explainer": "horizontal"
+    },
+    "motion": {
+      "radar_signal": "punchy",
+      "topic_explainer": "standard",
+      "source_explainer": "standard",
+      "open_source_repo_explainer": "standard"
+    },
+    "animation_style": {
+      "radar_signal": "kinetic_text",
+      "topic_explainer": "evidence_cards",
+      "source_explainer": "evidence_cards",
+      "open_source_repo_explainer": "diagrammatic"
+    }
+  },
+  "deepseek": {
+    "chars_per_second": 7,
+    "api_attempts": 2,
+    "max_tokens": 28000,
+    "voiceover_segment_chars": 1400,
+    "min_voiceover_target_ratio": 0.72,
+    "thinking_type": "disabled",
+    "variant_count": 3,
+    "variant_temperature": 0.5,
+    "temperatures": [0.3, 0.5, 0.7],
+    "required_keys": ["polished_title", "voiceover_text", "douyin_title", "douyin_desc", "tags", "cards", "storyboard", "premium_director_spec", "agent_visual", "video_profile"],
+    "hook_terms": ["为什么", "怎么", "竟然", "原来", "居然", "到底"],
+    "system": "You polish source-bounded Chinese tech video copy for a Douyin tech explainer. Do not invent facts. Do not claim unsupported superiority, market leadership, funding, benchmarks, or production maturity. Respect the forbidden claim terms from the user payload. Write like a sharp Chinese tech creator, not a dashboard report. Return strict JSON only.",
+    "constraints": [
+      "Use only the selected_candidate and content_plan facts.",
+      "Return the JSON object immediately; do not include prose, markdown, analysis, or reasoning text.",
+      "Voiceover must be Mandarin Chinese. If you keep the suggested {video_seconds} second {video_orientation} profile, use {voiceover_chars_range}; if you choose a different duration_seconds, scale voiceover_text to that chosen duration instead of obeying the suggested range.",
+      "If selected_candidate has no demo, source code detail, benchmark, or real usage evidence, keep claims inside the evidence boundary and teach mechanism, fit, and failure boundary; do not package it as an industry conclusion.",
+      "voiceover_text must explicitly mention at least one required_entity_terms value from the user payload.",
+      "Lead with a human hook: why this matters today, not a repo summary.",
+      "Optimize for watch completion with a concrete problem, mechanism, architecture position, tradeoff, failure boundary, and judgment framework; do not pad filler or recite source metadata.",
+      "Do not repeat the same technical assumptions, speculations, or explanatory clauses multiple times across the voiceover. Each mechanism or concept must be introduced once without circular phrasing or semantic repetition.",
+      "Avoid lazy, defensive disclaimer phrases such as '我们只能推测', '必须打一个问号', '具体细节未知，需要自己去试' as filler text. Instead, explain the actual code mechanics, module imports, or README usage from the evidence bundle. Keep the tone professional, objective, and information-rich.",
+      "For open-source projects, do not speculate on capabilities from keywords alone; analyze the specific codebase components, fetchers, and modules present in the evidence (e.g. Scrapling's find_similar node selector or its fetchers structure) to describe the real system mechanism.",
+      "The model owns duration selection. Do not default to 180+ seconds just because a topic is technical; choose 180 seconds or longer only when the evidence, narrative structure, and visual plan can sustain a high-quality long explainer.",
+      "Invite at most one constructive interaction when natural, such as asking how the viewer would judge fit or failure boundary; never ask for fake likes, follows, shares, or comment spam.",
+      "Use 2-5 clean Douyin tags tied to the topic or source category; do not stuff broad, repeated, or punctuation-heavy tags.",
+      "Do not put raw URLs, GitHub links, website links, or source paths into public titles, descriptions, captions, cards, or storyboard text.",
+      "Do not use call-to-action wording that asks viewers to try, download, install, use, open, visit, or go to a third-party tool, site, repository, app, plugin, or framework.",
+      "Do not package platform automation, account automation, multi-platform auto-posting, batch upload, auto-login, test-account, or platform-risk-control tooling as a publishable Douyin topic.",
+      "Do not claim secret Douyin ranking thresholds, fixed traffic-pool sizes, fixed completion-rate cutoffs, or a definitive shadowban/限流 diagnosis unless the selected evidence is an official platform-rule source.",
+      "Avoid spam, duplicate, 搬运, 洗稿, 刷量, 批量矩阵, or automation-growth tactics in public copy.",
+      "Do not use hype such as 给AI装超能力, 救世解药, 独家黑科技, 改变行业, 改写协作方式, 颠覆, or 革命性 unless selected_candidate evidence directly proves it.",
+      "Mention GitHub Trending only when selected_candidate.source_ids includes github_trending or canonical_url is a github.com/trending URL; otherwise do not use GitHub Trending wording.",
+      "Author premium_director_spec for this exact topic. It is required; the runtime will compile it into the Remotion agent_visual.",
+      "premium_director_spec must include profile, knowledge_arc, topic_objects, visual_scenes, motion_beats, and content_constraints.",
+      "visual_scenes must contain at least 5 scenes and at least 4 distinct scene_type values chosen from the allowed premium scene taxonomy.",
+      "topic_objects must contain concrete source/topic objects such as repo files, API surfaces, architecture nodes, metrics, or failure boundaries.",
+      "Do not write raw TSX/CSS as the primary visual surface; agent_visual is a compatibility field and may contain only a short description unless the runtime explicitly needs a fallback module.",
+      "Storyboard remains a planning/audit artifact, but the rendered provider video must come from premium_director_spec compiled into agent_visual.",
+      "For GitHub/open-source repo topics, Searchpo may compile the final video through its premium repo Remotion component; your job is to provide source-grounded copy, storyboard beats, repo surface details, tradeoffs, and verification paths that the component can render.",
+      "If a fallback agent_visual.module_code is used, it must be a complete TSX module with a named AgentVisualGenerated export. It may import React, Remotion APIs, installed @remotion packages, and local src/components or src/utils helpers. It must not use fetch/network, timers, browser storage, cookies, process/env, filesystem, or local secret access.",
+      "agent_visual.component_code is only a compatibility fallback; when used, it must be a TSX function body with a return statement and frame-driven Remotion animation.",
+      "agent_visual.css must be topic-specific production CSS when component_code needs it; no @import, remote URLs, or placeholder/mock labels.",
+      "In component_code compatibility mode, use the variables available in the generated component: data, frame, fps, durationInFrames, width, height, progress, audioPulse, React, AbsoluteFill, interpolate, spring, useMemo, Img, staticFile, Series, Sequence.",
+      "Allowed storyboard scene types: statement, context, stat, bullets, card, compare, compare_table, terminal, flow, chart, code_diff, code_block, node_graph, decision_table, act_card, closing, quote, cta.",
+      "Choose scene count by duration: sub-180s videos can use 3-8 scenes; videos >=180s must use 9-24 scenes with clear chapters instead of stretching a short storyboard. Always include a strong statement opening and a cta closing; use card scenes only when evidence beats need card treatment.",
+      "Allowed style tokens: theme=radar|minimal|editorial|engineering, density=minimal|standard|rich, motion=calm|standard|punchy, accent from #ffd60a #72e7ff #ff2d55 #f59e0b, chrome topbar/progress/beam booleans.",
+      "Return video_profile with duration_seconds, orientation, aspect_ratio, motion, animation_style, and decision_reason; duration and orientation must match the topic depth. You may choose vertical 9:16 at 1080x1920 or horizontal 16:9 at 1920x1080. GitHub/open-source repo explainers and developer-tool topics with code, architecture, timeline, table, file tree, API, MCP, diff, or comparison detail should default to horizontal unless the target is explicitly phone-native/live Douyin vertical.",
+      "For software/developer-tool topics, the custom Remotion visual should include concrete UI such as terminal, code, architecture flow, docs browser, file tree, or diff panels when evidence supports it.",
+      "Motion comfort is mandatory: one primary focal action per scene, at most two restrained secondary motion systems, visible rest/dwell moments, no whole-video orbit node cloud, no rotating readable labels, no screen shake/glitch/strobe, no high-frequency dash sweep, and no more than eight moving packets/nodes at once.",
+      "For repo/software explainers, prefer scene grammar switching across code/terminal, file tree, architecture graph, metric panel, UI callout, flow map, table, or checklist; do not stretch one circular orbit/radar/dashboard loop across the full video.",
+      "For software/developer-tool storyboard planning, include at least one terminal, flow, code_diff, code_block, node_graph, or decision_table scene when the evidence supports a developer workflow, architecture, decision logic, or source-code verification path.",
+      "For metric-heavy topics, include a chart scene instead of turning numbers into a static card.",
+      "Use compare_table when the useful point is a tradeoff, suitable/not-suitable split, or known-vs-unknown boundary.",
+      "For GitHub/open-source repos, use the reference frame: repo value, README/onboarding quality, minimal demo or usage path, architecture/mechanism, tradeoffs, suitable/not suitable scenarios, failure boundaries, and adoption judgment framework. Pick the subset that the evidence supports.",
+      "Do not end voiceover_text or douyin_desc with a viewer question. The final beat must state the judgment framework directly.",
+      "On-screen text should track the voiceover beats and evidence boundary, but it does not need to repeat the voiceover word-for-word.",
+      "Keep claims conditional and source-bounded.",
+      "Return exactly these keys: polished_title, voiceover_text, douyin_title, douyin_desc, tags, cards, storyboard, premium_director_spec, agent_visual, video_profile, caveats.",
+      "cards is a compatibility summary array with 1-4 objects with label, value, detail; derive it from the key evidence/storyboard beats."
+    ]
+  },
+  "content_optimization": {
+    "target_overall": 8.0,
+    "min_dimension": 7.0,
+    "max_content_attempts": 3,
+    "improve_requires_revision": true,
+    "revision_focus": [
+      "Rewrite weak openings into a concrete human problem, not a source summary.",
+      "Increase information density with problem, mechanism, architecture position, tradeoff, failure boundary, and judgment framework.",
+      "Keep every claim traceable to evidence_bundle and preserve source-bounded caveats.",
+      "Regenerate premium_director_spec so the compiled Remotion visual matches the revised voiceover beats."
+    ]
+  },
+  "video_optimization": {
+    "max_video_attempts": 3,
+    "max_semantic_backtracks": 1,
+    "repairable_checks": [
+      "text_not_overlapping",
+      "cover_text_safe",
+      "douyin_safe_area",
+      "audio_visual_alignment_safe"
+    ],
+    "semantic_checks": [
+      "candidate_matches_artifacts",
+      "voiceover_matches_copy",
+      "no_hype_without_evidence",
+      "content_has_constructive_insight",
+      "topic_graphics_fit",
+      "premium_director_visual_fit"
+    ],
+    "hard_fail_checks": [
+      "video_readable",
+      "no_unsupported_claims",
+      "no_internal_terms",
+      "speech_pronunciation_safe",
+      "publish_ready"
+    ],
+    "repair_actions": {
+      "storyboard": [
+        "Reduce storyboard density and weights for crowded scenes.",
+        "Prefer minimal chrome and calm motion when text overlap or safe-area issues appear.",
+        "Shorten visible scene text to preserve phone-readable layout."
+      ],
+      "caption": [
+        "Rebuild captions from the final voiceover and policy max_caption_chars.",
+        "Keep captions above the lower Douyin obstruction band."
+      ],
+      "cover": [
+        "Shorten cover title and use the same safe text bounds as render_payload.displayTitle."
+      ],
+      "content": [
+        "Backtrack to content revision when the rendered video lacks constructive insight, contradicts source artifacts, or the premium_director_spec needs regeneration."
+      ]
+    }
+  },
+  "quality_gate": {
+    "min_voiceover_chinese_ratio": 0.22,
+    "max_voiceover_disclaimer_hits": 2,
+    "max_caption_chars": 36,
+    "allowed_snake_case_terms": [
+      "find_similar",
+      "find_by_xpath",
+      "find_by_css",
+      "page_source",
+      "stealth_arguments",
+      "user_agent",
+      "playwright_stealth",
+      "auto_stealth",
+      "fetch_html",
+      "anti_bot",
+      "web_crawler"
+    ],
+    "internal_terms": [
+      "operator supplied topic",
+      "operator topic",
+      "live gate",
+      "source registry",
+      "contract-check",
+      "main_agent",
+      "claude_impl_agent",
+      "searchpo-main-agent",
+      "searchpo-impl-agent"
+    ],
+    "hype_phrases": [
+      "救世解药",
+      "独家黑科技",
+      "改变行业",
+      "改变协作方式",
+      "改写协作方式",
+      "给AI装超能力",
+      "给 AI 装超能力",
+      "超能力",
+      "颠覆",
+      "革命性",
+      "唯一解",
+      "躺赢"
+    ],
+    "disclaimer_phrases": [
+      "先别吹",
+      "效果需要证据边界",
+      "未大规模生产证据",
+      "实际效果依赖",
+      "判断边界",
+      "证据边界"
+    ],
+    "unverified_markers": [
+      "未实测",
+      "没有实测",
+      "不能做结论"
+    ]
+  },
+  "douyin_distribution": {
+    "max_tags": 5,
+    "max_tag_len": 20,
+    "max_title_len": 55,
+    "max_desc_len": 600,
+    "private_threshold_patterns": [
+      "首轮\\s*\\d+\\s*[~\\-–—]?\\s*\\d*\\s*播放",
+      "流量池\\s*\\d+",
+      "\\d+\\s*秒完播率\\s*(必须|达到|超过)",
+      "推荐流量占比\\s*\\d+%?",
+      "限流\\s*(恢复|解除).*\\d+\\s*(天|小时)",
+      "(权重|阈值)\\s*(固定|官方)"
+    ],
+    "distribution_risk_terms": [
+      "刷量",
+      "刷播放",
+      "买播放",
+      "互赞",
+      "互粉",
+      "搬运",
+      "洗稿",
+      "伪原创",
+      "批量注册",
+      "脚本养号",
+      "自动化养号",
+      "异常设备矩阵"
+    ],
+    "platform_abuse_subject_patterns": [
+      "social-auto-upload",
+      "多平台.{0,8}(自动)?(发布|上传)",
+      "(自动|批量).{0,8}(发布|上传|发视频|发作品)",
+      "(自动化|脚本).{0,8}(登录|发稿|发帖|发布|上传)",
+      "(测试号|账号|账户).{0,8}(风控|登录|批量|自动化)",
+      "(平台|账号).{0,8}风控",
+      "(代发|代上传|代运营|代充|代认证|解封)",
+      "(批量|自动).{0,8}(小红书|抖音|视频号|TikTok|Bilibili|YouTube)"
+    ],
+    "external_redirect_patterns": [
+      "https?://",
+      "github\\.com",
+      "(试试|尝试一下|尝试这个|尝试这款|去看|去试|快用|上手|安装|下载|部署|接入|打开|访问|前往|使用).{0,16}(开源|框架|工具|项目|软件|GitHub|官网|网站|仓库|插件|第三方)",
+      "(GitHub|官网|网站|仓库|链接|地址|第三方).{0,16}(试试|下载|安装|使用|打开|访问|前往|获取|查看)",
+      "(下载|安装|使用|前往|跳转|打开|访问|点击).{0,16}(GitHub|官网|网站|仓库|项目|工具|软件|插件|第三方)",
+      "(链接|地址|主页|官网|仓库).{0,8}(在|见|看|搜|打开|访问)"
+    ],
+    "engagement_bait_phrases": [
+      "点赞收藏转发",
+      "点关注不迷路",
+      "求点赞",
+      "求关注",
+      "评论区扣",
+      "三连",
+      "不看后悔",
+      "转疯了"
+    ],
+    "constructive_interaction_markers": [
+      "你会",
+      "你觉得",
+      "怎么判断",
+      "留言",
+      "评论",
+      "适用",
+      "失败边界",
+      "对比"
+    ],
+    "retention_structure_markers": [
+      "为什么",
+      "问题",
+      "机制",
+      "取舍",
+      "代价",
+      "风险",
+      "证据",
+      "判断",
+      "适用",
+      "失败边界",
+      "怎么"
+    ]
+  },
+  "visual_audit": {
+    "punch_words": ["抖音", "B站", "小红书", "视频号", "TikTok", "YouTube", "Bilibili", "social-auto-upload"]
+  },
+  "gemini_visual_audit": {
+    "fail_if": [
+      "the video is blank or unreadable",
+      "text overlaps or important text is cut off",
+      "the rendered candidate differs from selected_candidate",
+      "the video contains forbidden claim terms without evidence",
+      "audio or visible copy contradicts the run artifacts",
+      "cover title or metric leaks internal pipeline terms such as operator topic or live gate",
+      "voiceover reads raw repository slashes, URLs, or symbols instead of natural Mandarin",
+      "unverified topics are packaged as industry-changing conclusions",
+      "captions sit in Douyin bottom UI obstruction area or drift from the spoken beat",
+      "caption text is unreadable due to low contrast against background",
+      "any frame is fully black or has rendering artifacts",
+      "public copy presents private Douyin thresholds, fixed traffic-pool sizes, fixed completion-rate cutoffs, or definitive shadowban/限流 diagnosis as fact without official platform-rule evidence",
+      "public copy asks for fake likes, follows, shares, comment spam, or other engagement bait",
+      "public copy contains raw URLs, GitHub links, website links, or source paths",
+      "public copy tells viewers to try, download, install, use, open, visit, or go to a third-party tool, site, repository, app, plugin, or framework",
+      "the selected subject is platform automation, account automation, multi-platform auto-posting, batch upload, auto-login, test-account, or platform-risk-control tooling"
+    ],
+    "enhanced_checks": [
+      "Verify text contrast: all text should be clearly readable on its background (WCAG AA equivalent).",
+      "Check caption overlay: if subtitle bar is visible, text must not be clipped or overflow.",
+      "Check cover safety: title must fit inside the frame, and no key word may be cropped by the viewport edge.",
+      "Check safe area: publishable Searchpo output must be vertical Douyin 9:16, with captions above the lower 300px obstruction zone.",
+      "Check audio pronunciation: repository names should be spoken naturally, not as raw slash/URL strings.",
+      "Check evidence tone: if demo/source/benchmark evidence is absent, the copy must remain a verified-boundary observation.",
+      "Verify intro: video should fade in smoothly, no jump cut on first frame.",
+      "Verify outro: video should fade out, no abrupt end.",
+      "Verify adaptive layout: the selected scene structure should suit the content and should not show empty or overcrowded scenes.",
+      "Verify custom visual: provider renders should use agent_visual as a topic-specific Remotion composition, not a generic cards-only scene sequence.",
+      "For software or developer-tool topics, expect topic-informed custom visuals such as terminal, code, architecture flow, docs browser, file tree, diff panels, compare table, or charts when evidence supports them; generic cards-only layouts should be treated as weak.",
+      "For metric-heavy topics, numbers should be shown through a chart or data scene instead of only static paragraph text.",
+      "Verify Douyin metadata: title, description, and tags should be content-relevant and not broad repeated keyword stuffing.",
+      "Verify recommendation-fit without folklore: the video should improve retention through clear problem/mechanism/tradeoff, not by claiming secret platform thresholds.",
+      "Verify no off-platform guidance: titles, descriptions, captions, and cards must not invite viewers to try, download, install, use, open, visit, or go to a third-party site, repository, app, plugin, framework, or tool."
+    ],
+    "rubric_publish_minimums": {
+      "hook_clarity": 7,
+      "scene_pacing": 7,
+      "visual_hierarchy": 7,
+      "central_animation_richness": 7,
+      "topic_visual_fit": 7,
+      "caption_safe_area": 7,
+      "audio_visual_sync": 7,
+      "evidence_guardrail": 7
+    },
+    "important": "Do not fail only because the voiceover and screen text are not word-for-word identical. Fail only if they contradict each other or describe different candidate facts."
+  }
+}

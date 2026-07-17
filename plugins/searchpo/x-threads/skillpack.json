@@ -1,0 +1,38 @@
+{
+  "api_version": "gbrain-skillpack-v1",
+  "name": "github-repo-to-x-threads",
+  "version": "0.1.0",
+  "description": "Agent skillpack for turning technical sources into Agent-engineering-positioned X content systems with brand routing, model quality chain, evidence review, reusable assets, image governance, optional official X API publishing, and local strategy memory.",
+  "author": "SunflowersLwtech",
+  "license": "UNLICENSED",
+  "homepage": "https://github.com/SunflowersLwtech/github-repo-to-x-threads",
+  "skills": [
+    "skills/github-repo-to-x-threads"
+  ],
+  "shared_deps": [
+    "skills/_AGENT_README.md",
+    "skills/RESOLVER.md",
+    "skills/manifest.json"
+  ],
+  "runbooks": {
+    "bootstrap": "runbooks/bootstrap.md"
+  },
+  "agent_docs": [
+    "llms.txt",
+    "AGENTS.md",
+    "INSTALL_FOR_AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "adapters": {
+    "codex": ".codex-plugin/plugin.json",
+    "claude": ".claude-plugin/plugin.json",
+    "claude_command": "commands/github-repo-to-x-threads.md",
+    "openclaw": "openclaw.plugin.json"
+  },
+  "llm_evals": [
+    "evals/evals.json"
+  ],
+  "routing_evals": [
+    "skills/github-repo-to-x-threads/routing-eval.jsonl"
+  ]
+}

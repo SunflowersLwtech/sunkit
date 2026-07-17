@@ -1,0 +1,7 @@
+{"intent":"帮我分析 https://github.com/owner/repo，写中文 X thread，需要配图","expected_skill":"github-repo-to-x-threads","reason":"GitHub repo plus X thread and image request requires evidence collection, claim review, and governed visual assets."}
+{"intent":"This alphaXiv paper should become a technical X thread with a posting pack","expected_skill":"github-repo-to-x-threads","reason":"Paper input should route through the arbitrary-input strategy workflow before drafting."}
+{"intent":"这个 posting_pack.md 我 review 过了，帮我用 CLI 发 X","expected_skill":"github-repo-to-x-threads","reason":"Publishing requires official-api-publish safeguards and X OAuth2 credential checks."}
+{"intent":"记录这次发帖效果，让下次策略自动变好","expected_skill":"github-repo-to-x-threads","reason":"Postmortem and strategy memory are part of the skill's self-evolving loop."}
+{"intent":"从 GitHub Trending 快速筛 10 个 repo，先别 clone 巨型仓库","expected_skill":"github-repo-to-x-threads","reason":"Trending experiments use the skill's metadata-first screening and evaluation scripts."}
+{"intent":"把 Plasma/Sumsub KYC 吐槽改成专业 bug report 发 X","expected_skill":"github-repo-to-x-threads","reason":"KYC/support complaint copy must route through the Agent engineering brand gate and professional bug-report rewrite rules."}
+{"intent":"帮我把 bio 和置顶帖改成 Agent 工程实战派","expected_skill":"github-repo-to-x-threads","reason":"Profile positioning and pinned-post work use the skill's Agent engineering brand profile."}

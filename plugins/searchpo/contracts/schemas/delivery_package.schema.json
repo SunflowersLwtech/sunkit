@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo DeliveryPackage",
+  "type": "object",
+  "required": ["schema_version", "status", "platform_target", "files", "metadata", "artifact_hashes"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "delivery"},
+    "run_id": {"type": "string"},
+    "status": {"enum": ["pass", "fail"]},
+    "publish_status": {"type": "string"},
+    "platform_target": {"type": "string"},
+    "files": {"type": "object"},
+    "metadata": {"type": "object"},
+    "artifact_hashes": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  }
+}

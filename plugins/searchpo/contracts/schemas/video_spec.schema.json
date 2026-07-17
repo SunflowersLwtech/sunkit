@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Searchpo VideoSpec",
+  "type": "object",
+  "required": ["schema_version", "id", "title", "fps", "width", "height", "scenes", "assets"],
+  "properties": {
+    "schema_version": {"type": "number"},
+    "service": {"const": "render"},
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "platform_target": {"type": "string"},
+    "aspect_ratio": {"enum": ["9:16", "16:9"]},
+    "orientation": {"enum": ["vertical", "horizontal"]},
+    "width": {"type": "number"},
+    "height": {"type": "number"},
+    "fps": {"type": "number"},
+    "durationInFrames": {"type": "number"},
+    "renderer": {"type": "object"},
+    "storyboard": {"$ref": "#/$defs/storyboard"},
+    "agent_visual": {"type": "object"},
+    "premium_director_spec": {"$ref": "#/$defs/premiumDirectorSpec"},
+    "video_profile": {"type": "object"},
+    "scenes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/videoSpecScene"}},
+    "assets": {"type": "array"}
+  },
+  "$defs": {
+    "premiumDirectorSpec": {
+      "type": "object",
+      "required": ["schema_version", "profile", "knowledge_arc", "topic_objects", "visual_scenes", "motion_beats", "content_constraints"],
+      "properties": {
+        "schema_version": {"type": "number"},
+        "source": {"type": "string"},
+        "profile": {
+          "type": "object",
+          "required": ["orientation", "aspect_ratio", "duration_seconds", "style_family", "motion_comfort"],
+          "properties": {
+            "orientation": {"enum": ["vertical", "horizontal"]},
+            "aspect_ratio": {"enum": ["9:16", "16:9"]},
+            "duration_seconds": {"type": "number", "minimum": 18},
+            "style_family": {"type": "string"},
+            "motion_comfort": {"type": "string"},
+            "safe_space_px": {"type": "number"}
+          }
+        },
+        "knowledge_arc": {"type": "object"},
+        "topic_objects": {"type": "array", "minItems": 3},
+        "visual_scenes": {"type": "array", "minItems": 5},
+        "motion_beats": {"type": "array", "minItems": 3},
+        "content_constraints": {"type": "object"}
+      }
+    },
+    "storyboard": {
+      "type": "object",
+      "required": ["version", "scenes"],
+      "properties": {
+        "version": {"type": "number"},
+        "style": {
+          "type": "object",
+          "properties": {
+            "theme": {"enum": ["radar", "minimal", "editorial", "engineering"]},
+            "density": {"enum": ["minimal", "standard", "rich"]},
+            "motion": {"enum": ["calm", "standard", "punchy"]},
+            "accent": {"type": "string", "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"},
+            "chrome": {
+              "type": "object",
+              "properties": {
+                "topbar": {"type": "boolean"},
+                "progress": {"type": "boolean"},
+                "beam": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "required": ["type", "props"],
+            "properties": {
+              "type": {"$ref": "#/$defs/renderSceneType"},
+              "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+              "emphasis": {"enum": ["low", "normal", "high"]},
+              "props": {"type": "object"}
+            }
+          }
+        }
+      }
+    },
+    "videoSpecScene": {
+      "type": "object",
+      "required": ["id", "planning_type", "render_type", "startFrame", "durationInFrames"],
+      "properties": {
+        "id": {"type": "string"},
+        "planning_type": {
+          "enum": ["chart", "comparison", "context", "cta", "evidence", "explanation", "hook", "problem", "process", "quote", "summary", "timeline"]
+        },
+        "render_type": {"$ref": "#/$defs/renderSceneType"},
+        "startFrame": {"type": "number", "minimum": 0},
+        "durationInFrames": {"type": "number", "minimum": 1},
+        "on_screen_text": {"type": "object"},
+        "evidence_refs": {"type": "array", "items": {"type": ["string", "null"]}},
+        "timing_hint": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "renderSceneType": {
+      "enum": ["statement", "context", "stat", "bullets", "card", "compare", "compare_table", "terminal", "flow", "chart", "code_diff", "code_block", "node_graph", "decision_table", "act_card", "closing", "quote", "cta"]
+    }
+  }
+}
