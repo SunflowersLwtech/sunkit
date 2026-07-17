@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOIR ATELIER — Enhanced (With Skill)</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Outfit:wght@200;300;400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================
+   ENHANCED: Polanyi Design Skill applied
+
+   DESIGN THESIS (declared before writing code):
+   - Voice: AUSTERE — not warm, not decorative
+   - Direction: Editorial minimalism (polarized choice)
+   - Signature: Oversized outlined typography as architecture
+   - Rhythm: Fibonacci spacing (organic, not mechanical)
+   - Anti-convergence: NOT black bg + white text template.
+     Warm bone/ash palette. NOT centered-everything.
+     NOT uniform grid. NOT Inter.
+   - Unforgettable element: The hero "NOIR" as a
+     transparent-stroke landscape at 25vw
+   ============================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  /* Raw tokens (Layer 1 — what they ARE) */
+  --raw-bone:     #E8E0D5;
+  --raw-ash:      #9C9488;
+  --raw-ink:      #1A1714;
+  --raw-cream:    #F5F0EA;
+  --raw-warm-wh:  #FAF7F2;
+  --raw-stone:    #B8AFA4;
+  --raw-oxide:    #8B4513;
+  --raw-clay:     #6B5B4F;
+  --raw-chalk:    #D4CCC2;
+
+  /* Semantic tokens (Layer 2 — what they MEAN) */
+  --bg:           var(--raw-warm-wh);
+  --bg-deep:      var(--raw-ink);
+  --bg-mid:       var(--raw-bone);
+  --text-1:       var(--raw-ink);
+  --text-2:       var(--raw-clay);
+  --text-3:       var(--raw-ash);
+  --accent:       var(--raw-oxide);
+  --border:       var(--raw-chalk);
+
+  /* Fibonacci spacing — organic, not mechanical */
+  --sp-1: 8px;   --sp-2: 13px;  --sp-3: 21px;
+  --sp-4: 34px;  --sp-5: 55px;  --sp-6: 89px;
+  --sp-7: 144px; --sp-8: 233px;
+
+  /* Type scale — 1.333 ratio (perfect fourth) */
+  --fs-xs:   0.75rem;   /* 12px */
+  --fs-sm:   0.875rem;  /* 14px */
+  --fs-base: 1rem;      /* 16px */
+  --fs-md:   1.333rem;  /* ~21px */
+  --fs-lg:   1.777rem;  /* ~28px */
+  --fs-xl:   2.369rem;  /* ~38px */
+  --fs-2xl:  3.157rem;  /* ~50px */
+  --fs-hero: clamp(4rem, 18vw, 16rem);
+}
+
+body {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 300;
+  background: var(--bg);
+  color: var(--text-1);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- NAV ----
+   Left-aligned logo, right links. NOT centered.
+   The asymmetry is intentional — subsidiary chrome. */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: var(--sp-3) var(--sp-5);
+  mix-blend-mode: difference;
+}
+.logo {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-sm); letter-spacing: 0.35em;
+  font-weight: 400; text-transform: uppercase; color: var(--raw-warm-wh);
+}
+.nav-links { display: flex; gap: var(--sp-4); }
+.nav-links a {
+  color: var(--raw-warm-wh); font-size: var(--fs-xs);
+  text-decoration: none; letter-spacing: 0.15em;
+  text-transform: uppercase; font-weight: 400;
+  opacity: 0.6; transition: opacity 0.3s;
+}
+.nav-links a:hover { opacity: 1; }
+.nav-links a:focus-visible { outline: 2px solid var(--raw-warm-wh); outline-offset: 4px; }
+
+/* ---- HERO ----
+   SIGNATURE MOVE: "NOIR" as architectural outline at 18vw.
+   NOT centered text on a dark photo. The image is pushed to one side.
+   Text becomes landscape, not decoration. */
+.hero {
+  height: 100vh; height: 100dvh;
+  position: relative; overflow: hidden;
+  display: grid; grid-template-columns: 1fr 1fr;
+}
+.hero-image {
+  position: relative; overflow: hidden;
+}
+.hero-image img {
+  width: 100%; height: 100%; object-fit: cover;
+  filter: contrast(1.05) saturate(0.85);
+}
+.hero-text {
+  display: flex; flex-direction: column;
+  justify-content: flex-end;
+  padding: var(--sp-7) var(--sp-5) var(--sp-6);
+  background: var(--bg);
+  position: relative;
+}
+
+/* The architectural outlined type — signature move */
+.hero-title {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-hero);
+  font-weight: 300; line-height: 0.85;
+  color: transparent;
+  -webkit-text-stroke: 1.5px var(--text-1);
+  letter-spacing: -0.02em;
+  margin-bottom: var(--sp-4);
+  animation: title-settle 1.2s cubic-bezier(0.16,1,0.3,1) forwards;
+}
+@keyframes title-settle {
+  from { letter-spacing: 0.15em; opacity: 0; }
+  to { letter-spacing: -0.02em; opacity: 1; }
+}
+.hero-sub {
+  font-family: 'Outfit', sans-serif;
+  font-size: var(--fs-xs); letter-spacing: 0.25em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-bottom: var(--sp-4);
+}
+.hero-cta {
+  display: inline-block; width: fit-content;
+  font-family: 'Outfit', sans-serif;
+  font-size: var(--fs-xs); letter-spacing: 0.2em;
+  text-transform: uppercase; text-decoration: none;
+  color: var(--text-1); padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--text-1);
+  transition: color 0.3s, border-color 0.3s;
+}
+.hero-cta:hover { color: var(--accent); border-color: var(--accent); }
+.hero-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* ---- COLLECTION ----
+   NOT a uniform 3-column grid.
+   2 columns with Fibonacci vertical offsets on alternating items.
+   Images at different aspect ratios to break the grid rhythm. */
+.collection { padding: var(--sp-7) var(--sp-5) var(--sp-8); }
+.collection-label {
+  font-size: var(--fs-xs); letter-spacing: 0.3em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-bottom: var(--sp-6);
+}
+.collection-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  max-width: 1100px;
+}
+.product-card {
+  position: relative; overflow: hidden; cursor: pointer;
+}
+/* Fibonacci stagger — every other card shifts down */
+.product-card:nth-child(even) { margin-top: var(--sp-6); }
+.product-card img {
+  width: 100%; object-fit: cover;
+  transition: transform 0.8s cubic-bezier(0.16,1,0.3,1), filter 0.5s;
+  filter: saturate(0.9);
+}
+/* Varied aspect ratios — not uniform */
+.product-card:nth-child(1) img { aspect-ratio: 3/4; }
+.product-card:nth-child(2) img { aspect-ratio: 2/3; }
+.product-card:nth-child(3) img { aspect-ratio: 4/5; }
+.product-card:nth-child(4) img { aspect-ratio: 3/4; }
+.product-card:nth-child(5) img { aspect-ratio: 2/3; }
+.product-card:nth-child(6) img { aspect-ratio: 4/5; }
+
+.product-card:hover img { transform: scale(1.04); filter: saturate(1); }
+
+.product-info {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding: var(--sp-5) var(--sp-3) var(--sp-3);
+  background: linear-gradient(transparent, rgba(26,23,20,0.7));
+  transform: translateY(100%);
+  transition: transform 0.5s cubic-bezier(0.16,1,0.3,1);
+}
+.product-card:hover .product-info { transform: translateY(0); }
+.product-info h3 {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-md); font-weight: 400;
+  color: var(--raw-cream); margin-bottom: 4px;
+}
+.product-info .price {
+  font-size: var(--fs-xs); color: var(--raw-stone);
+  letter-spacing: 0.05em;
+}
+
+/* ---- BRAND STORY ----
+   Editorial split — image bleeds left, text right.
+   NOT centered paragraph. Asymmetric 55/45 split. */
+.story {
+  display: grid; grid-template-columns: 55fr 45fr;
+  min-height: 80vh; overflow: hidden;
+}
+.story-image {
+  position: relative; overflow: hidden;
+}
+.story-image img {
+  width: 100%; height: 100%; object-fit: cover;
+  filter: saturate(0.8) contrast(1.05);
+}
+.story-image::after {
+  content: '19'; position: absolute;
+  bottom: var(--sp-5); right: var(--sp-5);
+  font-family: 'Cormorant', serif;
+  font-size: clamp(80px, 12vw, 200px);
+  font-weight: 300; color: rgba(255,255,255,0.08);
+  line-height: 1;
+}
+.story-text {
+  display: flex; flex-direction: column;
+  justify-content: center;
+  padding: var(--sp-7) var(--sp-6);
+  background: var(--bg-deep); color: var(--raw-cream);
+}
+.story-text .label {
+  font-size: var(--fs-xs); letter-spacing: 0.3em;
+  text-transform: uppercase; color: var(--raw-ash);
+  margin-bottom: var(--sp-4);
+}
+.story-text h2 {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-xl); font-weight: 300;
+  line-height: 1.2; margin-bottom: var(--sp-4);
+  font-style: italic;
+}
+.story-text p {
+  font-size: var(--fs-sm); line-height: 1.8;
+  color: var(--raw-stone); max-width: 400px;
+  margin-bottom: var(--sp-3);
+}
+
+/* ---- LOOKBOOK ----
+   Asymmetric masonry — NOT uniform grid.
+   3 columns with varied spans. Editorial numbering. */
+.lookbook { padding: var(--sp-7) var(--sp-5); }
+.lookbook-label {
+  font-size: var(--fs-xs); letter-spacing: 0.3em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-bottom: var(--sp-6);
+}
+.lookbook-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: var(--sp-2);
+  max-width: 1100px;
+}
+.look-item { position: relative; overflow: hidden; }
+.look-item img {
+  width: 100%; height: 100%; object-fit: cover;
+  transition: transform 0.6s cubic-bezier(0.16,1,0.3,1);
+}
+.look-item:hover img { transform: scale(1.03); }
+
+/* Asymmetric spans */
+.look-item:nth-child(1) { grid-row: span 2; }
+.look-item:nth-child(4) { grid-column: span 2; }
+
+/* Editorial numbers */
+.look-item::after {
+  content: attr(data-num);
+  position: absolute; bottom: var(--sp-2); left: var(--sp-2);
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-sm); color: rgba(255,255,255,0.5);
+  font-style: italic;
+}
+
+/* ---- NEWSLETTER ----
+   NOT centered box. Asymmetric split with texture. */
+.newsletter {
+  display: grid; grid-template-columns: 1fr 1fr;
+  background: var(--bg-mid);
+  min-height: 50vh;
+}
+.newsletter-visual {
+  background: url('https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=800&q=80') center/cover;
+  filter: saturate(0.7) contrast(1.1);
+}
+.newsletter-content {
+  display: flex; flex-direction: column;
+  justify-content: center;
+  padding: var(--sp-7) var(--sp-6);
+}
+.newsletter-content h2 {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-lg); font-weight: 300;
+  font-style: italic; margin-bottom: var(--sp-2);
+  color: var(--text-1);
+}
+.newsletter-content p {
+  font-size: var(--fs-xs); color: var(--text-3);
+  letter-spacing: 0.05em; margin-bottom: var(--sp-4);
+}
+.newsletter-form { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 360px; }
+.newsletter-form input {
+  background: transparent; border: none;
+  border-bottom: 1px solid var(--raw-stone);
+  padding: var(--sp-2) 0; font-family: inherit;
+  font-size: var(--fs-sm); color: var(--text-1);
+  outline: none; transition: border-color 0.3s;
+}
+.newsletter-form input:focus { border-color: var(--accent); }
+.newsletter-form input:focus-visible { outline: none; border-color: var(--accent); }
+.newsletter-form input::placeholder { color: var(--text-3); }
+.newsletter-form button {
+  align-self: flex-start;
+  background: none; border: 1px solid var(--text-1);
+  padding: var(--sp-2) var(--sp-4);
+  font-family: inherit; font-size: var(--fs-xs);
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--text-1); cursor: pointer;
+  transition: background 0.3s, color 0.3s;
+}
+.newsletter-form button:hover { background: var(--text-1); color: var(--bg); }
+.newsletter-form button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* ---- FOOTER ----
+   Minimal. Logo left, links right. Not a 3-column grid. */
+footer {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: var(--sp-6) var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+.footer-brand {
+  font-family: 'Cormorant', serif;
+  font-size: var(--fs-sm); letter-spacing: 0.35em;
+  text-transform: uppercase; color: var(--text-1);
+}
+.footer-brand p {
+  font-family: 'Outfit', sans-serif;
+  font-size: var(--fs-xs); color: var(--text-3);
+  margin-top: var(--sp-1); letter-spacing: 0;
+}
+.footer-links { display: flex; gap: var(--sp-5); }
+.footer-col h4 {
+  font-size: var(--fs-xs); letter-spacing: 0.15em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-bottom: var(--sp-2); font-weight: 400;
+}
+.footer-col a {
+  display: block; font-size: var(--fs-xs);
+  color: var(--text-2); text-decoration: none;
+  margin-bottom: var(--sp-1);
+  transition: color 0.2s;
+}
+.footer-col a:hover { color: var(--accent); }
+.footer-col a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- SCROLL REVEALS ---- */
+.reveal {
+  opacity: 0; transform: translateY(var(--sp-3));
+  transition: opacity 0.7s ease-out, transform 0.7s ease-out;
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* ---- REDUCED MOTION ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.15s !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+  .hero-title { animation: none; opacity: 1; letter-spacing: -0.02em; }
+}
+
+/* ---- RESPONSIVE ---- */
+@media (max-width: 960px) {
+  :root { --fs-hero: clamp(3rem, 15vw, 8rem); }
+  nav { padding: var(--sp-2) var(--sp-3); }
+  .nav-links { display: none; }
+  .hero { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
+  .hero-text { padding: var(--sp-5) var(--sp-4) var(--sp-5); }
+  .collection { padding: var(--sp-6) var(--sp-3); }
+  .story { grid-template-columns: 1fr; }
+  .story-image { height: 50vh; }
+  .story-text { padding: var(--sp-6) var(--sp-4); }
+  .lookbook-grid { grid-template-columns: 1fr 1fr; }
+  .look-item:nth-child(1) { grid-row: span 1; }
+  .look-item:nth-child(4) { grid-column: span 1; }
+  .newsletter { grid-template-columns: 1fr; }
+  .newsletter-visual { height: 40vh; }
+  .newsletter-content { padding: var(--sp-6) var(--sp-4); }
+  footer { flex-direction: column; gap: var(--sp-4); }
+  .footer-links { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .collection-grid { grid-template-columns: 1fr; }
+  .product-card:nth-child(even) { margin-top: 0; }
+  .lookbook-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Noir Atelier</div>
+  <div class="nav-links">
+    <a href="#collection">Collection</a>
+    <a href="#story">Story</a>
+    <a href="#lookbook">Lookbook</a>
+    <a href="#newsletter">Contact</a>
+  </div>
+</nav>
+
+<!-- HERO — Split layout. Image left, architectural type right.
+     NOT centered text on dark photo overlay. -->
+<section class="hero">
+  <div class="hero-image">
+    <img src="https://images.unsplash.com/photo-1509631179647-0177331693ae?w=1200&q=80" alt="Model in NOIR ATELIER">
+  </div>
+  <div class="hero-text">
+    <div class="hero-title">NOIR</div>
+    <div class="hero-sub">Autumn &mdash; Winter 2026</div>
+    <a href="#collection" class="hero-cta">Explore the Collection</a>
+  </div>
+</section>
+
+<!-- COLLECTION — 2-column with Fibonacci stagger, not uniform 3-col grid -->
+<section class="collection" id="collection">
+  <div class="collection-label reveal">New Collection</div>
+  <div class="collection-grid">
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3?w=600&q=80" alt="Wool Overcoat" loading="lazy">
+      <div class="product-info"><h3>Wool Overcoat</h3><span class="price">&euro; 1,890</span></div>
+    </div>
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1594938298603-c8148c4dae35?w=600&q=80" alt="Silk Blouse" loading="lazy">
+      <div class="product-info"><h3>Silk Blouse</h3><span class="price">&euro; 680</span></div>
+    </div>
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1539109136881-3be0616acf4b?w=600&q=80" alt="Tailored Trousers" loading="lazy">
+      <div class="product-info"><h3>Tailored Trousers</h3><span class="price">&euro; 920</span></div>
+    </div>
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1558171813-4c088753af8f?w=600&q=80" alt="Cashmere Knit" loading="lazy">
+      <div class="product-info"><h3>Cashmere Knit</h3><span class="price">&euro; 1,240</span></div>
+    </div>
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=600&q=80" alt="Leather Jacket" loading="lazy">
+      <div class="product-info"><h3>Leather Jacket</h3><span class="price">&euro; 2,450</span></div>
+    </div>
+    <div class="product-card reveal">
+      <img src="https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=600&q=80" alt="Evening Dress" loading="lazy">
+      <div class="product-info"><h3>Evening Dress</h3><span class="price">&euro; 3,100</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- STORY — Editorial split, NOT centered paragraph -->
+<section class="story" id="story">
+  <div class="story-image">
+    <img src="https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=1000&q=80" alt="Atelier detail" loading="lazy">
+  </div>
+  <div class="story-text">
+    <div class="label reveal">The Atelier</div>
+    <h2 class="reveal">Where restraint<br>becomes form</h2>
+    <p class="reveal">Founded in Paris, 2019. Each piece is shaped by the belief that true presence requires no announcement. We work in reduction — removing until only the essential gesture remains.</p>
+    <p class="reveal">Our fabrics are sourced from mills in Como and Biella. Our patterns are cut by hand. Our conviction is that luxury is not what you add, but what you refuse to compromise.</p>
+  </div>
+</section>
+
+<!-- LOOKBOOK — Asymmetric masonry with editorial numbering -->
+<section class="lookbook" id="lookbook">
+  <div class="lookbook-label reveal">Lookbook</div>
+  <div class="lookbook-grid">
+    <div class="look-item reveal" data-num="01">
+      <img src="https://images.unsplash.com/photo-1469334031218-e382a71b716b?w=800&q=80" alt="Look 01" loading="lazy">
+    </div>
+    <div class="look-item reveal" data-num="02">
+      <img src="https://images.unsplash.com/photo-1495385794356-15371f348c31?w=600&q=80" alt="Look 02" loading="lazy">
+    </div>
+    <div class="look-item reveal" data-num="03">
+      <img src="https://images.unsplash.com/photo-1581044777550-4cfa60707998?w=600&q=80" alt="Look 03" loading="lazy">
+    </div>
+    <div class="look-item reveal" data-num="04">
+      <img src="https://images.unsplash.com/photo-1509631179647-0177331693ae?w=800&q=80" alt="Look 04" loading="lazy">
+    </div>
+    <div class="look-item reveal" data-num="05">
+      <img src="https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=600&q=80" alt="Look 05" loading="lazy">
+    </div>
+  </div>
+</section>
+
+<!-- NEWSLETTER — Split layout with image, NOT centered box -->
+<section class="newsletter" id="newsletter">
+  <div class="newsletter-visual" role="img" aria-label="Fashion detail"></div>
+  <div class="newsletter-content">
+    <h2 class="reveal">Stay close</h2>
+    <p class="reveal">Receive collection previews and atelier invitations.</p>
+    <form class="newsletter-form reveal" onsubmit="event.preventDefault()">
+      <input type="email" placeholder="Your email" aria-label="Email address" required>
+      <button type="submit">Subscribe</button>
+    </form>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-brand">
+    Noir Atelier
+    <p>&copy; 2026 &middot; Paris</p>
+  </div>
+  <div class="footer-links">
+    <div class="footer-col">
+      <h4>Navigate</h4>
+      <a href="#">Collection</a>
+      <a href="#">Story</a>
+      <a href="#">Lookbook</a>
+      <a href="#">Stores</a>
+    </div>
+    <div class="footer-col">
+      <h4>Social</h4>
+      <a href="#">Instagram</a>
+      <a href="#">Pinterest</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Scroll reveals — staggered by 80ms per sibling
+const obs = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const siblings = e.target.parentElement.querySelectorAll('.reveal');
+      const idx = Array.from(siblings).indexOf(e.target);
+      e.target.style.transitionDelay = `${idx * 80}ms`;
+      e.target.classList.add('visible');
+      obs.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.15 });
+document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+</script>
+</body>
+</html>

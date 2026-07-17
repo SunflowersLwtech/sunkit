@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>polanyi-design — A/B Showcase</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap');
+  :root {
+    --bg: #FAFAF9;
+    --surface: #FFFFFF;
+    --border: #E7E5E4;
+    --text-1: #1C1917;
+    --text-2: #57534E;
+    --text-3: #A8A29E;
+    --accent: #6366F1;
+    --accent-light: rgba(99,102,241,0.06);
+    --emerald: #059669;
+    --red: #DC2626;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text-1); }
+
+  /* Hero */
+  .hero {
+    max-width: 860px; margin: 0 auto;
+    padding: 120px 32px 80px; text-align: center;
+  }
+  .hero-tag {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); background: var(--accent-light);
+    padding: 6px 16px; border-radius: 999px; margin-bottom: 32px;
+  }
+  .hero h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(36px, 5vw, 56px); font-weight: 400;
+    line-height: 1.15; letter-spacing: -0.02em;
+    margin-bottom: 20px;
+  }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .hero p { font-size: 17px; color: var(--text-2); line-height: 1.6; max-width: 540px; margin: 0 auto 40px; }
+  .hero-links { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .hero-links a {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 14px; font-weight: 500; text-decoration: none;
+    padding: 10px 24px; border-radius: 8px;
+    transition: all 0.15s ease-out;
+  }
+  .hero-links .primary { background: var(--text-1); color: white; }
+  .hero-links .primary:hover { background: #292524; transform: translateY(-1px); }
+  .hero-links .secondary { border: 1px solid var(--border); color: var(--text-1); }
+  .hero-links .secondary:hover { border-color: var(--text-3); }
+
+  /* Comparison Frame */
+  .compare-section {
+    max-width: 1360px; margin: 0 auto;
+    padding: 0 32px 96px;
+  }
+  .compare-header {
+    text-align: center; margin-bottom: 48px;
+  }
+  .compare-header h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 32px; font-weight: 400; margin-bottom: 8px;
+  }
+  .compare-header p { color: var(--text-2); font-size: 15px; }
+
+  .compare-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .compare-card {
+    border: 1px solid var(--border); border-radius: 16px;
+    overflow: hidden; background: var(--surface);
+  }
+  .compare-label {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; font-size: 14px; font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  .compare-label.baseline { background: #FAFAFA; color: var(--text-2); }
+  .compare-label.enhanced { background: var(--accent); color: white; }
+  .compare-label .tag {
+    font-size: 11px; font-weight: 500; padding: 3px 10px;
+    border-radius: 999px;
+  }
+  .compare-label.baseline .tag { background: var(--border); color: var(--text-2); }
+  .compare-label.enhanced .tag { background: rgba(255,255,255,0.2); }
+  .preview-frame {
+    width: 100%; height: 600px; border: none;
+    background: #f5f5f5;
+  }
+  .compare-card .open-link {
+    display: block; text-align: center; padding: 14px;
+    font-size: 13px; font-weight: 500; color: var(--accent);
+    text-decoration: none; border-top: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  .compare-card .open-link:hover { background: var(--accent-light); }
+
+  /* Differences Table */
+  .diff-section {
+    max-width: 960px; margin: 0 auto;
+    padding: 0 32px 96px;
+  }
+  .diff-section h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 32px; font-weight: 400;
+    text-align: center; margin-bottom: 40px;
+  }
+  .diff-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 14px;
+  }
+  .diff-table th {
+    text-align: left; padding: 12px 16px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-3);
+    border-bottom: 2px solid var(--border);
+  }
+  .diff-table td {
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    vertical-align: top; line-height: 1.5;
+  }
+  .diff-table td:first-child { font-weight: 500; color: var(--text-1); width: 140px; }
+  .diff-table .baseline-col { color: var(--text-2); }
+  .diff-table .enhanced-col { color: var(--text-1); }
+  .diff-table .enhanced-col strong { color: var(--accent); font-weight: 600; }
+  .diff-table code {
+    font-size: 12px; background: var(--accent-light); color: var(--accent);
+    padding: 2px 6px; border-radius: 3px;
+  }
+
+  /* Scores */
+  .scores-section {
+    max-width: 720px; margin: 0 auto;
+    padding: 0 32px 96px; text-align: center;
+  }
+  .scores-section h2 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 32px; font-weight: 400; margin-bottom: 12px;
+  }
+  .scores-section > p { color: var(--text-2); font-size: 14px; margin-bottom: 40px; }
+  .score-bars { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+  .score-row { display: flex; align-items: center; gap: 12px; }
+  .score-name { width: 140px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+  .score-bar-bg {
+    flex: 1; height: 28px; background: #F5F5F4;
+    border-radius: 6px; overflow: hidden;
+  }
+  .score-bar-fill {
+    height: 100%; border-radius: 6px;
+    display: flex; align-items: center; padding-left: 10px;
+    font-size: 12px; font-weight: 600; color: white;
+    background: var(--accent);
+  }
+  .score-val { width: 50px; font-size: 14px; font-weight: 700; color: var(--emerald); text-align: right; }
+
+  /* Footer */
+  .footer {
+    text-align: center; padding: 40px 32px;
+    border-top: 1px solid var(--border);
+    font-size: 13px; color: var(--text-3);
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+
+  @media (max-width: 860px) {
+    .compare-grid { grid-template-columns: 1fr; }
+    .preview-frame { height: 480px; }
+  }
+  @media (max-width: 640px) {
+    .hero { padding: 80px 20px 48px; }
+    .preview-frame { height: 360px; }
+    .diff-table { font-size: 13px; }
+    .diff-table td:first-child { width: 100px; }
+  }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-tag">Claude Code Skill</div>
+  <h1>Same prompt.<br>Different <em>design intelligence</em>.</h1>
+  <p>Two AI agents received identical instructions to build a luxury fashion website. One had the polanyi-design skill loaded. See the difference below.</p>
+  <div class="hero-links">
+    <a href="https://github.com/SunflowersLwtech/polanyi-design" class="primary">View on GitHub</a>
+    <a href="#comparison" class="secondary">See the comparison &darr;</a>
+  </div>
+</section>
+
+<section class="compare-section" id="comparison">
+  <div class="compare-header">
+    <h2>Live Comparison</h2>
+    <p>Both pages rendered from AI-generated code. Same prompt: "NOIR ATELIER luxury fashion brand website."</p>
+  </div>
+  <div class="compare-grid">
+    <div class="compare-card">
+      <div class="compare-label baseline">
+        Without Skill <span class="tag">Baseline</span>
+      </div>
+      <iframe class="preview-frame" src="demo-baseline.html" loading="lazy" title="Baseline fashion site"></iframe>
+      <a href="demo-baseline.html" target="_blank" class="open-link">Open full page &rarr;</a>
+    </div>
+    <div class="compare-card">
+      <div class="compare-label enhanced">
+        With polanyi-design <span class="tag">Enhanced</span>
+      </div>
+      <iframe class="preview-frame" src="demo-enhanced.html" loading="lazy" title="Enhanced fashion site"></iframe>
+      <a href="demo-enhanced.html" target="_blank" class="open-link">Open full page &rarr;</a>
+    </div>
+  </div>
+</section>
+
+<section class="diff-section">
+  <h2>What the Skill Changed</h2>
+  <table class="diff-table">
+    <thead>
+      <tr><th>Aspect</th><th>Without Skill</th><th>With Skill</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Spacing System</td>
+        <td class="baseline-col">Powers-of-two scale (8, 16, 24, 32, 48, 64px) — mechanical, predictable</td>
+        <td class="enhanced-col"><strong>Fibonacci scale</strong> (8, 13, 21, 34, 55, 89, 144, 233px) — organic tension, varied rhythm</td>
+      </tr>
+      <tr>
+        <td>Typography</td>
+        <td class="baseline-col">Cormorant Garamond + Inter + Playfair Display (3 fonts — conventional luxury pairing)</td>
+        <td class="enhanced-col"><strong>Cormorant Garamond + Outfit</strong> (serif + geometric sans — actual contrast). <strong>Modular scale at 1.333 ratio</strong> with 5 named type classes</td>
+      </tr>
+      <tr>
+        <td>Color System</td>
+        <td class="baseline-col">10 warm neutrals + <code>#8b7355</code> accent. Named by appearance (ivory, cream, parchment...)</td>
+        <td class="enhanced-col">9 warm neutrals + <code>#8B4513</code> oxide accent. <strong>Two-tier token system</strong>: raw values → semantic aliases (<code>--surface-primary</code>, <code>--accent</code>)</td>
+      </tr>
+      <tr>
+        <td>Hero Treatment</td>
+        <td class="baseline-col">Ken Burns zoom on background image, gradient overlays, staggered text reveal</td>
+        <td class="enhanced-col"><strong>"NOIR" at ~22vw as architectural outline</strong> — 1px transparent stroke, animated from expanded to compressed letter-spacing. Reversed the typical "spread out" cliché.</td>
+      </tr>
+      <tr>
+        <td>Grid Strategy</td>
+        <td class="baseline-col">12-column asymmetric grid with varied aspect ratios</td>
+        <td class="enhanced-col">2-column layout with <strong>Fibonacci stagger offsets</strong> on alternating items — organic asymmetry, not mechanical column math</td>
+      </tr>
+      <tr>
+        <td>Accessibility</td>
+        <td class="baseline-col">Custom cursor hidden on touch. No mention of focus states or reduced motion.</td>
+        <td class="enhanced-col"><strong><code>focus-visible</code></strong> outlines at 2px/4px offset. <strong><code>prefers-reduced-motion</code></strong> zeroes all animation durations. Custom cursor disabled on touch/small screens.</td>
+      </tr>
+      <tr>
+        <td>Design Thesis</td>
+        <td class="baseline-col">Not stated — decisions are implicit</td>
+        <td class="enhanced-col"><strong>Explicitly declared</strong>: Voice = "Austere." Rhythm = Fibonacci. Signature = architectural outlined type. Anti-convergence list of what to deliberately avoid.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="scores-section">
+  <h2>Measured Impact</h2>
+  <p>Blind A/B evaluation across 5 design prompts, scored 0-10 per dimension</p>
+  <div class="score-bars">
+    <div class="score-row">
+      <div class="score-name">Technical</div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:64%">8.4</div></div>
+      <div class="score-val">+1.6</div>
+    </div>
+    <div class="score-row">
+      <div class="score-name">Design Quality</div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:62%">7.8</div></div>
+      <div class="score-val">+1.6</div>
+    </div>
+    <div class="score-row">
+      <div class="score-name">Reasoning</div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:72%">8.2</div></div>
+      <div class="score-val">+2.0</div>
+    </div>
+    <div class="score-row">
+      <div class="score-name">Actionability</div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:70%">8.8</div></div>
+      <div class="score-val">+1.6</div>
+    </div>
+    <div class="score-row">
+      <div class="score-name">Tacit Articulation</div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:78%">8.4</div></div>
+      <div class="score-val">+2.8</div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p><a href="https://github.com/SunflowersLwtech/polanyi-design">GitHub</a> · Built on Michael Polanyi's tacit knowledge framework · MIT License</p>
+  <p style="margin-top:8px">Inspired by <a href="https://github.com/enzyme2013/polanyi-skill">enzyme2013/polanyi-skill</a></p>
+</footer>
+
+</body>
+</html>
