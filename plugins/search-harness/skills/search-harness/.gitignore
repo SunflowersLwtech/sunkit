@@ -1,0 +1,54 @@
+# reference/ — 项目动态(case_study / runs / scripts / tools / .env)
+reference/
+
+# upstream/ — 开源 OSS repo clone(deer-flow / gbrain / gstack / superpowers)
+upstream/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python (for future MVP impl)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node (for future MVP impl)
+node_modules/
+*.log
+.env
+.env.local
+
+# Local cache
+.cache/
+*.cache
+
+# Claude Code harness local state — 默认排除,但项目级 skills 要跟踪
+.claude/*
+!.claude/skills/
+
+# tools/ — 项目本地安装的第三方 CLI(grok-cli 等),保留 package.json/lock,
+# 排除生成物.
+tools/**/node_modules/
+tools/**/dist/
+tools/**/.bun/
+
+# runs/ — ad-hoc API call outputs.
+# 按需用 `git add -f` 锚定 milestone 调用作为实证证据,详见 runs/README.md.
+runs/**/*.json
+runs/**/*.txt
+runs/**/*.log
+runs/**/*.ndjson
