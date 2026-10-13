@@ -1,0 +1,20 @@
+# Relay bound to the tailnet address only: not reachable from LAN or WAN.
+# Plain HTTP is fine here — tailnet traffic is already WireGuard-encrypted.
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.relay
+    image: claude-mesh/relay:local
+    container_name: claude-mesh-relay
+    restart: always
+    network_mode: host
+    environment:
+      PORT: "8443"
+      HOST: ${MESH_BIND:-100.85.83.37}
+      MESH_DATA: /data
+      MESH_INACTIVE_DAYS: "0"
+    volumes:
+      - /opt/data/mesh/data:/data
+    mem_limit: 256m
+    cpus: 0.5
