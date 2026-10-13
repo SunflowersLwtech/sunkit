@@ -26,6 +26,16 @@ const ContentSchema = z.string().refine(
 
 const MessageIdSchema = z.string().regex(/^msg_[0-9A-HJKMNP-TV-Z]{26}$/)
 
+/** Session ids are minted by each peer-agent (one per Claude Code session). */
+export const SESSION_ID_REGEX = /^s_[0-9a-z]{16,32}$/
+export const SessionIdSchema = z.string().regex(SESSION_ID_REGEX)
+/** Human-readable session name, mirroring Claude Code's own session names. */
+/** Short disambiguator shown as `name [ref]`, like Claude Code's own ListAgents rows. */
+export function sessionRef(sessionId: string): string {
+  return sessionId.slice(-6)
+}
+export const SessionNameSchema = z.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/)
+
 export const EnvelopeSchema = z.object({
   id: MessageIdSchema,
   v: z.literal(PROTOCOL_VERSION),
@@ -38,7 +48,11 @@ export const EnvelopeSchema = z.object({
   content: ContentSchema,
   meta: MetaSchema,
   sent_at: z.string().datetime(),
-  delivered_at: z.string().datetime().nullable()
+  delivered_at: z.string().datetime().nullable(),
+  // Session addressing. All three are set by the relay, never trusted from clients.
+  from_session: SessionIdSchema.nullable().default(null),
+  from_name: SessionNameSchema.nullable().default(null),
+  to_session: SessionIdSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === 'permission_verdict' && e.in_reply_to === null) {
     ctx.addIssue({
@@ -55,7 +69,8 @@ export const OutboundMessageSchema = z.object({
   kind: KindSchema,
   content: ContentSchema,
   meta: MetaSchema.optional(),
-  in_reply_to: MessageIdSchema.nullable().optional()
+  in_reply_to: MessageIdSchema.nullable().optional(),
+  to_session: SessionIdSchema.optional()
 }).strict()
 export type OutboundMessage = z.infer<typeof OutboundMessageSchema>
 
@@ -72,6 +87,9 @@ export interface EnvelopeRow {
   meta_json: string
   sent_at: string
   delivered_at: string | null
+  from_session?: string | null
+  from_name?: string | null
+  to_session?: string | null
 }
 
 export function envelopeToRow(e: Envelope): EnvelopeRow {
@@ -81,7 +99,8 @@ export function envelopeToRow(e: Envelope): EnvelopeRow {
     in_reply_to: e.in_reply_to, thread_root: e.thread_root,
     kind: e.kind, content: e.content,
     meta_json: JSON.stringify(e.meta),
-    sent_at: e.sent_at, delivered_at: e.delivered_at
+    sent_at: e.sent_at, delivered_at: e.delivered_at,
+    from_session: e.from_session, from_name: e.from_name, to_session: e.to_session
   }
 }
 
@@ -92,6 +111,8 @@ export function envelopeFromRow(row: EnvelopeRow): Envelope {
     in_reply_to: row.in_reply_to, thread_root: row.thread_root,
     kind: row.kind, content: row.content,
     meta: JSON.parse(row.meta_json) as Record<string, string>,
-    sent_at: row.sent_at, delivered_at: row.delivered_at
+    sent_at: row.sent_at, delivered_at: row.delivered_at,
+    from_session: row.from_session ?? null, from_name: row.from_name ?? null,
+    to_session: row.to_session ?? null
   })
 }

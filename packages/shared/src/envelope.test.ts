@@ -13,10 +13,21 @@ const validChatEnvelope = (): Envelope => ({
   in_reply_to: null, thread_root: null,
   kind: 'chat', content: 'hello',
   meta: { repo: 'claudes-talking' },
-  sent_at: '2026-04-17T23:01:12.345Z', delivered_at: null
+  sent_at: '2026-04-17T23:01:12.345Z', delivered_at: null,
+  from_session: null, from_name: null, to_session: null
 })
 
 describe('EnvelopeSchema', () => {
+  it('defaults session fields to null for legacy envelopes', () => {
+    const { from_session: _a, from_name: _b, to_session: _c, ...legacy } = validChatEnvelope()
+    const e = EnvelopeSchema.parse(legacy)
+    expect([e.from_session, e.from_name, e.to_session]).toEqual([null, null, null])
+  })
+  it('rejects session names that could break the [ref] address syntax', () => {
+    for (const bad of ['a b', 'x[1]', 'a"b', '<x>']) {
+      expect(() => EnvelopeSchema.parse({ ...validChatEnvelope(), from_name: bad })).toThrow()
+    }
+  })
   it('accepts a minimal valid chat envelope', () => {
     expect(EnvelopeSchema.parse(validChatEnvelope())).toBeDefined()
   })
@@ -88,7 +99,10 @@ describe('row <-> envelope conversion', () => {
         fc.string({ maxLength: 256 }), { maxKeys: 8 }
       ),
       sent_at: fc.constant('2026-04-17T23:01:12.345Z'),
-      delivered_at: fc.constant(null)
+      delivered_at: fc.constant(null),
+      from_session: fc.constantFrom(null, 's_01hrk7y0000000000000ab'),
+      from_name: fc.constantFrom(null, 'opensource-1c'),
+      to_session: fc.constantFrom(null, 's_01hrk7y0000000000000cd')
     })
     fc.assert(fc.property(arb, e => {
       expect(envelopeFromRow(envelopeToRow(e as Envelope))).toEqual(e)

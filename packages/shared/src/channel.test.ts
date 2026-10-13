@@ -10,6 +10,7 @@ const baseEnvelope = (overrides: Partial<Envelope> = {}): Envelope => ({
   from: 'alice', to: 'bob', in_reply_to: null, thread_root: null,
   kind: 'chat', content: 'hello', meta: { repo: 'claudes-talking' },
   sent_at: '2026-04-17T23:01:12.345Z', delivered_at: null,
+  from_session: null, from_name: null, to_session: null,
   ...overrides
 })
 
@@ -22,6 +23,19 @@ describe('envelopeToChannelNotification', () => {
       from: 'alice', msg_id: 'msg_01HRK7Y0000000000000000000',
       source: 'peers', repo: 'claudes-talking'
     })
+  })
+
+  it('addresses a session sender as "name [ref]" and keeps the account handle', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({
+      from_session: 's_01hrk7y00000000000a1b2c3', from_name: 'opensource-1c'
+    }))
+    expect(n.params.meta.from).toBe('opensource-1c [a1b2c3]')
+    expect(n.params.meta.account).toBe('alice')
+  })
+
+  it('sender meta cannot forge the account field', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({ meta: { account: 'root' } }))
+    expect(n.params.meta.account).toBe('alice')
   })
 
   it('sender-controlled meta cannot override relay-set identity fields', () => {

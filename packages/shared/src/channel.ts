@@ -1,5 +1,5 @@
 import { META_KEY_REGEX, CHANNEL_SOURCE_PEERS } from './constants.ts'
-import type { Envelope } from './envelope.ts'
+import { sessionRef, type Envelope } from './envelope.ts'
 
 export interface ChannelNotification {
   method: string
@@ -50,7 +50,9 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
       // Sender-controlled meta goes first so relay-set identity fields always win.
       meta: {
         ...withoutReserved(safeMeta),
-        from: e.from,
+        // `from` is the reply address: the sender's session when it has one, else its handle.
+        from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from,
+        account: e.from,
         msg_id: e.id,
         ...(e.in_reply_to ? { in_reply_to: e.in_reply_to } : {}),
         ...(e.thread_root ? { thread_root: e.thread_root } : {}),
@@ -60,7 +62,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
   }
 }
 
-const RESERVED_META_KEYS = new Set(['from', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+const RESERVED_META_KEYS = new Set(['from', 'account', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 function withoutReserved(meta: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)))
