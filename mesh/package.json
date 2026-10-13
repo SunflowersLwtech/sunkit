@@ -1,0 +1,52 @@
+{
+  "name": "claude-mesh",
+  "private": true,
+  "version": "0.1.6",
+  "description": "Networked Claude-to-Claude messaging over HTTP + MCP channels",
+  "license": "MIT",
+  "author": "Pouria Mortezaagha",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pouriamrt/claude-mesh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pouriamrt/claude-mesh/issues"
+  },
+  "homepage": "https://github.com/pouriamrt/claude-mesh#readme",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "anthropic",
+    "mcp",
+    "model-context-protocol",
+    "mesh-networking",
+    "messaging",
+    "multi-agent"
+  ],
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:ci": "pnpm -r test:ci",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean",
+    "bundle": "node scripts/bundle.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "esbuild": "0.27.7",
+    "fast-check": "^3.22.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

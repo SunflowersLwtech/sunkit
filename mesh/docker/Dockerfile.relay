@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1.7
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/relay/package.json packages/relay/
+RUN pnpm install --frozen-lockfile
+
+COPY packages/shared packages/shared
+COPY packages/relay packages/relay
+RUN pnpm -F @claude-mesh/shared build && pnpm -F @claude-mesh/relay build
+RUN pnpm deploy --legacy --filter @claude-mesh/relay --prod /deploy
+
+# Seed /data with correct ownership so a fresh named volume inherits it.
+# Distroless has no shell for chown, so we stage it in the builder and copy.
+RUN mkdir -p /seed-data && chown -R 65532:65532 /seed-data
+
+FROM gcr.io/distroless/nodejs22-debian12:nonroot
+WORKDIR /app
+COPY --from=build --chown=nonroot:nonroot /deploy ./
+COPY --from=build --chown=nonroot:nonroot /seed-data /data
+ENV NODE_ENV=production MESH_DATA=/data PORT=8443 HOST=0.0.0.0
+VOLUME ["/data"]
+EXPOSE 8443
+USER nonroot
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD ["/nodejs/bin/node", "-e", "require('http').get('http://127.0.0.1:' + (process.env.PORT||8443) + '/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+ENTRYPOINT ["/nodejs/bin/node", "dist/index.js"]

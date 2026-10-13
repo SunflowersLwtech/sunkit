@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/*.sqlite
+**/.claude-mesh
+docs/
+.git/
+.github/

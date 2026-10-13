@@ -1,0 +1,42 @@
+# node / bun / pnpm
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+.bun/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+.vitest/
+
+# runtime
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+
+# project secrets
+.claude-mesh/
+**/admin.token
+**/admin-token
+**/*.paircode
+
+# env
+.env
+.env.local
+
+# local-only design docs (spec, plan, deploy/security notes)
+docs/
+
+# sentrux local sensor data
+.sentrux/

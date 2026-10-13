@@ -1,0 +1,29 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.relay
+    image: claude-mesh/relay:latest
+    restart: always
+    environment:
+      PORT: 8443
+      HOST: 0.0.0.0
+      MESH_DATA: /data
+    volumes:
+      - mesh-data:/data
+    expose: ["8443"]
+
+  caddy:
+    image: caddy:2
+    restart: always
+    depends_on: [relay]
+    ports: ["443:443", "80:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  mesh-data:
+  caddy-data:
+  caddy-config:
