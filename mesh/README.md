@@ -207,6 +207,14 @@ pnpm -r test:ci       # ~250 tests across shared / relay / peer-agent / e2e
 pnpm bundle           # regenerate plugins/mesh/server/*.mjs after peer-agent changes
 ```
 
+Claude Code runs an installed plugin from its cache (`~/.claude/plugins/cache/claude-mesh/mesh/<version>`),
+not from your checkout. After changing the bundle, bump `version` in
+`plugins/mesh/.claude-plugin/plugin.json`, then on every machine:
+
+```bash
+git pull && claude plugin marketplace update claude-mesh && claude plugin update mesh@claude-mesh
+```
+
 Packages: `shared` (envelope schema, `<channel>` rendering), `relay` (Hono + SQLite + SSE),
 `peer-agent` (the MCP channel server and the `mesh` CLI), `e2e`.
 

@@ -1,5 +1,5 @@
 {
   "name": "mesh",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cross-account, cross-machine messaging between Claude Code sessions (channel + list_agents/send_message) through a self-hosted relay. Start sessions with --channels plugin:mesh@claude-mesh."
 }
