@@ -9,8 +9,11 @@ import { adminRoute } from './routes/admin.ts'
 import { metricsRoute } from './routes/metrics.ts'
 import { permissionRoute } from './routes/permission.ts'
 import { accessLog } from './middleware/access-log.ts'
+import { sessionsRoute } from './routes/sessions.ts'
+import { SessionRegistry } from './sessions/registry.ts'
 
-export function buildApp(deps: Deps) {
+export function buildApp(inputDeps: Deps) {
+  const deps: Deps = { ...inputDeps, sessions: inputDeps.sessions ?? new SessionRegistry() }
   const app = new Hono()
   app.use('*', accessLog)
   app.get('/health', c => c.json({ ok: true }))
@@ -19,6 +22,7 @@ export function buildApp(deps: Deps) {
   app.route('/v1/stream', streamRoute(deps))
   app.route('/v1/presence', presenceRoute(deps))
   app.route('/v1/peers', peersRoute(deps))
+  app.route('/v1/sessions', sessionsRoute(deps))
   app.route('/v1/auth', authRoute(deps))
   app.route('/v1/admin', adminRoute(deps))
   app.route('/v1/permission', permissionRoute(deps))

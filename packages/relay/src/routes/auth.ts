@@ -5,6 +5,13 @@ import { generateRawToken, hashToken } from '../auth/hash.ts'
 import { parsePairCode } from '../auth/pair-code.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
+import { rateLimit } from '../middleware/rate-limit.ts'
+import { getConnInfo } from '@hono/node-server/conninfo'
+
+/** Pair codes are ~40 bits; cap guesses per source address. */
+function clientAddress(c: Parameters<typeof getConnInfo>[0]): string {
+  try { return getConnInfo(c).remote.address ?? 'unknown' } catch { return 'unknown' }
+}
 
 const PairBody = z.object({
   pair_code: z.string().min(1).max(64),
@@ -25,7 +32,7 @@ interface PairRow {
 export function authRoute(deps: Deps) {
   const app = new Hono<{ Variables: AuthContext }>()
 
-  app.post('/pair', async c => {
+  app.post('/pair', rateLimit({ windowMs: 60_000, max: 10, key: c => `pair:${clientAddress(c)}` }), async c => {
     const parsed = PairBody.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_body' }, 400)
     if (!parsePairCode(parsed.data.pair_code)) return c.json({ error: 'invalid_code' }, 400)

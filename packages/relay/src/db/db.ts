@@ -27,6 +27,17 @@ function migrateV1ToV2(db: Db): void {
     db.exec('UPDATE human SET last_active_at = created_at WHERE last_active_at IS NULL')
   }
   db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (2)')
+  migrateV2ToV3(db)
+}
+
+/** v3: session-level addressing columns on `message`. */
+function migrateV2ToV3(db: Db): void {
+  const cols = db.pragma('table_info(message)') as Array<{ name: string }>
+  for (const col of ['from_session', 'from_name', 'to_session']) {
+    if (!cols.some(c => c.name === col)) db.exec(`ALTER TABLE message ADD COLUMN ${col} TEXT`)
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_message_to_session ON message(team_id, to_session, id)')
+  db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (3)')
 }
 
 export function getSchemaVersion(db: Db): number {

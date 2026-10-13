@@ -13,7 +13,12 @@ import type { Db } from '../db/db.ts'
 export class MessageStore {
   constructor(private readonly db: Db) {}
 
-  insert(team_id: string, from_handle: string, msg: OutboundMessage): Envelope {
+  insert(
+    team_id: string,
+    from_handle: string,
+    msg: OutboundMessage,
+    sender: { session: string; name: string } | null = null,
+  ): Envelope {
     if (msg.to !== TEAM_BROADCAST_HANDLE) {
       const rcpt = this.db.prepare(
         "SELECT 1 AS x FROM human WHERE team_id=? AND handle=? AND disabled_at IS NULL"
@@ -43,40 +48,50 @@ export class MessageStore {
       meta: msg.meta ?? {},
       sent_at: new Date().toISOString(),
       delivered_at: null,
+      from_session: sender?.session ?? null,
+      from_name: sender?.name ?? null,
+      to_session: msg.to_session ?? null,
     })
 
     this.db.prepare(`
-      INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at,from_session,from_name,to_session)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       envelope.id, envelope.v, envelope.team, envelope.from, envelope.to,
       envelope.in_reply_to, envelope.thread_root, envelope.kind, envelope.content,
-      JSON.stringify(envelope.meta), envelope.sent_at, envelope.delivered_at
+      JSON.stringify(envelope.meta), envelope.sent_at, envelope.delivered_at,
+      envelope.from_session, envelope.from_name, envelope.to_session
     )
     return envelope
   }
 
-  fetchSince(team_id: string, to_handle: string, since_id: string): Envelope[] {
+  /**
+   * A session-scoped reader (session !== null) also sees handle-level and
+   * broadcast messages, but never messages addressed to a sibling session.
+   */
+  fetchSince(team_id: string, to_handle: string, since_id: string, session: string | null = null): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session
       FROM message
       WHERE team_id=? AND id > ?
         AND (to_handle=? OR (to_handle='@team' AND from_handle != ?))
+        AND (to_session IS NULL OR to_session = ?)
       ORDER BY id ASC LIMIT 1000
-    `).all(team_id, since_id, to_handle, to_handle) as EnvelopeRow[]
+    `).all(team_id, since_id, to_handle, to_handle, session) as EnvelopeRow[]
     return rows.map(envelopeFromRow)
   }
 
-  fetchPendingFor(team_id: string, to_handle: string): Envelope[] {
+  fetchPendingFor(team_id: string, to_handle: string, session: string | null = null): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session
       FROM message
       WHERE team_id=? AND delivered_at IS NULL
         AND (to_handle=? OR (to_handle='@team' AND from_handle != ?))
+        AND (to_session IS NULL OR to_session = ?)
       ORDER BY id ASC LIMIT 1000
-    `).all(team_id, to_handle, to_handle) as EnvelopeRow[]
+    `).all(team_id, to_handle, to_handle, session) as EnvelopeRow[]
     return rows.map(envelopeFromRow)
   }
 

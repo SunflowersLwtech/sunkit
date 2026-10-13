@@ -4,6 +4,8 @@ import { TEAM_BROADCAST_HANDLE } from '@claude-mesh/shared'
 export interface Subscriber {
   handle: string
   team_id: string
+  /** Set when the stream belongs to a specific Claude Code session. */
+  session?: string
   deliver: (e: Envelope) => void
 }
 
@@ -46,7 +48,17 @@ export class Fanout {
     }
     const set = byHandle.get(e.to)
     if (!set) return
-    for (const sub of set) sub.deliver(e)
+    for (const sub of set) {
+      if (e.to_session && sub.session !== e.to_session) continue
+      sub.deliver(e)
+    }
+  }
+
+  isSessionOnline(team_id: string, handle: string, session: string): boolean {
+    for (const sub of this.subs.get(team_id)?.get(handle) ?? []) {
+      if (sub.session === session) return true
+    }
+    return false
   }
 
   onlineHandles(team_id: string): string[] {

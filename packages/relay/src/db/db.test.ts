@@ -6,7 +6,12 @@ describe('openDatabase', () => {
   beforeEach(() => { db = openDatabase(':memory:') })
 
   it('applies schema and reports latest version', () => {
-    expect(getSchemaVersion(db)).toBe(2)
+    expect(getSchemaVersion(db)).toBe(3)
+  })
+
+  it('message table has session addressing columns (v3)', () => {
+    const cols = (db.pragma('table_info(message)') as Array<{ name: string }>).map(c => c.name)
+    expect(cols).toEqual(expect.arrayContaining(['from_session', 'from_name', 'to_session']))
   })
 
   it('human table has last_active_at column (v2)', () => {

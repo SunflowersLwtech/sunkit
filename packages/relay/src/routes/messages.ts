@@ -26,9 +26,27 @@ export function messagesRoute(deps: Deps) {
       return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400)
     }
 
+    // Sender session: optional, but if claimed it must belong to this token.
+    let sender: { session: string; name: string } | null = null
+    const claimed = c.req.header('x-mesh-session')
+    if (claimed !== undefined) {
+      const own = deps.sessions!.owned(claimed, tokenId)
+      if (!own) return c.json({ error: 'unknown_sender_session' }, 403)
+      sender = { session: own.session_id, name: own.name }
+    }
+
+    // Session-addressed messages need a live (or reconnecting) target owned by `to`.
+    const toSession = parsed.data.to_session
+    if (toSession !== undefined) {
+      const target = deps.sessions!.get(toSession)
+      if (!target || target.team_id !== c.get('team_id') || target.handle !== parsed.data.to) {
+        return c.json({ error: 'no_live_session' }, 404)
+      }
+    }
+
     let envelope: Envelope
     try {
-      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data)
+      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data, sender)
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       return c.json({ error: 'invalid_message', message }, 400)
@@ -37,7 +55,9 @@ export function messagesRoute(deps: Deps) {
     deps.fanout.deliver(envelope)
     const isDelivered = envelope.to === TEAM_BROADCAST_HANDLE
       ? deps.fanout.onlineHandles(envelope.team).some(h => h !== envelope.from)
-      : deps.fanout.isOnline(envelope.team, envelope.to)
+      : envelope.to_session
+        ? deps.fanout.isSessionOnline(envelope.team, envelope.to, envelope.to_session)
+        : deps.fanout.isOnline(envelope.team, envelope.to)
     if (isDelivered) {
       deps.store.markDelivered(envelope.id)
       envelope = { ...envelope, delivered_at: deps.now().toISOString() }
