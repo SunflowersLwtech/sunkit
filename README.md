@@ -30,7 +30,7 @@ What brings the session back, with its full history:
 
 `claude_rescue.py` detects sessions in this state and does those four steps for you in the pane where the session runs.
 
-Upstream issue: (link)
+Upstream issue: [anthropics/claude-code#101687](https://github.com/anthropics/claude-code/issues/101687)
 
 ### Install
 
