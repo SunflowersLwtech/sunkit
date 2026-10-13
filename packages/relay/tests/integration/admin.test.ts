@@ -48,6 +48,29 @@ describe('admin routes', () => {
     expect(j.pair_code).toMatch(/^MESH-/)
   })
 
+  it('add-device issues another pair code for an existing user without revoking their tokens', async () => {
+    await admin('/users', 'POST', { handle: 'bob', display_name: 'Bob' })
+    db.prepare("INSERT INTO token(id,human_id,token_hash,label,tier,created_at) VALUES (?,?,?,?,?,?)")
+      .run('tk_bob_mac', (db.prepare("SELECT id FROM human WHERE handle='bob'").get() as { id: string }).id,
+        hashToken(generateRawToken()), 'mac', 'human', new Date().toISOString())
+    const res = await admin('/users/bob/devices', 'POST', {})
+    expect(res.status).toBe(201)
+    const body = await res.json() as { pair_code: string; handle: string }
+    expect(body.handle).toBe('bob')
+    expect(body.pair_code).toMatch(/^MESH-/)
+    const live = db.prepare("SELECT COUNT(*) n FROM token WHERE id='tk_bob_mac' AND revoked_at IS NULL").get() as { n: number }
+    expect(live.n).toBe(1)
+    const codes = db.prepare("SELECT COUNT(*) n FROM pair_code p JOIN human h ON h.id=p.human_id WHERE h.handle='bob' AND p.consumed_at IS NULL").get() as { n: number }
+    expect(codes.n).toBe(2)
+  })
+
+  it('add-device 404s for unknown or disabled users', async () => {
+    expect((await admin('/users/ghost/devices', 'POST', {})).status).toBe(404)
+    await admin('/users', 'POST', { handle: 'carol', display_name: 'Carol' })
+    await admin('/users/carol', 'DELETE')
+    expect((await admin('/users/carol/devices', 'POST', {})).status).toBe(404)
+  })
+
   it('rejects duplicate handle', async () => {
     await admin('/users', 'POST', { handle: 'bob', display_name: 'Bob' })
     const res2 = await admin('/users', 'POST', { handle: 'bob', display_name: 'Bob2' })

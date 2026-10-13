@@ -84,6 +84,18 @@ export async function runAdmin(args: string[]): Promise<void> {
     await runAdminAddUser({ relayUrl, adminToken, handle, displayName, tier, force })
     return
   }
+  if (sub === 'add-device') {
+    const handle = argValue(rest, '--handle')
+    if (!handle) throw new Error('missing --handle <name>')
+    const res = await fetch(new URL(`/v1/admin/users/${encodeURIComponent(handle)}/devices`, relayUrl),
+      { method: 'POST', headers: { authorization: `Bearer ${adminToken}` } })
+    const text = await res.text()
+    if (res.status !== 201) throw new Error(`add-device failed: ${res.status} ${text}`)
+    const r = JSON.parse(text) as { pair_code: string; expires_at: string }
+    process.stdout.write(`OK Pair code for another "${handle}" device: ${r.pair_code} (expires ${r.expires_at})\n`)
+    process.stdout.write(`  On that device: mesh pair --relay ${relayUrl} ${r.pair_code} --label <device>\n`)
+    return
+  }
   if (sub === 'disable-user') {
     const h = rest[0]
     if (!h) throw new Error('usage: mesh admin disable-user <handle>')
@@ -136,5 +148,5 @@ export async function runAdmin(args: string[]): Promise<void> {
     process.stdout.write(await res.text() + '\n')
     return
   }
-  throw new Error('commands: bootstrap, add-user, disable-user, delete-user, purge-inactive, revoke-token, audit')
+  throw new Error('commands: bootstrap, add-user, add-device, disable-user, delete-user, purge-inactive, revoke-token, audit')
 }

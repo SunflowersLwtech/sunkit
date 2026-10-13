@@ -81,6 +81,28 @@ export function adminRoute(deps: Deps) {
     }, existing ? 200 : 201)
   })
 
+  // Pair one more device to an existing user. Unlike POST /users with force,
+  // this never revokes the user's existing tokens.
+  app.post('/users/:handle/devices', c => {
+    const team = c.get('team_id')
+    const handle = c.req.param('handle')
+    const row = deps.db.prepare(
+      "SELECT id FROM human WHERE team_id=? AND handle=? AND disabled_at IS NULL"
+    ).get(team, handle) as { id: string } | undefined
+    if (!row) return c.json({ error: 'unknown_user' }, 404)
+    const code = generatePairCode()
+    const now = deps.now().toISOString()
+    const expires = new Date(deps.now().getTime() + PAIR_CODE_TTL_MS).toISOString()
+    // Device tokens are always human-tier; admin access stays with the admin token.
+    deps.db.prepare(
+      "INSERT INTO pair_code(code_hash,human_id,tier,expires_at,created_at) VALUES (?,?,?,?,?)"
+    ).run(hashToken(code), row.id, 'human', expires, now)
+    deps.db.prepare(
+      "INSERT INTO audit_log(team_id,at,actor_human_id,event,detail_json) VALUES (?,?,?,?,?)"
+    ).run(team, now, c.get('human').id, 'user.add_device', JSON.stringify({ handle }))
+    return c.json({ handle, pair_code: code, expires_at: expires }, 201)
+  })
+
   app.delete('/users/:handle', c => {
     const team = c.get('team_id')
     const handle = c.req.param('handle')
