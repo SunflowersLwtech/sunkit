@@ -22,8 +22,9 @@ describe('session identity', () => {
   })
 
   it('uses the parent Claude Code session name and status', () => {
-    put(4242, { pid: 4242, cwd: '/w/repo', name: 'repo-1c', status: 'busy' })
-    expect(probeClaudeSession({ sessionsDir: dir, ppid: 4242, cwd: '/w/repo' })).toEqual({ name: 'repo-1c', status: 'busy' })
+    put(4242, { pid: 4242, cwd: '/w/repo', name: 'repo-1c', status: 'busy', kind: 'interactive' })
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 4242, cwd: '/w/repo' }))
+      .toEqual({ name: 'repo-1c', status: 'busy', kind: 'interactive' })
   })
 
   it('falls back to the newest live session in the same cwd when the parent is a wrapper', () => {

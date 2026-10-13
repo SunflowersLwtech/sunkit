@@ -8,6 +8,8 @@ export type SessionStatus = 'busy' | 'idle' | 'unknown'
 export interface SessionSnapshot {
   name: string
   status: SessionStatus
+  /** Claude Code's own session kind ("interactive", …) when the registry has it. */
+  kind?: string
 }
 
 /** One id per peer-agent process, i.e. per Claude Code session. */
@@ -26,6 +28,7 @@ interface ClaudeSessionFile {
   cwd?: string
   name?: string
   status?: string
+  kind?: string
   startedAt?: number
 }
 
@@ -77,5 +80,7 @@ export function probeClaudeSession(opts: IdentityProbeOpts = {}): SessionSnapsho
   if (!file) return fallback
 
   const status: SessionStatus = file.status === 'busy' || file.status === 'idle' ? file.status : 'unknown'
-  return { name: file.name ? sanitizeName(file.name) : fallback.name, status }
+  const snap: SessionSnapshot = { name: file.name ? sanitizeName(file.name) : fallback.name, status }
+  if (typeof file.kind === 'string') snap.kind = file.kind
+  return snap
 }

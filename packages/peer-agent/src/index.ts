@@ -10,6 +10,7 @@ import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, type SessionSnapshot } from './session-identity.ts'
+import { decideJoin, parentCommandLine } from './join-policy.ts'
 import { pathToFileURL } from 'node:url'
 import { logJson } from './logger.ts'
 
@@ -24,10 +25,16 @@ async function main(): Promise<void> {
   // would only add a path for a peer to answer prompts on this machine.
   const { server } = createMcpServer({ permissionRelay: false })
 
-  const sessionId = mintSessionId()
   const cwd = process.cwd()
   let identity: SessionSnapshot = probeClaudeSession({ cwd })
-  const client = new RelayClient({ relayUrl: cfg.relay_url, token, sessionId })
+  // Only sessions that will actually receive pushes register as reachable.
+  const decision = decideJoin({
+    env: process.env.MESH_JOIN,
+    commandLine: parentCommandLine(),
+    sessionKind: identity.kind,
+  })
+  const sessionId = decision.join ? mintSessionId() : ''
+  const client = new RelayClient({ relayUrl: cfg.relay_url, token, ...(decision.join ? { sessionId } : {}) })
 
   const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
   const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter })
@@ -45,7 +52,12 @@ async function main(): Promise<void> {
 
   server.onerror = err => { logJson('error', 'peer.mcp.error', describeError(err)) }
 
-  logJson('info', 'peer.startup', { relay_url: cfg.relay_url, session: sessionId, name: identity.name })
+  logJson('info', 'peer.startup', {
+    relay_url: cfg.relay_url, session: sessionId, name: identity.name, join: decision.join, reason: decision.reason,
+  })
+  await server.connect(new StdioServerTransport())
+  // Send-only: tools work, but this session is not listed and receives nothing.
+  if (!decision.join) return
 
   // Seed the roster. A relay outage at startup must not break the Claude Code
   // session: start empty and let the refresh loop recover.
@@ -88,7 +100,6 @@ async function main(): Promise<void> {
     onEnvelope: e => dispatcher.handle(e),
     onAuthError: () => { logJson('error', 'peer.auth_failed'); process.exit(2) },
   })
-  await server.connect(new StdioServerTransport())
   stream.start().catch(err => {
     logJson('error', 'peer.stream.fatal', {
       err: String(err instanceof Error ? err.message : err),
