@@ -1,23 +1,31 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
-export function ensureMcpRegistered(): void {
-  const path = join(homedir(), '.claude.json')
-  let json: Record<string, unknown> = {}
-  if (existsSync(path)) {
-    try { json = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> }
-    catch { json = {} }
-  }
-  const mcpServers = (json.mcpServers as Record<string, unknown> | undefined) ?? {}
+export const MESH_SERVER_NAME = 'mesh'
+
+/**
+ * Writes a standalone MCP config (~/.claude-mesh/mcp.json) for use with
+ * `claude --mcp-config <file> --dangerously-load-development-channels server:mesh`.
+ * Deliberately never touches ~/.claude.json: a global entry would load the
+ * mesh into every Claude Code session, and Claude Code rewrites that file
+ * itself while running.
+ */
+export function writeMeshMcpConfig(home: string = homedir()): string {
   const here = dirname(fileURLToPath(import.meta.url))
-  const entry = {
-    command: process.execPath,
-    args: [resolve(join(here, 'index.js'))]
+  const config = {
+    mcpServers: {
+      [MESH_SERVER_NAME]: {
+        type: 'stdio',
+        command: process.execPath,
+        args: [resolve(join(here, 'index.js'))],
+      },
+    },
   }
-  if (JSON.stringify(mcpServers['claude-mesh-peers']) === JSON.stringify(entry)) return
-  mcpServers['claude-mesh-peers'] = entry
-  json.mcpServers = mcpServers
-  writeFileSync(path, JSON.stringify(json, null, 2))
+  const dir = join(home, '.claude-mesh')
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, 'mcp.json')
+  writeFileSync(path, JSON.stringify(config, null, 2) + '\n')
+  return path
 }

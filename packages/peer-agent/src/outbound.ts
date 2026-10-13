@@ -1,9 +1,12 @@
 import { ulid } from 'ulid'
 import type { Envelope, OutboundMessage } from '@claude-mesh/shared'
+import type { SessionRow } from './resolve-target.ts'
 
 export interface RelayClientOpts {
   relayUrl: string
   token: string
+  /** This Claude Code session's id; sent as x-mesh-session so the relay can stamp from_session. */
+  sessionId?: string
 }
 
 interface Injected { fetch?: typeof globalThis.fetch }
@@ -31,6 +34,7 @@ export class RelayClient {
         authorization: `Bearer ${this.opts.token}`,
         'content-type': 'application/json',
         'idempotency-key': ulid().toLowerCase(),
+        ...(this.opts.sessionId ? { 'x-mesh-session': this.opts.sessionId } : {}),
       },
       body: JSON.stringify(msg),
     })
@@ -45,6 +49,25 @@ export class RelayClient {
     })
     if (res.status !== 200) throw new Error(`listPeers failed: ${res.status}`)
     return await res.json() as PeerSummary[]
+  }
+
+  async listSessions(): Promise<SessionRow[]> {
+    const res = await this.fetchImpl(new URL('/v1/sessions', this.opts.relayUrl), {
+      headers: { authorization: `Bearer ${this.opts.token}` },
+    })
+    if (res.status !== 200) throw new Error(`listSessions failed: ${res.status}`)
+    return await res.json() as SessionRow[]
+  }
+
+  async updateSelf(patch: { name?: string; status?: string; cwd?: string }): Promise<void> {
+    if (!this.opts.sessionId) return
+    const res = await this.fetchImpl(new URL('/v1/sessions/self', this.opts.relayUrl), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.opts.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ session: this.opts.sessionId, ...patch }),
+    })
+    // 404 means the stream hasn't (re)attached yet; the next stream open carries fresh values.
+    if (res.status !== 200 && res.status !== 404) throw new Error(`updateSelf failed: ${res.status}`)
   }
 
   async setPresence(body: { summary: string; cwd?: string; branch?: string; repo?: string }): Promise<void> {

@@ -27,6 +27,8 @@ export interface StreamClientOpts {
   relayUrl: string
   token: string
   sinceCursor: () => string | undefined
+  /** Session binding sent on every (re)connect, so the relay always has current name/status. */
+  sessionParams?: () => Record<string, string>
   onEnvelope: (e: Envelope) => void
   onAuthError: () => void
   reconnectBaseMs?: number
@@ -47,6 +49,7 @@ export class StreamClient {
         const since = this.opts.sinceCursor()
         const url = new URL('/v1/stream', this.opts.relayUrl)
         if (since) url.searchParams.set('since', since)
+        for (const [k, v] of Object.entries(this.opts.sessionParams?.() ?? {})) url.searchParams.set(k, v)
         const res = await fetch(url, {
           headers: { authorization: `Bearer ${this.opts.token}`, accept: 'text/event-stream' },
           signal: this.aborter.signal,

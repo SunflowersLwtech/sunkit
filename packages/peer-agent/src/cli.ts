@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadEnvFiles } from '@claude-mesh/shared'
 import { runPair } from './cli/pair.ts'
-import { ensureMcpRegistered } from './mcp-registration.ts'
+import { writeMeshMcpConfig, MESH_SERVER_NAME } from './mcp-registration.ts'
 import { resolveRelayUrl } from './cli/relay-url.ts'
 
 loadEnvFiles()
@@ -30,8 +30,13 @@ async function main(): Promise<void> {
       process.exit(2)
     }
     await runPair({ relayUrl, pairCode, deviceLabel: label })
-    ensureMcpRegistered()
-    console.log('OK MCP server entry added to ~/.claude.json under "claude-mesh-peers"')
+    const mcpPath = writeMeshMcpConfig()
+    console.log(`OK MCP config written to ${mcpPath} (not added to ~/.claude.json)`)
+    console.log(`   start a mesh session with: claude --mcp-config ${mcpPath} --dangerously-load-development-channels server:${MESH_SERVER_NAME}`)
+    return
+  }
+  if (cmd === 'mcp-config') {
+    console.log(writeMeshMcpConfig())
     return
   }
   if (cmd === 'admin') {

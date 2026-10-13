@@ -8,6 +8,7 @@ const envelope = (overrides: Partial<Envelope> = {}): Envelope => ({
   from: 'alice', to: 'bob', in_reply_to: null, thread_root: null,
   kind: 'chat', content: 'hi', meta: {},
   sent_at: '2026-04-17T00:00:00.000Z', delivered_at: null,
+  from_session: null, from_name: null, to_session: null,
   ...overrides
 })
 
@@ -97,5 +98,37 @@ describe('InboundDispatcher', () => {
       setCursor: () => { /* no-op */ },
     })
     expect(() => d4.handle(envelope())).not.toThrow()
+  })
+
+  describe('session mode (chatOnly + sessionId)', () => {
+    const ME = 's_01hrk7y0000000000000mine01'
+    let out: { method: string; params: Record<string, unknown> }[]
+    let cursor: string | undefined
+    let sd: InboundDispatcher
+    beforeEach(() => {
+      out = []; cursor = undefined
+      sd = new InboundDispatcher({
+        gate: new SenderGate(['alice']), sessionId: ME, chatOnly: true,
+        emit: n => { out.push(n) }, setCursor: id => { cursor = id },
+      })
+    })
+
+    it('surfaces chat addressed to this session or to the account', () => {
+      sd.handle(envelope({ to_session: ME }))
+      sd.handle(envelope({ id: 'msg_01HRK7Y0000000000000000001' }))
+      expect(out).toHaveLength(2)
+    })
+
+    it('drops chat addressed to a sibling session but still advances the cursor', () => {
+      sd.handle(envelope({ to_session: 's_01hrk7y0000000000000other1' }))
+      expect(out).toHaveLength(0)
+      expect(cursor).toBe('msg_01HRK7Y0000000000000000000')
+    })
+
+    it('never surfaces presence or permission traffic', () => {
+      for (const kind of ['presence_update', 'permission_request'] as const) sd.handle(envelope({ kind }))
+      sd.handle(envelope({ kind: 'permission_verdict', in_reply_to: 'msg_01HRK7Y0000000000000000009' }))
+      expect(out).toHaveLength(0)
+    })
   })
 })

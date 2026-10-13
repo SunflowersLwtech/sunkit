@@ -1,147 +1,71 @@
 import { z } from 'zod'
-import { HANDLE_REGEX, TEAM_BROADCAST_HANDLE, type OutboundMessage, type MessageId } from '@claude-mesh/shared'
+import type { OutboundMessage, MessageId } from '@claude-mesh/shared'
 import type { RelayClient } from './outbound.ts'
-import type { PermissionTracker } from './permission.ts'
 import type { ReplyLimiter } from './reply-limiter.ts'
-import { detectWorkingContext } from './roots.ts'
+import { resolveTarget, formatListing, formatAddress } from './resolve-target.ts'
 
-const AddressSchema = z.union([
-  z.string().regex(HANDLE_REGEX),
-  z.literal(TEAM_BROADCAST_HANDLE),
-])
-
-const SendInput = z.object({
-  to: AddressSchema,
-  content: z.string(),
-  in_reply_to: z.string().optional(),
-  meta: z.record(z.string()).optional(),
-})
 const ListInput = z.object({}).strict()
-const SummaryInput = z.object({ summary: z.string().max(200) })
-const RespondInput = z.object({
-  request_id: z.string().regex(/^[a-km-z]{5}$/i),
-  verdict: z.enum(['allow', 'deny']),
-  reason: z.string().optional(),
-})
+const SendMessageInput = z.object({
+  to: z.string().min(1),
+  message: z.string().min(1),
+  in_reply_to: z.string().optional(),
+}).strict()
 
 export const TOOL_DESCRIPTORS = [
   {
-    name: 'send_to_peer',
-    description: 'Send a message to a teammate (by handle) or the whole team (@team).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        to: { type: 'string', description: 'handle like "alice" or the literal "@team"' },
-        content: { type: 'string' },
-        in_reply_to: { type: 'string', description: 'msg_id being replied to (optional)' },
-        meta: { type: 'object', additionalProperties: { type: 'string' } },
-      },
-      required: ['to', 'content'],
-    },
-  },
-  {
-    name: 'list_peers',
-    description: 'List team members and their current summaries.',
+    name: 'list_agents',
+    description: 'List the live Claude Code sessions on the mesh — including sessions signed in to other accounts on other machines — that send_message can reach. Each row is "name [ref] — account@device · busy|idle · cwd".',
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'set_summary',
-    description: 'Publish a short summary of what this Claude is working on.',
+    name: 'send_message',
+    description: 'Send a message to another Claude Code session on the mesh. `to` is a session name from list_agents, or "name [ref]" when a name is shared; to reply, copy the incoming message\'s from attribute. The recipient sees the first line as a preview, so make it a clear, self-contained sentence.',
     inputSchema: {
       type: 'object',
-      properties: { summary: { type: 'string' } },
-      required: ['summary'],
+      properties: {
+        to: { type: 'string', description: 'session name, or "name [ref]"' },
+        message: { type: 'string' },
+        in_reply_to: { type: 'string', description: 'msg_id being answered (optional)' },
+      },
+      required: ['to', 'message'],
     },
   },
 ] as const
 
-export const TOOL_DESCRIPTOR_RESPOND = {
-  name: 'respond_to_permission',
-  description: 'Allow or deny a pending permission_request from a peer. Only valid if a request with this request_id is live.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      request_id: { type: 'string', description: '5-letter ID from the incoming request' },
-      verdict: { type: 'string', enum: ['allow', 'deny'] },
-      reason: { type: 'string', description: 'optional' },
-    },
-    required: ['request_id', 'verdict'],
-  },
-} as const
-
-export interface PresenceOpts {
-  auto_publish_cwd: boolean
-  auto_publish_branch: boolean
-  auto_publish_repo: boolean
+export interface ToolOpts {
+  /** This session's id; excluded from send targets and marked in listings. */
+  selfSessionId: string
+  replyLimiter?: ReplyLimiter | undefined
 }
 
-export function registerTools(
-  client: RelayClient,
-  presence: PresenceOpts,
-  permissionTracker?: PermissionTracker,
-  replyLimiter?: ReplyLimiter,
-) {
+export function registerTools(client: RelayClient, opts: ToolOpts) {
+  const { selfSessionId, replyLimiter } = opts
   async function callTool(name: string, args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
-    if (name === 'send_to_peer') {
-      const input = SendInput.parse(args)
-      if (
-        replyLimiter
-        && typeof input.to === 'string'
-        && input.to !== TEAM_BROADCAST_HANDLE
-        && !replyLimiter.canReplyTo(input.to)
-      ) {
-        throw new Error(
-          `reply-storm limiter: too many replies to ${input.to} in the current window; ask the user before continuing`,
-        )
+    if (name === 'list_agents') {
+      ListInput.parse(args)
+      const rows = await client.listSessions()
+      return { content: [{ type: 'text', text: formatListing(rows, selfSessionId) }] }
+    }
+    if (name === 'send_message') {
+      const input = SendMessageInput.parse(args)
+      const r = resolveTarget(input.to, await client.listSessions(), selfSessionId)
+      if (!r.ok) throw new Error(r.error)
+      const address = formatAddress(r.target)
+      if (replyLimiter && !replyLimiter.canReplyTo(address)) {
+        throw new Error(`loop guard: too many messages to ${address} in the last few seconds; ask your user before continuing`)
       }
       const payload: OutboundMessage = {
-        to: input.to,
+        to: r.target.account,
+        to_session: r.target.session_id,
         kind: 'chat',
-        content: input.content,
-        meta: input.meta ?? {},
+        content: input.message,
+        meta: {},
       }
       if (input.in_reply_to !== undefined) payload.in_reply_to = input.in_reply_to as MessageId
       const env = await client.send(payload)
-      if (replyLimiter && typeof input.to === 'string' && input.to !== TEAM_BROADCAST_HANDLE) {
-        replyLimiter.recordOutbound(input.to)
-      }
-      return { content: [{ type: 'text', text: `sent ${env.id}` }] }
-    }
-    if (name === 'list_peers') {
-      ListInput.parse(args)
-      const list = await client.listPeers()
-      return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] }
-    }
-    if (name === 'set_summary') {
-      const input = SummaryInput.parse(args)
-      const ctx = detectWorkingContext()
-      const body: { summary: string; cwd?: string; branch?: string; repo?: string } = { summary: input.summary }
-      if (presence.auto_publish_cwd && ctx.cwd) body.cwd = ctx.cwd
-      if (presence.auto_publish_branch && ctx.branch) body.branch = ctx.branch
-      if (presence.auto_publish_repo && ctx.repo) body.repo = ctx.repo
-      await client.setPresence(body)
-      return { content: [{ type: 'text', text: 'presence updated' }] }
-    }
-    if (name === 'respond_to_permission') {
-      if (!permissionTracker) throw new Error('permission relay disabled')
-      const input = RespondInput.parse(args)
-      const msg_id = permissionTracker.msgIdFor(input.request_id)
-      if (!msg_id) throw new Error(`unknown or expired request_id: ${input.request_id}`)
-      const sender = permissionTracker.senderFor(input.request_id)
-      if (!sender) throw new Error(`no sender for ${input.request_id}`)
-      const meta: Record<string, string> = {
-        request_id: input.request_id.toLowerCase(),
-        behavior: input.verdict,
-      }
-      if (input.reason !== undefined) meta.reason = input.reason
-      await client.send({
-        to: sender,
-        kind: 'permission_verdict',
-        in_reply_to: msg_id as MessageId,
-        content: '',
-        meta,
-      })
-      return { content: [{ type: 'text', text: `verdict sent: ${input.verdict}` }] }
+      replyLimiter?.recordOutbound(address)
+      const state = env.delivered_at ? 'delivered' : 'queued (session reconnecting)'
+      return { content: [{ type: 'text', text: `${state} to ${address} (${env.id})` }] }
     }
     throw new Error(`unknown tool: ${name}`)
   }

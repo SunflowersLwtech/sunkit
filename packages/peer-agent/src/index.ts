@@ -1,50 +1,40 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ListToolsRequestSchema, CallToolRequestSchema, NotificationSchema } from '@modelcontextprotocol/sdk/types.js'
-import { z as z4 } from 'zod/v4'
-import { PERMISSION_REQUEST_TTL_MS } from '@claude-mesh/shared'
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer } from './mcp-server.ts'
 import { loadConfig, loadToken, assertTokenNotInRepo } from './config.ts'
 import { RelayClient } from './outbound.ts'
-import { registerTools, TOOL_DESCRIPTORS, TOOL_DESCRIPTOR_RESPOND } from './tools.ts'
+import { registerTools, TOOL_DESCRIPTORS } from './tools.ts'
 import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
-import { PermissionTracker } from './permission.ts'
-import { ApprovalRouter, type RoutingPolicy } from './approval-routing.ts'
-import { relayPermissionRequest, PERMISSION_REQUEST_NOTIFICATION_METHOD } from './permission-outbound.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
+import { mintSessionId, probeClaudeSession, type SessionSnapshot } from './session-identity.ts'
 import { pathToFileURL } from 'node:url'
 import { logJson } from './logger.ts'
+
+const IDENTITY_POLL_MS = 3_000
 
 async function main(): Promise<void> {
   const cfg = loadConfig()
   assertTokenNotInRepo(cfg.token_path)
   const token = loadToken(cfg.token_path)
 
-  const permissionRelayEnabled = cfg.permission_relay.enabled
-  const { server } = createMcpServer({ permissionRelay: permissionRelayEnabled })
-  const client = new RelayClient({ relayUrl: cfg.relay_url, token })
-  const permissionTracker = permissionRelayEnabled
-    ? new PermissionTracker({ ttlMs: PERMISSION_REQUEST_TTL_MS })
-    : undefined
-  const approvalRouter = new ApprovalRouter({ routing: cfg.permission_relay.routing as RoutingPolicy })
-  const originalSend = client.send.bind(client)
-  client.send = async msg => {
-    if (msg.kind === 'chat' && typeof msg.to === 'string' && msg.to !== '@team') {
-      approvalRouter.recordDm(msg.to)
-    }
-    return originalSend(msg)
-  }
-  const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
-  const { callTool } = registerTools(client, cfg.presence, permissionTracker, replyLimiter)
+  // Permission relay is deliberately never offered: under bypass-permissions it
+  // would only add a path for a peer to answer prompts on this machine.
+  const { server } = createMcpServer({ permissionRelay: false })
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      ...TOOL_DESCRIPTORS,
-      ...(permissionRelayEnabled ? [TOOL_DESCRIPTOR_RESPOND] : []),
-    ],
-  }))
+  const sessionId = mintSessionId()
+  const cwd = process.cwd()
+  let identity: SessionSnapshot = probeClaudeSession({ cwd })
+  const client = new RelayClient({ relayUrl: cfg.relay_url, token, sessionId })
+
+  const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter })
+
+  // Static tool list: never changes for the life of the process, so it never
+  // invalidates the session's prompt cache.
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOL_DESCRIPTORS] }))
   server.setRequestHandler(CallToolRequestSchema, async req => {
     try { return await callTool(req.params.name, req.params.arguments ?? {}) }
     catch (err) {
@@ -53,57 +43,48 @@ async function main(): Promise<void> {
     }
   })
 
-  if (permissionRelayEnabled) {
-    // Spec §5 step (2): Claude Code notifies us when its local approval dialog
-    // opens; we fan the request out per approval_routing. Never throws — the
-    // local dialog must survive relay outages.
-    const PermissionRequestNotification = NotificationSchema.extend({
-      method: z4.literal(PERMISSION_REQUEST_NOTIFICATION_METHOD),
-    })
-    server.setNotificationHandler(PermissionRequestNotification, async n => {
-      await relayPermissionRequest(n.params, {
-        router: approvalRouter,
-        send: m => client.send(m),
-        selfHandle: cfg.self_handle ?? '',
-        ttlMs: PERMISSION_REQUEST_TTL_MS,
-      })
-    })
-  }
-
   server.onerror = err => { logJson('error', 'peer.mcp.error', describeError(err)) }
 
-  logJson('info', 'peer.startup', { relay_url: cfg.relay_url })
+  logJson('info', 'peer.startup', { relay_url: cfg.relay_url, session: sessionId, name: identity.name })
 
-  // Seed the roster. Failing here used to crash the peer-agent hard, breaking
-  // every Claude Code session if the relay happened to be down. Now: start
-  // with an empty roster, let the refresh loop recover once the relay is back.
+  // Seed the roster. A relay outage at startup must not break the Claude Code
+  // session: start empty and let the refresh loop recover.
   const gate = new SenderGate([])
   const refreshRoster = async () => {
     try {
       const peers = await client.listPeers()
       gate.setRoster(peers.map(p => p.handle))
-      logJson('info', 'peer.roster.refreshed', { count: peers.length })
     } catch (err) {
       logJson('warn', 'peer.roster.refresh_error', describeError(err))
     }
   }
   void refreshRoster()
-  setInterval(refreshRoster, 60_000)
+  setInterval(refreshRoster, 60_000).unref()
+
+  // Follow Claude Code's own name/status for this session (read-only).
+  setInterval(() => {
+    const next = probeClaudeSession({ cwd })
+    if (next.name === identity.name && next.status === identity.status) return
+    identity = next
+    client.updateSelf({ name: next.name, status: next.status })
+      .catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
+  }, IDENTITY_POLL_MS).unref()
 
   let cursor: string | undefined
   const dispatcher = new InboundDispatcher({
     gate,
+    sessionId,
+    chatOnly: true,
     emit: n => { void server.notification(n as never) },
     setCursor: id => { cursor = id },
-    permissionTracker,
     replyLimiter,
-    recordDm: h => approvalRouter.recordDm(h),
   })
 
   const stream = new StreamClient({
     relayUrl: cfg.relay_url,
     token,
     sinceCursor: () => cursor,
+    sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd }),
     onEnvelope: e => dispatcher.handle(e),
     onAuthError: () => { logJson('error', 'peer.auth_failed'); process.exit(2) },
   })
