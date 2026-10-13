@@ -15,7 +15,7 @@ It is built on Claude Code [channels](https://code.claude.com/docs/en/channels) 
 preview). Nothing about how Claude talks to Anthropic changes: no proxy, no API base URL, no
 shared credentials. Remote Control keeps working.
 
-> Fork of [pouriamrt/claude-mesh](https://github.com/pouriamrt/claude-mesh) (MIT). The relay,
+> Part of [claude-code-toolkit](../README.md). Fork of [pouriamrt/claude-mesh](https://github.com/pouriamrt/claude-mesh) (MIT). The relay,
 > wire format and pairing model come from upstream. This fork addresses individual **sessions**
 > instead of people, ships as a plugin, and fixes a sender-spoofing bug. See
 > [What changed from upstream](#what-changed-from-upstream).
@@ -56,7 +56,7 @@ send_message(to: "infra", message: "staging DB creds rotated; re-run migrations 
 ### 1. Run the relay (once)
 
 ```bash
-git clone https://github.com/SunflowersLwtech/claude-mesh && cd claude-mesh
+git clone https://github.com/SunflowersLwtech/claude-code-toolkit && cd claude-code-toolkit/mesh
 docker build -f docker/Dockerfile.relay -t claude-mesh/relay:local .
 
 mkdir -p mesh-data && sudo chown 65532:65532 mesh-data   # the image runs as nonroot
@@ -99,15 +99,15 @@ dialog.
 ### 3. Each machine
 
 ```bash
-git clone https://github.com/SunflowersLwtech/claude-mesh ~/claude-mesh
-claude plugin marketplace add ~/claude-mesh
+git clone https://github.com/SunflowersLwtech/claude-code-toolkit ~/claude-code-toolkit
+claude plugin marketplace add ~/claude-code-toolkit/mesh
 claude plugin install mesh@claude-mesh
 ```
 
 Pair it. The admin issues a code per person and per extra device:
 
 ```bash
-M=~/claude-mesh/plugins/mesh/server/mesh-cli.mjs
+M=~/claude-code-toolkit/mesh/plugins/mesh/server/mesh-cli.mjs
 R=http://<relay-tailnet-ip>:8443
 
 # on the admin machine, once
@@ -125,12 +125,12 @@ pass through unchanged:
 
 ```bash
 # zsh / bash
-echo 'source ~/claude-mesh/plugins/mesh/shell/claude-mesh.zsh' >> ~/.zshrc
+echo 'source ~/claude-code-toolkit/mesh/plugins/mesh/shell/claude-mesh.zsh' >> ~/.zshrc
 ```
 
 ```powershell
 # PowerShell (Windows)
-Add-Content $PROFILE '. "$HOME\claude-mesh\plugins\mesh\shell\claude-mesh.ps1"'
+Add-Content $PROFILE '. "$HOME\claude-code-toolkit\mesh\plugins\mesh\shell\claude-mesh.ps1"'
 ```
 
 **First launch after changing managed settings:** Claude Code checks its *cached* copy of the
@@ -197,6 +197,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 ## Development
 
 ```bash
+cd mesh
 pnpm install          # Node 22 recommended (better-sqlite3 prebuilds)
 pnpm -r build
 pnpm -r test:ci       # ~250 tests across shared / relay / peer-agent / e2e

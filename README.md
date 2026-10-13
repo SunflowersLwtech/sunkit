@@ -1,11 +1,16 @@
-# claude-session-rescue
+# claude-code-toolkit
 
-Small, dependency-free Python 3 tools for getting Claude sessions back when the app or CLI loses track of them.
+Tools for working with Claude Code sessions: get stuck or archived sessions back, and let sessions on different accounts and machines talk to each other.
+
+(Formerly `claude-session-rescue` / `cowork-archive-recovery`; old links redirect here.)
 
 | Tool | For | What it does |
 |------|-----|--------------|
 | [`claude_rescue.py`](#claude-code-stuck-session-rescue-claude_rescuepy) | Claude Code CLI (macOS / Linux) | Finds interactive sessions stuck on repeated `API Error: Connection refused` and restarts them in place with `--resume` |
 | [`claude_unarchive.py`](#claude-desktop-cowork-archived-session-recovery-claude_unarchivepy) | Claude Desktop (macOS / Windows) | Restores archived Cowork sessions that the UI can no longer show |
+| [`mesh/`](mesh/README.md) | Claude Code CLI (macOS / Linux / Windows) | `list_agents` / `send_message` between sessions on **different accounts and machines**, via a self-hosted relay and a Claude Code channel plugin |
+
+The two Python scripts are single files with no dependencies. `mesh/` is a separate Node/TypeScript project with its own [README](mesh/README.md).
 
 ## Claude Code Stuck Session Rescue (`claude_rescue.py`)
 
@@ -37,7 +42,7 @@ Upstream issue: [anthropics/claude-code#101687](https://github.com/anthropics/cl
 No dependencies, Python 3.8+:
 
 ```bash
-curl -O https://raw.githubusercontent.com/SunflowersLwtech/claude-session-rescue/main/claude_rescue.py
+curl -O https://raw.githubusercontent.com/SunflowersLwtech/claude-code-toolkit/main/claude_rescue.py
 python3 claude_rescue.py
 ```
 
@@ -132,7 +137,7 @@ Your data is still on disk -- just hidden. This tool finds and restores it.
 ### Quick Fix
 
 ```bash
-git clone https://github.com/SunflowersLwtech/claude-session-rescue.git
+git clone https://github.com/SunflowersLwtech/claude-code-toolkit.git
 cd claude-session-rescue
 
 # No dependencies needed -- pure Python 3
