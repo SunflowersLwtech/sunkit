@@ -2,7 +2,8 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer } from './mcp-server.ts'
-import { loadConfig, loadToken, assertTokenNotInRepo } from './config.ts'
+import { loadConfig, loadToken, assertTokenNotInRepo, defaultConfigPath } from './config.ts'
+import { existsSync } from 'node:fs'
 import { RelayClient } from './outbound.ts'
 import { registerTools, TOOL_DESCRIPTORS } from './tools.ts'
 import { SenderGate } from './gate.ts'
@@ -17,6 +18,15 @@ import { logJson } from './logger.ts'
 const IDENTITY_POLL_MS = 3_000
 
 async function main(): Promise<void> {
+  // Installed as a plugin on a machine that was never paired: stay a silent,
+  // tool-less server instead of failing (a failed server is noise in /mcp).
+  if (!existsSync(defaultConfigPath())) {
+    const { server } = createMcpServer({ permissionRelay: false })
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }))
+    logJson('info', 'peer.unpaired', { config: defaultConfigPath() })
+    await server.connect(new StdioServerTransport())
+    return
+  }
   const cfg = loadConfig()
   assertTokenNotInRepo(cfg.token_path)
   const token = loadToken(cfg.token_path)

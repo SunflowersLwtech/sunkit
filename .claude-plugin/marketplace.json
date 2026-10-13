@@ -1,0 +1,11 @@
+{
+  "name": "claude-mesh",
+  "owner": { "name": "claude-mesh" },
+  "plugins": [
+    {
+      "name": "mesh",
+      "source": "./plugins/mesh",
+      "description": "list_agents / send_message across Claude Code sessions on other accounts and machines, via a self-hosted relay"
+    }
+  ]
+}

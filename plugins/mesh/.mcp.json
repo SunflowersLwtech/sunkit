@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mesh": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-peer.mjs"]
+    }
+  }
+}

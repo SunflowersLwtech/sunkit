@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { meshDir } from './paths.ts'
@@ -19,7 +19,8 @@ export function writeMeshMcpConfig(dir: string = meshDir()): string {
       [MESH_SERVER_NAME]: {
         type: 'stdio',
         command: process.execPath,
-        args: [resolve(join(here, 'index.js'))],
+        // Bundled CLI sits next to mesh-peer.mjs; the workspace build next to index.js.
+        args: [resolve(join(here, existsSync(join(here, 'mesh-peer.mjs')) ? 'mesh-peer.mjs' : 'index.js'))],
         ...(process.env.MESH_HOME ? { env: { MESH_HOME: dir } } : {}),
       },
     },

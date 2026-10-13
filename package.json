@@ -34,10 +34,12 @@
     "test:ci": "pnpm -r test:ci",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "bundle": "node scripts/bundle.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
+    "esbuild": "0.27.7",
     "fast-check": "^3.22.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.2"
