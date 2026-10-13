@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { z } from 'zod'
 import { readTokenFile } from './cli/token-file.ts'
+import { meshDir } from './paths.ts'
 
 export const ConfigSchema = z.object({
   relay_url: z.string().url(),
@@ -20,12 +21,12 @@ export const ConfigSchema = z.object({
     auto_publish_branch: z.boolean().default(true),
     auto_publish_repo: z.boolean().default(true)
   }).default({ auto_publish_cwd: true, auto_publish_branch: true, auto_publish_repo: true }),
-  audit_log: z.string().default(() => join(homedir(), '.claude-mesh', 'audit'))
+  audit_log: z.string().default(() => join(meshDir(), 'audit'))
 })
 export type MeshConfig = z.infer<typeof ConfigSchema>
 
 export function defaultConfigPath(): string {
-  return join(homedir(), '.claude-mesh', 'config.json')
+  return join(meshDir(), 'config.json')
 }
 
 export function loadConfig(path: string = defaultConfigPath()): MeshConfig {

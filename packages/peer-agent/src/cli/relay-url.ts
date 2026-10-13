@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { meshDir } from '../paths.ts'
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag)
@@ -8,7 +9,7 @@ function argValue(args: string[], flag: string): string | undefined {
 }
 
 function readConfigRelayUrl(): string | undefined {
-  const p = join(homedir(), '.claude-mesh', 'config.json')
+  const p = join(meshDir(), 'config.json')
   if (!existsSync(p)) return undefined
   try {
     const cfg = JSON.parse(readFileSync(p, 'utf8')) as { relay_url?: unknown }

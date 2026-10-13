@@ -7,7 +7,7 @@ import { writeMeshMcpConfig } from './mcp-registration.ts'
 describe('writeMeshMcpConfig', () => {
   it('writes a standalone mcp.json and leaves ~/.claude.json alone', () => {
     const home = mkdtempSync(join(tmpdir(), 'mesh-home-'))
-    const path = writeMeshMcpConfig(home)
+    const path = writeMeshMcpConfig(join(home, '.claude-mesh'))
     expect(path).toBe(join(home, '.claude-mesh', 'mcp.json'))
     const cfg = JSON.parse(readFileSync(path, 'utf8'))
     expect(Object.keys(cfg.mcpServers)).toEqual(['mesh'])

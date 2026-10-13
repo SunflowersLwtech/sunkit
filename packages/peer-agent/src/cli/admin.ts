@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { resolveRelayUrl } from './relay-url.ts'
 import { readTokenFile } from './token-file.ts'
+import { meshDir } from '../paths.ts'
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag)
@@ -10,7 +11,7 @@ function argValue(args: string[], flag: string): string | undefined {
 }
 
 function readAdminToken(): string {
-  const p = join(homedir(), '.claude-mesh', 'admin-token')
+  const p = join(meshDir(), 'admin-token')
   if (!existsSync(p)) throw new Error(`admin token not found at ${p}. Run "mesh admin bootstrap --token-file <path>" first.`)
   return readTokenFile(p)
 }
@@ -63,7 +64,7 @@ export async function runAdmin(args: string[]): Promise<void> {
     const file = argValue(rest, '--token-file')
     if (!file || !existsSync(file)) throw new Error('need --token-file <path>')
     const raw = readTokenFile(file)
-    const dir = join(homedir(), '.claude-mesh')
+    const dir = meshDir()
     mkdirSync(dir, { recursive: true })
     const p = join(dir, 'admin-token')
     writeFileSync(p, raw, { mode: 0o600 })

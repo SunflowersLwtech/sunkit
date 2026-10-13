@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
-import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { meshDir } from './paths.ts'
 
 export const MESH_SERVER_NAME = 'mesh'
 
@@ -12,7 +12,7 @@ export const MESH_SERVER_NAME = 'mesh'
  * mesh into every Claude Code session, and Claude Code rewrites that file
  * itself while running.
  */
-export function writeMeshMcpConfig(home: string = homedir()): string {
+export function writeMeshMcpConfig(dir: string = meshDir()): string {
   const here = dirname(fileURLToPath(import.meta.url))
   const config = {
     mcpServers: {
@@ -20,10 +20,10 @@ export function writeMeshMcpConfig(home: string = homedir()): string {
         type: 'stdio',
         command: process.execPath,
         args: [resolve(join(here, 'index.js'))],
+        ...(process.env.MESH_HOME ? { env: { MESH_HOME: dir } } : {}),
       },
     },
   }
-  const dir = join(home, '.claude-mesh')
   mkdirSync(dir, { recursive: true })
   const path = join(dir, 'mcp.json')
   writeFileSync(path, JSON.stringify(config, null, 2) + '\n')

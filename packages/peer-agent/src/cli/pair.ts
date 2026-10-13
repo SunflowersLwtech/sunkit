@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { meshDir } from '../paths.ts'
 
 export interface PairOpts {
   relayUrl: string
@@ -17,7 +18,6 @@ interface PairResponse {
 
 export async function runPair(opts: PairOpts): Promise<void> {
   const fetchImpl = opts.fetch ?? globalThis.fetch
-  const home = opts.home ?? process.env.HOME ?? process.env.USERPROFILE ?? '.'
 
   const res = await fetchImpl(new URL('/v1/auth/pair', opts.relayUrl), {
     method: 'POST',
@@ -28,7 +28,7 @@ export async function runPair(opts: PairOpts): Promise<void> {
   if (res.status !== 200) throw new Error(`pair failed: ${res.status} ${text}`)
   const r = JSON.parse(text) as PairResponse
 
-  const dir = join(home, '.claude-mesh')
+  const dir = opts.home ? join(opts.home, '.claude-mesh') : meshDir()
   mkdirSync(dir, { recursive: true })
   const tokenPath = join(dir, 'token')
   writeFileSync(tokenPath, r.token, { mode: 0o600 })
