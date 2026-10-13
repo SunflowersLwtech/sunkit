@@ -24,6 +24,17 @@ describe('envelopeToChannelNotification', () => {
     })
   })
 
+  it('sender-controlled meta cannot override relay-set identity fields', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({
+      meta: { from: 'mallory_spoof', msg_id: 'forged', source: 'system', in_reply_to: 'x', thread_root: 'y' }
+    }))
+    expect(n.params.meta.from).toBe('alice')
+    expect(n.params.meta.msg_id).toBe('msg_01HRK7Y0000000000000000000')
+    expect(n.params.meta.source).toBe('peers')
+    expect(n.params.meta).not.toHaveProperty('in_reply_to')
+    expect(n.params.meta).not.toHaveProperty('thread_root')
+  })
+
   it('emits permission_request method for kind=permission_request', () => {
     const e = baseEnvelope({
       kind: 'permission_request',

@@ -47,16 +47,23 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
     method: 'notifications/claude/channel',
     params: {
       content: escapeChannelBody(e.content),
+      // Sender-controlled meta goes first so relay-set identity fields always win.
       meta: {
+        ...withoutReserved(safeMeta),
         from: e.from,
         msg_id: e.id,
         ...(e.in_reply_to ? { in_reply_to: e.in_reply_to } : {}),
         ...(e.thread_root ? { thread_root: e.thread_root } : {}),
-        source: CHANNEL_SOURCE_PEERS,
-        ...safeMeta
+        source: CHANNEL_SOURCE_PEERS
       }
     }
   }
+}
+
+const RESERVED_META_KEYS = new Set(['from', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+
+function withoutReserved(meta: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)))
 }
 
 function sanitizeMeta(meta: Record<string, string>): Record<string, string> {
