@@ -37110,15 +37110,33 @@ function probeClaudeSession(opts = {}) {
 
 // packages/peer-agent/src/join-policy.ts
 import { execFileSync } from "node:child_process";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+import { homedir as homedir3 } from "node:os";
 var FLAG = /(?:^|\s)--(?:channels|dangerously-load-development-channels)(?:=|\s+)((?:(?:plugin|server):\S+(?:\s+|$))+)/g;
-function channelOptIn(commandLine, serverName = "mesh") {
+function channelOptInVia(commandLine, serverName = "mesh") {
   for (const m of commandLine.matchAll(FLAG)) {
+    const dev = m[0].includes("--dangerously-load-development-channels");
     for (const entry of m[1].trim().split(/\s+/)) {
-      if (entry === `server:${serverName}`) return true;
-      if (entry.startsWith(`plugin:${serverName}@`)) return true;
+      if (entry === `server:${serverName}`) return dev ? { via: "dev" } : null;
+      if (entry.startsWith(`plugin:${serverName}@`)) {
+        return dev ? { via: "dev" } : { via: "channels", marketplace: entry.slice(`plugin:${serverName}@`.length) };
+      }
     }
   }
-  return false;
+  return null;
+}
+function readOrgChannelPolicy(path = join4(homedir3(), ".claude", "remote-settings.json")) {
+  try {
+    return JSON.parse(readFileSync4(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function orgAllows(opt, policy, plugin = "mesh") {
+  if (!policy || policy.channelsEnabled !== true) return false;
+  if (opt.via === "dev") return true;
+  return (policy.allowedChannelPlugins ?? []).some((e) => e.marketplace === opt.marketplace && e.plugin === plugin);
 }
 function parentCommandLine(ppid = process.ppid) {
   try {
@@ -37141,10 +37159,13 @@ function decideJoin(opts) {
   if (opts.sessionKind && opts.sessionKind !== "interactive") {
     return { join: false, reason: `session kind ${opts.sessionKind}` };
   }
-  if (!channelOptIn(opts.commandLine, opts.serverName)) {
-    return { join: false, reason: "parent not launched with the mesh channel" };
+  const opt = channelOptInVia(opts.commandLine, opts.serverName);
+  if (!opt) return { join: false, reason: "parent not launched with the mesh channel" };
+  const policy = opts.policy === void 0 ? readOrgChannelPolicy() : opts.policy;
+  if (!orgAllows(opt, policy)) {
+    return { join: false, reason: `org policy would reject the channel (${opt.via}); restart once the managed settings are cached` };
   }
-  return { join: true, reason: "channel opt-in on parent command line" };
+  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by org policy` };
 }
 
 // packages/peer-agent/src/index.ts
