@@ -27,12 +27,12 @@ export function messagesRoute(deps: Deps) {
     }
 
     // Sender session: optional, but if claimed it must belong to this token.
-    let sender: { session: string; name: string } | null = null
+    let sender: { session: string; name: string; login?: string } | null = null
     const claimed = c.req.header('x-mesh-session')
     if (claimed !== undefined) {
       const own = deps.sessions!.owned(claimed, tokenId)
       if (!own) return c.json({ error: 'unknown_sender_session' }, 403)
-      sender = { session: own.session_id, name: own.name }
+      sender = { session: own.session_id, name: own.name, ...(own.login ? { login: own.login } : {}) }
     }
 
     // Session-addressed messages need a live (or reconnecting) target owned by `to`.

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { ulid } from 'ulid'
@@ -10,6 +10,32 @@ export interface SessionSnapshot {
   status: SessionStatus
   /** Claude Code's own session kind ("interactive", …) when the registry has it. */
   kind?: string
+}
+
+let loginCache: { path: string; mtimeMs: number; login: string | undefined } | null = null
+
+/**
+ * The claude.ai account Claude Code is signed in with, read (never written)
+ * from its global config. Display only: the mesh identity is the paired token.
+ * Re-read only when the file changes, so `/login` mid-session shows up.
+ */
+export function readClaudeLogin(path = claudeConfigPath()): string | undefined {
+  try {
+    const mtimeMs = statSync(path).mtimeMs
+    if (loginCache && loginCache.path === path && loginCache.mtimeMs === mtimeMs) return loginCache.login
+    const j = JSON.parse(readFileSync(path, 'utf8')) as { oauthAccount?: { emailAddress?: unknown } }
+    const email = j.oauthAccount?.emailAddress
+    const login = typeof email === 'string' && /^[^\s<>"&]+@[^\s<>"&]+$/.test(email) && email.length <= 254 ? email : undefined
+    loginCache = { path, mtimeMs, login }
+    return login
+  } catch {
+    return undefined
+  }
+}
+
+function claudeConfigPath(): string {
+  const dir = process.env.CLAUDE_CONFIG_DIR
+  return dir ? join(dir, '.claude.json') : join(homedir(), '.claude.json')
 }
 
 /** One id per peer-agent process, i.e. per Claude Code session. */

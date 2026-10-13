@@ -34,6 +34,8 @@ export const SessionIdSchema = z.string().regex(SESSION_ID_REGEX)
 export function sessionRef(sessionId: string): string {
   return sessionId.slice(-6)
 }
+/** Self-reported Claude login of the sending machine (display only; never an identity). */
+export const LoginSchema = z.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/)
 export const SessionNameSchema = z.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/)
 
 export const EnvelopeSchema = z.object({
@@ -52,7 +54,8 @@ export const EnvelopeSchema = z.object({
   // Session addressing. All three are set by the relay, never trusted from clients.
   from_session: SessionIdSchema.nullable().default(null),
   from_name: SessionNameSchema.nullable().default(null),
-  to_session: SessionIdSchema.nullable().default(null)
+  to_session: SessionIdSchema.nullable().default(null),
+  from_login: LoginSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === 'permission_verdict' && e.in_reply_to === null) {
     ctx.addIssue({
@@ -90,6 +93,7 @@ export interface EnvelopeRow {
   from_session?: string | null
   from_name?: string | null
   to_session?: string | null
+  from_login?: string | null
 }
 
 export function envelopeToRow(e: Envelope): EnvelopeRow {
@@ -100,7 +104,8 @@ export function envelopeToRow(e: Envelope): EnvelopeRow {
     kind: e.kind, content: e.content,
     meta_json: JSON.stringify(e.meta),
     sent_at: e.sent_at, delivered_at: e.delivered_at,
-    from_session: e.from_session, from_name: e.from_name, to_session: e.to_session
+    from_session: e.from_session, from_name: e.from_name, to_session: e.to_session,
+    from_login: e.from_login
   }
 }
 
@@ -113,6 +118,7 @@ export function envelopeFromRow(row: EnvelopeRow): Envelope {
     meta: JSON.parse(row.meta_json) as Record<string, string>,
     sent_at: row.sent_at, delivered_at: row.delivered_at,
     from_session: row.from_session ?? null, from_name: row.from_name ?? null,
-    to_session: row.to_session ?? null
+    to_session: row.to_session ?? null,
+    from_login: row.from_login ?? null
   })
 }

@@ -53,6 +53,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
         // `from` is the reply address: the sender's session when it has one, else its handle.
         from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from,
         account: e.from,
+        ...(e.from_login ? { login: e.from_login } : {}),
         msg_id: e.id,
         ...(e.in_reply_to ? { in_reply_to: e.in_reply_to } : {}),
         ...(e.thread_root ? { thread_root: e.thread_root } : {}),
@@ -62,7 +63,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
   }
 }
 
-const RESERVED_META_KEYS = new Set(['from', 'account', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+const RESERVED_META_KEYS = new Set(['from', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 function withoutReserved(meta: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)))

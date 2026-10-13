@@ -34,6 +34,12 @@ describe('tools', () => {
     }
   })
 
+  it('list_agents shows the reported claude.ai login next to the mesh identity', async () => {
+    const rows = [{ ...row('s_01hrk7y0000000000000login1', 'gm'), login: 'x@gmail.com' }]
+    const { callTool } = registerTools(fakeClient(rows), { selfSessionId: SELF })
+    expect((await callTool('list_agents', {})).content[0]!.text).toContain('gm [login1] — x@gmail.com (mesh bob@msi) · idle')
+  })
+
   it('list_agents renders native-style rows and marks this session', async () => {
     const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF })
     const text = (await callTool('list_agents', {})).content[0]!.text

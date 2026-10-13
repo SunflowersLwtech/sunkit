@@ -10,6 +10,7 @@ export interface SessionEntry {
   device: string
   name: string
   cwd?: string
+  login?: string
   status: SessionStatus
   streams: number
   last_seen: string
@@ -25,6 +26,7 @@ export interface SessionView {
   account: string
   device: string
   cwd?: string
+  login?: string
   status: SessionStatus | 'reconnecting'
   last_seen: string
 }
@@ -37,6 +39,7 @@ export interface AttachInput {
   device: string
   name: string
   cwd?: string | undefined
+  login?: string | undefined
   status?: SessionStatus | undefined
 }
 
@@ -74,6 +77,8 @@ export class SessionRegistry {
     }
     const cwd = input.cwd ?? existing?.cwd
     if (cwd !== undefined) entry.cwd = cwd
+    const login = input.login ?? existing?.login
+    if (login !== undefined) entry.login = login
     this.byId.set(input.session_id, entry)
     return entry
   }
@@ -98,11 +103,12 @@ export class SessionRegistry {
     return this.byId.get(session_id)
   }
 
-  update(session_id: string, token_id: string, patch: { name?: string | undefined; cwd?: string | undefined; status?: SessionStatus | undefined }): boolean {
+  update(session_id: string, token_id: string, patch: { name?: string | undefined; cwd?: string | undefined; login?: string | undefined; status?: SessionStatus | undefined }): boolean {
     const e = this.owned(session_id, token_id)
     if (!e) return false
     if (patch.name !== undefined) e.name = patch.name
     if (patch.cwd !== undefined) e.cwd = patch.cwd
+    if (patch.login !== undefined) e.login = patch.login
     if (patch.status !== undefined) e.status = patch.status
     e.last_seen = new Date(this.now()).toISOString()
     return true
@@ -123,6 +129,7 @@ export class SessionRegistry {
         last_seen: e.last_seen,
       }
       if (e.cwd !== undefined) view.cwd = e.cwd
+      if (e.login !== undefined) view.login = e.login
       out.push(view)
     }
     return out.sort((a, b) => a.name.localeCompare(b.name) || a.ref.localeCompare(b.ref))

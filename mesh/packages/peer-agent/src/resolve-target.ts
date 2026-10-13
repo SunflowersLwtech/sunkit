@@ -5,6 +5,7 @@ export interface SessionRow {
   account: string
   device: string
   cwd?: string
+  login?: string
   status: string
   last_seen: string
 }
@@ -50,6 +51,7 @@ export function formatListing(rows: SessionRow[], selfId: string): string {
   return rows.map(r => {
     const self = r.session_id === selfId ? ' (this session)' : ''
     const where = r.cwd ? ` · ${r.cwd}` : ''
-    return `${formatAddress(r)}${self} — ${r.account}@${r.device} · ${r.status}${where}`
+    const who = r.login ? `${r.login} (mesh ${r.account}@${r.device})` : `${r.account}@${r.device}`
+    return `${formatAddress(r)}${self} — ${who} · ${r.status}${where}`
   }).join('\n')
 }

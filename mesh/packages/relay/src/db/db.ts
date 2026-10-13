@@ -33,7 +33,7 @@ function migrateV1ToV2(db: Db): void {
 /** v3: session-level addressing columns on `message`. */
 function migrateV2ToV3(db: Db): void {
   const cols = db.pragma('table_info(message)') as Array<{ name: string }>
-  for (const col of ['from_session', 'from_name', 'to_session']) {
+  for (const col of ['from_session', 'from_name', 'to_session', 'from_login']) {
     if (!cols.some(c => c.name === col)) db.exec(`ALTER TABLE message ADD COLUMN ${col} TEXT`)
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_to_session ON message(team_id, to_session, id)')

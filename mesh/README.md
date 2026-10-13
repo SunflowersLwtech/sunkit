@@ -26,9 +26,9 @@ Claude gets two tools, named and shaped after the built-in ones:
 
 ```
 list_agents
-  api-refactor [3wga61] (this session) — alice@laptop · busy · ~/src/api
-  web-ui [09r4cq] — alice@desktop · idle · ~/src/web
-  infra [dx10an] — bob@workstation · idle · E:\infra
+  api-refactor [3wga61] (this session) — alice@example.com (mesh alice@laptop) · busy · ~/src/api
+  web-ui [09r4cq] — alice.research@gmail.com (mesh alice@desktop) · idle · ~/src/web
+  infra [dx10an] — bob@example.com (mesh bob@workstation) · idle · E:\infra
 
 send_message(to: "infra", message: "staging DB creds rotated; re-run migrations before deploy")
   → delivered to infra [dx10an]
@@ -39,6 +39,9 @@ send_message(to: "infra", message: "staging DB creds rotated; re-run migrations 
   registry, so they match what you see natively.
 - Replies go to the incoming message's `from` attribute. The relay sets `from` and `account`;
   senders cannot forge them.
+- Each row also shows the claude.ai login that machine's Claude Code is signed in with (read from
+  its local config, updated within seconds of a `/login`). It is self-reported and for display;
+  the paired mesh identity is what the relay authenticates.
 - A message reaches exactly one session — never every session of that account.
 
 ## Requirements

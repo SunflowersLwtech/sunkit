@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionIdSchema, SessionNameSchema } from '@claude-mesh/shared'
-import { mintSessionId, probeClaudeSession, sanitizeName } from './session-identity.ts'
+import { mintSessionId, probeClaudeSession, sanitizeName, readClaudeLogin } from './session-identity.ts'
+import { utimesSync } from 'node:fs'
 
 describe('session identity', () => {
   let dir: string
@@ -41,5 +42,24 @@ describe('session identity', () => {
     expect(probeClaudeSession({ sessionsDir: join(dir, 'nope'), ppid: 7, cwd: '/w/my repo' }))
       .toEqual({ name: 'my-repo', status: 'unknown' })
     expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' })).toEqual({ name: 'x', status: 'unknown' })
+  })
+
+  it('reads the signed-in claude.ai email and notices a /login switch', () => {
+    const f = join(dir, '.claude.json')
+    writeFileSync(f, JSON.stringify({ oauthAccount: { emailAddress: 'a@duocodetech.com' } }))
+    expect(readClaudeLogin(f)).toBe('a@duocodetech.com')
+    writeFileSync(f, JSON.stringify({ oauthAccount: { emailAddress: 'b@gmail.com' } }))
+    utimesSync(f, new Date(), new Date(Date.now() + 5000))
+    expect(readClaudeLogin(f)).toBe('b@gmail.com')
+  })
+
+  it('returns undefined for API-key setups, malformed values or a missing file', () => {
+    const f = join(dir, '.claude.json')
+    writeFileSync(f, JSON.stringify({}))
+    expect(readClaudeLogin(f)).toBeUndefined()
+    writeFileSync(f, JSON.stringify({ oauthAccount: { emailAddress: 'x <y@z>' } }))
+    utimesSync(f, new Date(), new Date(Date.now() + 9000))
+    expect(readClaudeLogin(f)).toBeUndefined()
+    expect(readClaudeLogin(join(dir, 'nope.json'))).toBeUndefined()
   })
 })

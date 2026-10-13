@@ -150,6 +150,45 @@ describe('session-level addressing', () => {
   })
 })
 
+describe('self-reported Claude login', () => {
+  it('is listed, stamped on sent messages from the registry, and cannot be set by the sender body', async () => {
+    const db = openDatabase(':memory:')
+    const tok = seed(db)
+    const sessions = new SessionRegistry()
+    const app = buildApp({ db, store: new MessageStore(db), fanout: new Fanout(), presence: new PresenceRegistry(), sessions, now: () => new Date() })
+    await app.request(`/v1/stream?session=${S_ALICE}&name=a&login=alice%40gmail.com`, { headers: { authorization: `Bearer ${tok.alice}` } })
+    const bob = await app.request(`/v1/stream?session=${S_BOB1}&name=b`, { headers: { authorization: `Bearer ${tok.bob}` } })
+    const list = await (await app.request('/v1/sessions', { headers: { authorization: `Bearer ${tok.bob}` } })).json() as Array<Record<string, string>>
+    expect(list.find(s => s.name === 'a')?.login).toBe('alice@gmail.com')
+    expect(list.find(s => s.name === 'b')).not.toHaveProperty('login')
+    const forged = await app.request('/v1/messages', {
+      method: 'POST', headers: { authorization: `Bearer ${tok.alice}`, 'content-type': 'application/json', 'x-mesh-session': S_ALICE },
+      body: JSON.stringify({ to: 'bob', to_session: S_BOB1, kind: 'chat', content: 'x', from_login: 'ceo@corp.com' }),
+    })
+    expect(forged.status).toBe(400)
+    await app.request('/v1/sessions/self', {
+      method: 'POST', headers: { authorization: `Bearer ${tok.alice}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ session: S_ALICE, login: 'alice@work.com' }),
+    })
+    const ok = await app.request('/v1/messages', {
+      method: 'POST', headers: { authorization: `Bearer ${tok.alice}`, 'content-type': 'application/json', 'x-mesh-session': S_ALICE },
+      body: JSON.stringify({ to: 'bob', to_session: S_BOB1, kind: 'chat', content: 'after /login' }),
+    })
+    expect(((await ok.json()) as { from_login: string }).from_login).toBe('alice@work.com')
+    const got = await readEvents(bob.body!, 1)
+    expect(got[0]).toContain('"from_login":"alice@work.com"')
+  })
+
+  it('ignores a malformed login on attach', async () => {
+    const db = openDatabase(':memory:')
+    const tok = seed(db)
+    const sessions = new SessionRegistry()
+    const app = buildApp({ db, store: new MessageStore(db), fanout: new Fanout(), presence: new PresenceRegistry(), sessions, now: () => new Date() })
+    await app.request(`/v1/stream?session=${S_ALICE}&name=a&login=${encodeURIComponent('<b>x</b>')}`, { headers: { authorization: `Bearer ${tok.alice}` } })
+    expect(sessions.get(S_ALICE)?.login).toBeUndefined()
+  })
+})
+
 describe('POST /v1/auth/pair rate limit', () => {
   it('returns 429 after 10 attempts per minute from one address', async () => {
     const db = openDatabase(':memory:')

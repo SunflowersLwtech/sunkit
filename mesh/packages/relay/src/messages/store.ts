@@ -17,7 +17,7 @@ export class MessageStore {
     team_id: string,
     from_handle: string,
     msg: OutboundMessage,
-    sender: { session: string; name: string } | null = null,
+    sender: { session: string; name: string; login?: string } | null = null,
   ): Envelope {
     if (msg.to !== TEAM_BROADCAST_HANDLE) {
       const rcpt = this.db.prepare(
@@ -51,16 +51,17 @@ export class MessageStore {
       from_session: sender?.session ?? null,
       from_name: sender?.name ?? null,
       to_session: msg.to_session ?? null,
+      from_login: sender?.login ?? null,
     })
 
     this.db.prepare(`
-      INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at,from_session,from_name,to_session)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at,from_session,from_name,to_session,from_login)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       envelope.id, envelope.v, envelope.team, envelope.from, envelope.to,
       envelope.in_reply_to, envelope.thread_root, envelope.kind, envelope.content,
       JSON.stringify(envelope.meta), envelope.sent_at, envelope.delivered_at,
-      envelope.from_session, envelope.from_name, envelope.to_session
+      envelope.from_session, envelope.from_name, envelope.to_session, envelope.from_login
     )
     return envelope
   }
@@ -72,7 +73,7 @@ export class MessageStore {
   fetchSince(team_id: string, to_handle: string, since_id: string, session: string | null = null): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login
       FROM message
       WHERE team_id=? AND id > ?
         AND (to_handle=? OR (to_handle='@team' AND from_handle != ?))
@@ -85,7 +86,7 @@ export class MessageStore {
   fetchPendingFor(team_id: string, to_handle: string, session: string | null = null): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login
       FROM message
       WHERE team_id=? AND delivered_at IS NULL
         AND (to_handle=? OR (to_handle='@team' AND from_handle != ?))

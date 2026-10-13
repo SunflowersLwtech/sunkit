@@ -59,7 +59,7 @@ export class RelayClient {
     return await res.json() as SessionRow[]
   }
 
-  async updateSelf(patch: { name?: string; status?: string; cwd?: string }): Promise<void> {
+  async updateSelf(patch: { name?: string; status?: string; cwd?: string; login?: string }): Promise<void> {
     if (!this.opts.sessionId) return
     const res = await this.fetchImpl(new URL('/v1/sessions/self', this.opts.relayUrl), {
       method: 'POST',

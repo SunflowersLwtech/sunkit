@@ -10,7 +10,7 @@ const baseEnvelope = (overrides: Partial<Envelope> = {}): Envelope => ({
   from: 'alice', to: 'bob', in_reply_to: null, thread_root: null,
   kind: 'chat', content: 'hello', meta: { repo: 'claudes-talking' },
   sent_at: '2026-04-17T23:01:12.345Z', delivered_at: null,
-  from_session: null, from_name: null, to_session: null,
+  from_session: null, from_name: null, to_session: null, from_login: null,
   ...overrides
 })
 
@@ -31,6 +31,13 @@ describe('envelopeToChannelNotification', () => {
     }))
     expect(n.params.meta.from).toBe('opensource-1c [a1b2c3]')
     expect(n.params.meta.account).toBe('alice')
+  })
+
+  it('shows the relay-stamped login, and sender meta cannot forge it', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({ from_login: 'real@x.com', meta: { login: 'ceo@x.com' } }))
+    expect(n.params.meta.login).toBe('real@x.com')
+    const m = envelopeToChannelNotification(baseEnvelope({ meta: { login: 'ceo@x.com' } }))
+    expect(m.params.meta).not.toHaveProperty('login')
   })
 
   it('sender meta cannot forge the account field', () => {

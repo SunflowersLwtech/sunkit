@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { isValidMessageId, SessionIdSchema, SessionNameSchema, type Envelope } from '@claude-mesh/shared'
+import { isValidMessageId, SessionIdSchema, SessionNameSchema, LoginSchema, type Envelope } from '@claude-mesh/shared'
 import { SessionOwnershipError, type SessionStatus } from '../sessions/registry.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
@@ -37,6 +37,7 @@ export function streamRoute(deps: Deps) {
           device: c.get('token').label,
           name: name.data,
           cwd: c.req.query('cwd')?.slice(0, 1024),
+          login: LoginSchema.safeParse(c.req.query('login')).data,
           status,
         })
       } catch (err) {

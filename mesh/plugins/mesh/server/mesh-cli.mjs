@@ -4601,6 +4601,7 @@ var ContentSchema = external_exports.string().refine((s) => Buffer.byteLength(s,
 var MessageIdSchema = external_exports.string().regex(/^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
 var SESSION_ID_REGEX = /^s_[0-9a-z]{16,32}$/;
 var SessionIdSchema = external_exports.string().regex(SESSION_ID_REGEX);
+var LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
 var SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
 var EnvelopeSchema = external_exports.object({
   id: MessageIdSchema,
@@ -4618,7 +4619,8 @@ var EnvelopeSchema = external_exports.object({
   // Session addressing. All three are set by the relay, never trusted from clients.
   from_session: SessionIdSchema.nullable().default(null),
   from_name: SessionNameSchema.nullable().default(null),
-  to_session: SessionIdSchema.nullable().default(null)
+  to_session: SessionIdSchema.nullable().default(null),
+  from_login: LoginSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === "permission_verdict" && e.in_reply_to === null) {
     ctx.addIssue({

@@ -14,7 +14,7 @@ const validChatEnvelope = (): Envelope => ({
   kind: 'chat', content: 'hello',
   meta: { repo: 'claudes-talking' },
   sent_at: '2026-04-17T23:01:12.345Z', delivered_at: null,
-  from_session: null, from_name: null, to_session: null
+  from_session: null, from_name: null, to_session: null, from_login: null
 })
 
 describe('EnvelopeSchema', () => {
@@ -102,7 +102,8 @@ describe('row <-> envelope conversion', () => {
       delivered_at: fc.constant(null),
       from_session: fc.constantFrom(null, 's_01hrk7y0000000000000ab'),
       from_name: fc.constantFrom(null, 'opensource-1c'),
-      to_session: fc.constantFrom(null, 's_01hrk7y0000000000000cd')
+      to_session: fc.constantFrom(null, 's_01hrk7y0000000000000cd'),
+      from_login: fc.constantFrom(null, 'someone@example.com')
     })
     fc.assert(fc.property(arb, e => {
       expect(envelopeFromRow(envelopeToRow(e as Envelope))).toEqual(e)

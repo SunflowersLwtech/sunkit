@@ -10,7 +10,7 @@ import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
-import { mintSessionId, probeClaudeSession, type SessionSnapshot } from './session-identity.ts'
+import { mintSessionId, probeClaudeSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
 import { decideJoin, parentCommandLine } from './join-policy.ts'
 import { pathToFileURL } from 'node:url'
 import { logJson } from './logger.ts'
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
 
   const cwd = process.cwd()
   let identity: SessionSnapshot = probeClaudeSession({ cwd })
+  let login = readClaudeLogin()
   // Only sessions that will actually receive pushes register as reachable.
   const decision = decideJoin({
     env: process.env.MESH_JOIN,
@@ -86,9 +87,11 @@ async function main(): Promise<void> {
   // Follow Claude Code's own name/status for this session (read-only).
   setInterval(() => {
     const next = probeClaudeSession({ cwd })
-    if (next.name === identity.name && next.status === identity.status) return
+    const nextLogin = readClaudeLogin()
+    if (next.name === identity.name && next.status === identity.status && nextLogin === login) return
     identity = next
-    client.updateSelf({ name: next.name, status: next.status })
+    login = nextLogin
+    client.updateSelf({ name: next.name, status: next.status, ...(nextLogin ? { login: nextLogin } : {}) })
       .catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
   }, IDENTITY_POLL_MS).unref()
 
@@ -106,7 +109,7 @@ async function main(): Promise<void> {
     relayUrl: cfg.relay_url,
     token,
     sinceCursor: () => cursor,
-    sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd }),
+    sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...(login ? { login } : {}) }),
     onEnvelope: e => dispatcher.handle(e),
     onAuthError: () => { logJson('error', 'peer.auth_failed'); process.exit(2) },
   })
