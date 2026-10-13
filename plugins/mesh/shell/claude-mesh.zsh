@@ -2,8 +2,9 @@
 # Adds `--channels plugin:mesh@claude-mesh` to interactive launches only;
 # subcommands, print mode, help/version and explicit --channels pass through.
 claude() {
+  local subcmd_re='^[A-Za-z][A-Za-z0-9|_-]*$'   # unquoted below: bash and zsh both treat it as a regex
   if [[ -f "${MESH_HOME:-$HOME/.claude-mesh}/config.json" ]] \
-     && ! [[ $# -gt 0 && "$1" =~ '^[A-Za-z][A-Za-z0-9|_-]*$' ]]; then
+     && ! [[ $# -gt 0 && "$1" =~ $subcmd_re ]]; then
     local a
     for a in "$@"; do
       case "$a" in

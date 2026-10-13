@@ -1,5 +1,7 @@
-# Relay bound to the tailnet address only: not reachable from LAN or WAN.
-# Plain HTTP is fine here — tailnet traffic is already WireGuard-encrypted.
+# Relay bound to one private address only (e.g. the host's Tailscale IP), so it
+# is not reachable from LAN or WAN. Plain HTTP is fine on a tailnet: traffic is
+# already WireGuard-encrypted.
+#   MESH_BIND=$(tailscale ip -4) docker compose -f docker/docker-compose.tailnet.yml up -d
 services:
   relay:
     build:
@@ -11,11 +13,11 @@ services:
     network_mode: host
     environment:
       PORT: "8443"
-      HOST: ${MESH_BIND:-100.85.83.37}
+      HOST: ${MESH_BIND:?set MESH_BIND to the address to listen on, e.g. this host's tailnet IP}
       MESH_DATA: /data
       MESH_INACTIVE_DAYS: "0"
     volumes:
-      - /opt/data/mesh/data:/data
+      - ${MESH_DATA_DIR:-./mesh-data}:/data
     healthcheck:
       # The image's default probe hits 127.0.0.1, which this tailnet-only bind does not serve.
       test: ["CMD", "/nodejs/bin/node", "-e", "require('http').get('http://' + process.env.HOST + ':' + process.env.PORT + '/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]

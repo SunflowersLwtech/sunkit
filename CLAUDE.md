@@ -40,7 +40,7 @@ Claude Code ──stdio──▶ peer-agent (MCP channel server) ──HTTPS/SSE
 
 1. **`@claude-mesh/shared`** — zod envelope schema (the wire format), `<channel>` serializer, monotonic ULID helpers, constants. Pure types/validators, no IO.
 2. **`@claude-mesh/relay`** — Hono + better-sqlite3 + SSE. Routes: `POST /v1/messages` (Idempotency-Key), `GET /v1/stream?since=<ulid>`, `POST /v1/presence`, `GET /v1/peers`, `POST /v1/auth/pair`, `POST /v1/permission/respond`, `/v1/admin/*`. In-memory fanout registry; SQLite for durable buffering.
-3. **`@claude-mesh/peer-agent`** — stdio MCP server declaring `experimental['claude/channel']` (+ `claude/channel/permission` when enabled). Inbound: SSE → `InboundDispatcher` → `notifications/claude/channel*`. Outbound: MCP tools `send_to_peer`, `list_peers`, `set_summary`, `respond_to_permission`, plus the `notifications/claude/channel/permission_request` client-notification handler (`permission-outbound.ts`) that fans approval requests out per `approval_routing`. Also home of the `mesh` CLI (`pair`, `send`, `respond`, `admin ...`).
+3. **`@claude-mesh/peer-agent`** — stdio MCP server declaring `experimental['claude/channel']` (+ `claude/channel/permission` when enabled). Inbound: SSE → `InboundDispatcher` → `notifications/claude/channel*`. Outbound: MCP tools `list_agents` and `send_message` (session-addressed; `resolve-target.ts`). It joins the mesh only when its parent Claude Code process opted it in as a channel and the org policy cache allows it (`join-policy.ts`); otherwise it is send-only. Permission relay is never declared. Also home of the `mesh` CLI (`pair`, `send`, `admin ...`). `pnpm bundle` builds both into `plugins/mesh/server/` for the Claude Code plugin.
 4. **`@claude-mesh/e2e`** — L3 harness: in-memory relay + paired humans; scenario tests gated behind `CLAUDE_DRIVER`.
 
 ### Key invariants to preserve
@@ -63,7 +63,7 @@ Every change is a TDD cycle: **failing test → RED → implement → GREEN → 
 
 - `warning: LF will be replaced by CRLF` on `git add` is cosmetic.
 - Forward slashes in paths inside commands; `\` breaks Git Bash tools.
-- Node's `homedir()` reads `USERPROFILE` on Windows — running two mesh identities on one machine requires overriding `USERPROFILE` for one of them (no `MESH_HOME` var yet).
+- Node's `homedir()` reads `USERPROFILE` on Windows. To run two mesh identities on one machine, set `MESH_HOME` for one of them.
 - `better-sqlite3` needs MSVC Build Tools if no prebuilt binding matches your Node.
 
 ## Gotchas already paid for (don't re-hit)
@@ -71,7 +71,7 @@ Every change is a TDD cycle: **failing test → RED → implement → GREEN → 
 1. **`ulid()` default export is not monotonic** — use `monotonicFactory()` (done in `shared/src/ulid.ts`). SSE resume depends on it.
 2. **TS 5.7+ needs `allowImportingTsExtensions` + `rewriteRelativeImportExtensions`** for the `import './foo.ts'` convention (set in `tsconfig.base.json`).
 3. **MCP SDK ≥1.29 is typed against `zod/v4`.** Extending SDK schemas (e.g. `NotificationSchema.extend`) requires `import { z } from 'zod/v4'` — the v3 root export fails typecheck with a missing `_zod` property.
-4. **Channel notifications are silently dropped** unless Claude Code launches with `--dangerously-load-development-channels server:claude-mesh-peers`. The only trace is a "Channel notifications skipped" line in `~/.claude/debug/*.txt`.
+4. **Channel notifications are silently dropped** unless Claude Code launches with `--channels plugin:mesh@claude-mesh` (org allowlist) or the dev flag, and the org's cached managed settings allow it. The only trace is a "Channel notifications skipped" line in `~/.claude/debug/*.txt`. The `initialize` handshake is identical either way, which is why `join-policy.ts` reads the parent command line.
 
 ## What *not* to do
 

@@ -30,9 +30,10 @@ async function main() {
     }
     mkdirSync(dirname(dbPath), { recursive: true })
     const db = openDatabase(dbPath)
-    const team_name = await prompt('Team name: ')
-    const admin_handle = await prompt('Admin handle: ')
-    const admin_display_name = await prompt('Admin display name: ')
+    // Env vars allow non-interactive init (e.g. `docker run` without a TTY).
+    const team_name = process.env.MESH_TEAM_NAME ?? await prompt('Team name: ')
+    const admin_handle = process.env.MESH_ADMIN_HANDLE ?? await prompt('Admin handle: ')
+    const admin_display_name = process.env.MESH_ADMIN_NAME ?? admin_handle
     const r = initTeam(db, { team_id: `team_${ulid()}`, team_name, admin_handle, admin_display_name })
 
     const adminTokenPath = join(dataDir, 'admin.token')
