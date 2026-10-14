@@ -1,5 +1,5 @@
 # claude-mesh: make plain `claude` join the mesh (cross-account session messaging).
-# Adds `--channels plugin:mesh@claude-mesh` to interactive launches only;
+# Adds `--channels plugin:mesh@sunkit` to interactive launches only;
 # subcommands, print mode, help/version and explicit --channels pass through.
 claude() {
   local subcmd_re='^[A-Za-z][A-Za-z0-9|_-]*$'   # unquoted below: bash and zsh both treat it as a regex
@@ -13,7 +13,7 @@ claude() {
       esac
     done
     # Appended, not prepended: --channels is variadic and would swallow a following prompt.
-    command claude "$@" --channels plugin:mesh@claude-mesh
+    command claude "$@" --channels plugin:mesh@sunkit
   else
     command claude "$@"
   fi

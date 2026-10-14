@@ -53,6 +53,13 @@
       "description": "Domain knowledge and roadmap for building a search harness for coding agents: CLI + skills design notes, API docs, and strategy.",
       "category": "knowledge",
       "keywords": ["search", "harness", "domain-knowledge", "roadmap"]
+    },
+    {
+      "name": "mesh",
+      "source": "./mesh/plugins/mesh",
+      "description": "list_agents / send_message across Claude Code sessions on other accounts and machines, via a self-hosted relay and a channel. Start sessions with --channels plugin:mesh@sunkit.",
+      "category": "communication",
+      "keywords": ["channels", "messaging", "multi-agent", "cross-account"]
     }
   ]
 }

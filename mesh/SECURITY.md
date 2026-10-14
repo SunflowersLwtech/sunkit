@@ -2,10 +2,10 @@
 
 ## Reporting a vulnerability
 
-Use [GitHub private vulnerability reporting](https://github.com/SunflowersLwtech/claude-code-toolkit/security/advisories/new)
+Use [GitHub private vulnerability reporting](https://github.com/SunflowersLwtech/sunkit/security/advisories/new)
 for anything sensitive. Please don't open a public issue for exploitable bugs.
 Fixed advisories are published to
-[GitHub Security Advisories](https://github.com/SunflowersLwtech/claude-code-toolkit/security)
+[GitHub Security Advisories](https://github.com/SunflowersLwtech/sunkit/security)
 with credit unless you ask otherwise.
 
 ## Supported versions

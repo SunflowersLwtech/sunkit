@@ -6,11 +6,11 @@ import { channelOptIn, decideJoin, parentCommandLine, readProcCmdline } from './
 
 describe('channelOptIn', () => {
   it.each([
-    ['claude --channels plugin:mesh@claude-mesh', true],
-    ['claude --channels plugin:telegram@claude-plugins-official plugin:mesh@claude-mesh', true],
+    ['claude --channels plugin:mesh@sunkit', true],
+    ['claude --channels plugin:telegram@claude-plugins-official plugin:mesh@sunkit', true],
     ['claude --dangerously-load-development-channels server:mesh', true],
-    ['claude --channels=plugin:mesh@claude-mesh --resume', true],
-    ['C:\\Users\\x\\.local\\bin\\claude.exe --channels plugin:mesh@claude-mesh', true],
+    ['claude --channels=plugin:mesh@sunkit --resume', true],
+    ['C:\\Users\\x\\.local\\bin\\claude.exe --channels plugin:mesh@sunkit', true],
     ['claude', false],
     ['claude -p hello', false],
     ['claude --channels plugin:telegram@claude-plugins-official', false],
@@ -22,10 +22,10 @@ describe('channelOptIn', () => {
   })
 })
 
-const ALLOW = { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: 'claude-mesh', plugin: 'mesh' }] }
+const ALLOW = { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: 'sunkit', plugin: 'mesh' }] }
 
 describe('decideJoin', () => {
-  const opted = 'claude --channels plugin:mesh@claude-mesh'
+  const opted = 'claude --channels plugin:mesh@sunkit'
   it('joins an interactive session launched with the channel', () => {
     expect(decideJoin({ commandLine: opted, sessionKind: 'interactive', policy: ALLOW }).join).toBe(true)
   })
@@ -51,14 +51,21 @@ describe('parentCommandLine', () => {
 })
 
 describe('org policy mirror', () => {
-  const opted = 'claude --channels plugin:mesh@claude-mesh'
-  const dev = 'claude --dangerously-load-development-channels plugin:mesh@claude-mesh'
+  const opted = 'claude --channels plugin:mesh@sunkit'
+  const dev = 'claude --dangerously-load-development-channels plugin:mesh@sunkit'
   it('does not join when the cached allowlist lacks the plugin (stale cache after an allowlist change)', () => {
     const stale = { channelsEnabled: true }
     expect(decideJoin({ commandLine: opted, sessionKind: 'interactive', policy: stale }).join).toBe(false)
   })
   it('does not join when the allowlisted marketplace differs from the one launched', () => {
     expect(decideJoin({ commandLine: 'claude --channels plugin:mesh@evil', sessionKind: 'interactive', policy: ALLOW }).join).toBe(false)
+  })
+  it('follows the marketplace a session was launched from while an allowlist carries both during a move', () => {
+    const old = 'claude --channels plugin:mesh@claude-mesh'
+    const both = { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: 'claude-mesh', plugin: 'mesh' }, { marketplace: 'sunkit', plugin: 'mesh' }] }
+    expect(decideJoin({ commandLine: old, sessionKind: 'interactive', policy: both }).join).toBe(true)
+    expect(decideJoin({ commandLine: opted, sessionKind: 'interactive', policy: both }).join).toBe(true)
+    expect(decideJoin({ commandLine: old, sessionKind: 'interactive', policy: ALLOW }).join).toBe(false)
   })
   it('does not join when channels are off for the org or no policy is cached', () => {
     expect(decideJoin({ commandLine: dev, sessionKind: 'interactive', policy: { channelsEnabled: false } }).join).toBe(false)
@@ -76,9 +83,9 @@ describe('readProcCmdline', () => {
   it('joins NUL-separated argv from <procRoot>/<pid>/cmdline', () => {
     const root = mkdtempSync(join(tmpdir(), 'proc-'))
     mkdirSync(join(root, '363'))
-    writeFileSync(join(root, '363', 'cmdline'), 'claude\0--channels\0plugin:mesh@claude-mesh\0')
+    writeFileSync(join(root, '363', 'cmdline'), 'claude\0--channels\0plugin:mesh@sunkit\0')
     const line = readProcCmdline(363, root)
-    expect(line).toBe('claude --channels plugin:mesh@claude-mesh')
+    expect(line).toBe('claude --channels plugin:mesh@sunkit')
     expect(channelOptIn(line)).toBe(true)
   })
   it('returns empty for a missing pid so the caller can fall back', () => {

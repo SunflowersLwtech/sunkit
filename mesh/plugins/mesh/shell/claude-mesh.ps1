@@ -1,5 +1,5 @@
 # claude-mesh: make plain `claude` join the mesh (cross-account session messaging).
-# Adds `--channels plugin:mesh@claude-mesh` to interactive launches only;
+# Adds `--channels plugin:mesh@sunkit` to interactive launches only;
 # subcommands, print mode, help/version and explicit --channels pass through.
 # Dot-source from $PROFILE. Works in Windows PowerShell 5.1 and PowerShell 7.
 function claude {
@@ -14,5 +14,5 @@ function claude {
         "$a" -like '--channels=*' -or "$a" -like '--dangerously-load-development-channels*') { $passThrough = $true }
   }
   # Appended, not prepended: --channels is variadic and would swallow a following prompt.
-  if ($passThrough) { & $exe @args } else { & $exe @args --channels plugin:mesh@claude-mesh }
+  if ($passThrough) { & $exe @args } else { & $exe @args --channels plugin:mesh@sunkit }
 }

@@ -15,7 +15,7 @@ It is built on Claude Code [channels](https://code.claude.com/docs/en/channels) 
 preview). Nothing about how Claude talks to Anthropic changes: no proxy, no API base URL, no
 shared credentials. Remote Control keeps working.
 
-> Part of [claude-code-toolkit](../README.md). Fork of [pouriamrt/claude-mesh](https://github.com/pouriamrt/claude-mesh) (MIT). The relay,
+> Part of [sunkit](../README.md). Fork of [pouriamrt/claude-mesh](https://github.com/pouriamrt/claude-mesh) (MIT). The relay,
 > wire format and pairing model come from upstream. This fork addresses individual **sessions**
 > instead of people, ships as a plugin, and fixes a sender-spoofing bug. See
 > [What changed from upstream](#what-changed-from-upstream).
@@ -59,7 +59,7 @@ send_message(to: "infra", message: "staging DB creds rotated; re-run migrations 
 ### 1. Run the relay (once)
 
 ```bash
-git clone https://github.com/SunflowersLwtech/claude-code-toolkit && cd claude-code-toolkit/mesh
+git clone https://github.com/SunflowersLwtech/sunkit && cd sunkit/mesh
 docker build -f docker/Dockerfile.relay -t claude-mesh/relay:local .
 
 mkdir -p mesh-data && sudo chown 65532:65532 mesh-data   # the image runs as nonroot
@@ -89,28 +89,28 @@ official channel plugins if you use them, and add this one:
     { "marketplace": "claude-plugins-official", "plugin": "discord" },
     { "marketplace": "claude-plugins-official", "plugin": "imessage" },
     { "marketplace": "claude-plugins-official", "plugin": "fakechat" },
-    { "marketplace": "claude-mesh", "plugin": "mesh" }
+    { "marketplace": "sunkit", "plugin": "mesh" }
   ]
 }
 ```
 
 Setting `allowedChannelPlugins` *replaces* Anthropic's default list, hence the four official
 entries. Without this step you can still use the mesh, but every launch needs
-`--dangerously-load-development-channels plugin:mesh@claude-mesh` and shows a confirmation
+`--dangerously-load-development-channels plugin:mesh@sunkit` and shows a confirmation
 dialog.
 
 ### 3. Each machine
 
 ```bash
-git clone https://github.com/SunflowersLwtech/claude-code-toolkit ~/claude-code-toolkit
-claude plugin marketplace add ~/claude-code-toolkit/mesh
-claude plugin install mesh@claude-mesh
+git clone https://github.com/SunflowersLwtech/sunkit ~/sunkit
+claude plugin marketplace add ~/sunkit
+claude plugin install mesh@sunkit
 ```
 
 Pair it. The admin issues a code per person and per extra device:
 
 ```bash
-M=~/claude-code-toolkit/mesh/plugins/mesh/server/mesh-cli.mjs
+M=~/sunkit/mesh/plugins/mesh/server/mesh-cli.mjs
 R=http://<relay-tailnet-ip>:8443
 
 # on the admin machine, once
@@ -123,17 +123,17 @@ node $M pair MESH-XXXX-XXXX-XXXX-XXXX --relay $R --label laptop
 ```
 
 Make plain `claude` join the mesh. Interactive launches get
-`--channels plugin:mesh@claude-mesh`; subcommands, `-p`, `--help` and explicit `--channels`
+`--channels plugin:mesh@sunkit`; subcommands, `-p`, `--help` and explicit `--channels`
 pass through unchanged:
 
 ```bash
 # zsh / bash
-echo 'source ~/claude-code-toolkit/mesh/plugins/mesh/shell/claude-mesh.zsh' >> ~/.zshrc
+echo 'source ~/sunkit/mesh/plugins/mesh/shell/claude-mesh.zsh' >> ~/.zshrc
 ```
 
 ```powershell
 # PowerShell (Windows)
-Add-Content $PROFILE '. "$HOME\claude-code-toolkit\mesh\plugins\mesh\shell\claude-mesh.ps1"'
+Add-Content $PROFILE '. "$HOME\sunkit\mesh\plugins\mesh\shell\claude-mesh.ps1"'
 ```
 
 **First launch after changing managed settings:** Claude Code checks its *cached* copy of the
@@ -207,12 +207,12 @@ pnpm -r test:ci       # ~250 tests across shared / relay / peer-agent / e2e
 pnpm bundle           # regenerate plugins/mesh/server/*.mjs after peer-agent changes
 ```
 
-Claude Code runs an installed plugin from its cache (`~/.claude/plugins/cache/claude-mesh/mesh/<version>`),
+Claude Code runs an installed plugin from its cache (`~/.claude/plugins/cache/sunkit/mesh/<version>`),
 not from your checkout. After changing the bundle, bump `version` in
 `plugins/mesh/.claude-plugin/plugin.json`, then on every machine:
 
 ```bash
-git pull && claude plugin marketplace update claude-mesh && claude plugin update mesh@claude-mesh
+git pull && claude plugin marketplace update sunkit && claude plugin update mesh@sunkit
 ```
 
 Packages: `shared` (envelope schema, `<channel>` rendering), `relay` (Hono + SQLite + SSE),
