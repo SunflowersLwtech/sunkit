@@ -1,0 +1,72 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node-22, bun-1.2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - if: matrix.runtime == 'node-22'
+        uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - if: matrix.runtime == 'bun-1.2'
+        uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.2.x }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm typecheck
+      - run: pnpm test:ci
+      - name: Upload coverage
+        if: matrix.runtime == 'node-22'
+        uses: actions/upload-artifact@v4
+        with: { name: coverage, path: packages/*/coverage }
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.relay
+          push: false
+          tags: claude-mesh/relay:ci
+
+  e2e:
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'e2e')
+    needs: test
+    runs-on: ubuntu-latest
+    # L3 driver scenarios spawn a real `claude` binary, which needs Claude Code
+    # installed AND credentials. Set either secret to enable them; with neither,
+    # canDrive() is false and those scenarios skip instead of failing the run.
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @claude-mesh/shared build && pnpm -F @claude-mesh/relay build && pnpm -F @claude-mesh/peer-agent build
+      - name: Install Claude Code
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != '' || env.ANTHROPIC_API_KEY != ''
+        run: npm i -g @anthropic-ai/claude-code
+      - run: pnpm -F @claude-mesh/e2e test:ci
+        env:
+          CLAUDE_DRIVER: ${{ (env.CLAUDE_CODE_OAUTH_TOKEN != '' || env.ANTHROPIC_API_KEY != '') && 'cli' || '' }}

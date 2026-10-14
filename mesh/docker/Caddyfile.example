@@ -1,0 +1,9 @@
+mesh.example.com {
+    encode zstd gzip
+    reverse_proxy relay:8443 {
+        flush_interval -1
+        transport http {
+            read_buffer 64KB
+        }
+    }
+}

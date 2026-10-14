@@ -1,0 +1,28 @@
+# Relay bound to one private address only (e.g. the host's Tailscale IP), so it
+# is not reachable from LAN or WAN. Plain HTTP is fine on a tailnet: traffic is
+# already WireGuard-encrypted.
+#   MESH_BIND=$(tailscale ip -4) docker compose -f docker/docker-compose.tailnet.yml up -d
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.relay
+    image: claude-mesh/relay:local
+    container_name: claude-mesh-relay
+    restart: always
+    network_mode: host
+    environment:
+      PORT: "8443"
+      HOST: ${MESH_BIND:?set MESH_BIND to the address to listen on, e.g. this host's tailnet IP}
+      MESH_DATA: /data
+      MESH_INACTIVE_DAYS: "0"
+    volumes:
+      - ${MESH_DATA_DIR:-./mesh-data}:/data
+    healthcheck:
+      # The image's default probe hits 127.0.0.1, which this tailnet-only bind does not serve.
+      test: ["CMD", "/nodejs/bin/node", "-e", "require('http').get('http://' + process.env.HOST + ':' + process.env.PORT + '/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    mem_limit: 256m
+    cpus: 0.5

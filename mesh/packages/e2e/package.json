@@ -1,0 +1,21 @@
+{
+  "name": "@claude-mesh/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "test:ci": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@claude-mesh/shared": "workspace:*",
+    "@claude-mesh/relay": "workspace:*",
+    "@claude-mesh/peer-agent": "workspace:*",
+    "@hono/node-server": "^1.13.1",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.2"
+  }
+}
