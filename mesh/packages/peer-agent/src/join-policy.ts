@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { selectManagedPolicy, type ManagedPolicy } from './managed-policy.ts'
 
 /**
  * Claude Code gives an MCP server no signal (initialize capabilities are
@@ -41,16 +41,24 @@ export interface OrgChannelPolicy {
   allowedChannelPlugins?: Array<{ marketplace?: string; plugin?: string }>
 }
 
-/** Claude Code's cached copy of the org's managed settings (what it enforces at startup). */
-export function readOrgChannelPolicy(path = join(homedir(), '.claude', 'remote-settings.json')): OrgChannelPolicy | null {
-  try { return JSON.parse(readFileSync(path, 'utf8')) as OrgChannelPolicy } catch { return null }
+/**
+ * The channel keys of the managed settings Claude Code enforces: the org's
+ * server-managed settings when they carry a policy, otherwise the machine's
+ * MDM profile, registry policy or managed-settings.json (see managed-policy.ts).
+ */
+export function readChannelPolicy(select: () => ManagedPolicy | null = selectManagedPolicy): { policy: OrgChannelPolicy | null; source: string } {
+  const managed = select()
+  if (!managed) return { policy: null, source: 'no managed settings' }
+  return { policy: managed.settings as OrgChannelPolicy, source: managed.sources.map(s => `${s.kind}:${s.label}`).join(' + ') }
 }
 
 /**
  * Mirror Claude Code's own registration rules so we never advertise a session
- * whose channel it is about to reject. Both read the same cache, so a stale
- * cache (e.g. the first launch after an allowlist change) fails closed on both
- * sides instead of producing silent drops.
+ * whose channel it is about to reject. Both read the same managed sources, so a
+ * stale cache (e.g. the first launch after an allowlist change) fails closed on
+ * both sides instead of producing silent drops. channelsEnabled is required even
+ * though Claude Code skips that check for personal Pro/Max logins: a policy
+ * without it leaves the session send-only rather than risking a silent drop.
  */
 export function orgAllows(opt: Exclude<OptIn, null>, policy: OrgChannelPolicy | null, plugin = 'mesh'): boolean {
   if (!policy || policy.channelsEnabled !== true) return false
@@ -94,8 +102,10 @@ export function decideJoin(opts: {
   commandLine: string
   sessionKind?: string | undefined
   serverName?: string
-  /** undefined = read Claude Code's cache; null = no cached policy. */
+  /** undefined = read the managed sources Claude Code reads; null = none. */
   policy?: OrgChannelPolicy | null
+  /** Source selection used when policy is undefined (tests inject readers here). */
+  select?: () => ManagedPolicy | null
 }): JoinDecision {
   if (opts.env === 'always') return { join: true, reason: 'MESH_JOIN=always' }
   if (opts.env === 'never') return { join: false, reason: 'MESH_JOIN=never' }
@@ -104,9 +114,9 @@ export function decideJoin(opts: {
   }
   const opt = channelOptInVia(opts.commandLine, opts.serverName)
   if (!opt) return { join: false, reason: 'parent not launched with the mesh channel' }
-  const policy = opts.policy === undefined ? readOrgChannelPolicy() : opts.policy
+  const { policy, source } = opts.policy === undefined ? readChannelPolicy(opts.select) : { policy: opts.policy, source: 'given policy' }
   if (!orgAllows(opt, policy)) {
-    return { join: false, reason: `org policy would reject the channel (${opt.via}); restart once the managed settings are cached` }
+    return { join: false, reason: `managed policy would reject the channel (${opt.via}; ${source}); restart once the managed settings are in place` }
   }
-  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by org policy` }
+  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by managed policy (${source})` }
 }
