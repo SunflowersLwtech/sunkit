@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { channelOptIn, decideJoin, parentCommandLine } from './join-policy.ts'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { channelOptIn, decideJoin, parentCommandLine, readProcCmdline } from './join-policy.ts'
 
 describe('channelOptIn', () => {
   it.each([
@@ -66,5 +69,20 @@ describe('org policy mirror', () => {
   })
   it('server:mesh only counts under the dev flag (--channels takes plugins only)', () => {
     expect(decideJoin({ commandLine: 'claude --channels server:mesh', sessionKind: 'interactive', policy: ALLOW }).join).toBe(false)
+  })
+})
+
+describe('readProcCmdline', () => {
+  it('joins NUL-separated argv from <procRoot>/<pid>/cmdline', () => {
+    const root = mkdtempSync(join(tmpdir(), 'proc-'))
+    mkdirSync(join(root, '363'))
+    writeFileSync(join(root, '363', 'cmdline'), 'claude\0--channels\0plugin:mesh@claude-mesh\0')
+    const line = readProcCmdline(363, root)
+    expect(line).toBe('claude --channels plugin:mesh@claude-mesh')
+    expect(channelOptIn(line)).toBe(true)
+  })
+  it('returns empty for a missing pid so the caller can fall back', () => {
+    const root = mkdtempSync(join(tmpdir(), 'proc-'))
+    expect(readProcCmdline(999, root)).toBe('')
   })
 })

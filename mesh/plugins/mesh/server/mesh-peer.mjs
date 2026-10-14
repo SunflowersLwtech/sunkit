@@ -37160,7 +37160,18 @@ function orgAllows(opt, policy, plugin = "mesh") {
   if (opt.via === "dev") return true;
   return (policy.allowedChannelPlugins ?? []).some((e) => e.marketplace === opt.marketplace && e.plugin === plugin);
 }
+function readProcCmdline(pid, procRoot = "/proc") {
+  try {
+    return readFileSync4(join4(procRoot, String(pid), "cmdline"), "utf8").split("\0").filter(Boolean).join(" ");
+  } catch {
+    return "";
+  }
+}
 function parentCommandLine(ppid = process.ppid) {
+  if (process.platform === "linux") {
+    const line = readProcCmdline(ppid);
+    if (line) return line;
+  }
   try {
     if (process.platform === "win32") {
       return execFileSync("powershell.exe", [

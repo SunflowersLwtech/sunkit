@@ -58,7 +58,22 @@ export function orgAllows(opt: Exclude<OptIn, null>, policy: OrgChannelPolicy | 
   return (policy.allowedChannelPlugins ?? []).some(e => e.marketplace === opt.marketplace && e.plugin === plugin)
 }
 
+/** Linux /proc/<pid>/cmdline as one space-joined line; '' when unreadable. */
+export function readProcCmdline(pid: number, procRoot = '/proc'): string {
+  try {
+    return readFileSync(join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean).join(' ')
+  } catch {
+    return ''
+  }
+}
+
 export function parentCommandLine(ppid: number = process.ppid): string {
+  // Linux: read /proc first. Minimal containers (node images, OpenWrt) often have no `ps`,
+  // and an empty answer here reads as "not launched with the channel".
+  if (process.platform === 'linux') {
+    const line = readProcCmdline(ppid)
+    if (line) return line
+  }
   try {
     if (process.platform === 'win32') {
       return execFileSync('powershell.exe', [
