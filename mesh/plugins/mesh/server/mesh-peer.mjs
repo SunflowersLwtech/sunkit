@@ -27151,7 +27151,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     return (payload, ctx) => fn(shape, payload, ctx);
   };
   let fastpass;
-  const isObject2 = isObject;
+  const isObject3 = isObject;
   const jit = !globalConfig.jitless;
   const allowsEval2 = allowsEval;
   const fastEnabled = jit && allowsEval2.value;
@@ -27160,7 +27160,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input = payload.value;
-    if (!isObject2(input)) {
+    if (!isObject3(input)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -36575,7 +36575,7 @@ function assertTokenNotInRepo(tokenPath) {
 }
 
 // packages/peer-agent/src/index.ts
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 
 // packages/peer-agent/src/outbound.ts
 var import_ulid = __toESM(require_index_umd(), 1);
@@ -37064,15 +37064,178 @@ var ReplyLimiter = class {
 
 // packages/peer-agent/src/session-identity.ts
 var import_ulid3 = __toESM(require_index_umd(), 1);
-import { readFileSync as readFileSync3, readdirSync, statSync as statSync2 } from "node:fs";
-import { join as join3, basename } from "node:path";
-import { homedir as homedir2 } from "node:os";
-var loginCache = null;
-function readClaudeLogin(path = claudeConfigPath()) {
+import { readFileSync as readFileSync4, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
+import { join as join4, basename } from "node:path";
+
+// packages/peer-agent/src/managed-policy.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync2, readFileSync as readFileSync3, readdirSync, statSync as statSync2 } from "node:fs";
+import { join as join3 } from "node:path";
+import { homedir as homedir2, userInfo } from "node:os";
+var CONTROL_KEYS = /* @__PURE__ */ new Set(["wslInheritsWindowsSettings", "managedSourcesBehavior"]);
+var PERSONAL_PLANS = /* @__PURE__ */ new Set(["claude_pro", "claude_max"]);
+function claudeConfigDir(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR || join3(homedir2(), ".claude");
+}
+function claudeGlobalConfigPath(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR ? join3(env.CLAUDE_CONFIG_DIR, ".claude.json") : join3(homedir2(), ".claude.json");
+}
+function systemManagedDir(platform = process.platform) {
+  if (platform === "darwin") return "/Library/Application Support/ClaudeCode";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
+  return "/etc/claude-code";
+}
+function hasPolicyKey(doc) {
+  if (!doc) return false;
+  return Object.entries(doc).some(([k, v]) => !CONTROL_KEYS.has(k) && v !== null && v !== void 0);
+}
+function isObject2(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function mergeSettings(base, over) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const prev = out[k];
+    if (Array.isArray(prev) && Array.isArray(v)) {
+      const seen = /* @__PURE__ */ new Set();
+      out[k] = [...prev, ...v].filter((x) => {
+        const key = JSON.stringify(x);
+        return seen.has(key) ? false : (seen.add(key), true);
+      });
+    } else if (isObject2(prev) && isObject2(v)) {
+      out[k] = mergeSettings(prev, v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+function readJsonObject(path) {
   try {
-    const mtimeMs = statSync2(path).mtimeMs;
+    const v = JSON.parse(readFileSync3(path, "utf8"));
+    return isObject2(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function readLoginPlan(path = claudeGlobalConfigPath()) {
+  const j = readJsonObject(path);
+  const oa = j?.oauthAccount;
+  return isObject2(oa) && typeof oa.organizationType === "string" ? oa.organizationType : void 0;
+}
+function readRemoteDocument(configDir = claudeConfigDir()) {
+  const label = join3(configDir, "remote-settings.json");
+  const settings = readJsonObject(label);
+  return settings ? { kind: "remote", label, settings } : null;
+}
+function readFileDocument(dir = systemManagedDir()) {
+  let merged = readJsonObject(join3(dir, "managed-settings.json"));
+  const dropDir = join3(dir, "managed-settings.d");
+  let names = [];
+  try {
+    names = readdirSync(dropDir).filter((n) => n.endsWith(".json") && !n.startsWith(".")).sort();
+  } catch {
+  }
+  for (const n of names) {
+    const p = join3(dropDir, n);
+    try {
+      if (!statSync2(p).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const doc = readJsonObject(p);
+    if (doc) merged = merged ? mergeSettings(merged, doc) : doc;
+  }
+  return merged ? { kind: "file", label: dir, settings: merged } : null;
+}
+var runCommand = (file, args) => execFileSync(file, args, { encoding: "utf8", timeout: 5e3, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+function parseRegQuery(out) {
+  const m = /^\s*Settings\s+REG_(?:EXPAND_)?SZ\s+(.*)$/m.exec(out);
+  if (!m) return null;
+  try {
+    const v = JSON.parse(m[1].trim());
+    return isObject2(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function readRegistry(hive, run) {
+  try {
+    return parseRegQuery(run("reg.exe", ["query", `${hive}\\SOFTWARE\\Policies\\ClaudeCode`, "/v", "Settings"]));
+  } catch {
+    return null;
+  }
+}
+function managedPlistPaths() {
+  let user = "";
+  try {
+    user = userInfo().username;
+  } catch {
+  }
+  return [
+    ...user ? [`/Library/Managed Preferences/${user}/com.anthropic.claudecode.plist`] : [],
+    "/Library/Managed Preferences/com.anthropic.claudecode.plist"
+  ];
+}
+function readMdmDocument(platform = process.platform, run = runCommand, plists = managedPlistPaths()) {
+  if (platform === "darwin") {
+    for (const p of plists) {
+      if (!existsSync2(p)) continue;
+      try {
+        const v = JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", p]));
+        if (isObject2(v)) return { kind: "mdm", label: p, settings: v };
+      } catch {
+      }
+    }
+    return null;
+  }
+  if (platform === "win32") {
+    const settings = readRegistry("HKLM", run);
+    return settings ? { kind: "mdm", label: "HKLM\\SOFTWARE\\Policies\\ClaudeCode", settings } : null;
+  }
+  return null;
+}
+function readHkcuDocument(platform = process.platform, run = runCommand) {
+  if (platform !== "win32") return null;
+  const settings = readRegistry("HKCU", run);
+  return settings ? { kind: "hkcu", label: "HKCU\\SOFTWARE\\Policies\\ClaudeCode", settings } : null;
+}
+function defaultReaders(env = process.env, platform = process.platform) {
+  return {
+    remote: () => readRemoteDocument(claudeConfigDir(env)),
+    mdm: () => readMdmDocument(platform),
+    file: () => readFileDocument(systemManagedDir(platform)),
+    hkcu: () => readHkcuDocument(platform),
+    loginPlan: () => readLoginPlan(claudeGlobalConfigPath(env))
+  };
+}
+function selectManagedPolicy(readers = defaultReaders()) {
+  const plan = readers.loginPlan();
+  const admin = [
+    ...plan !== void 0 && PERSONAL_PLANS.has(plan) ? [] : [readers.remote()],
+    readers.mdm(),
+    readers.file()
+  ].filter((d) => d !== null);
+  const withPolicy = admin.filter((d) => hasPolicyKey(d.settings));
+  const steering = admin.find((d) => hasPolicyKey(d.settings) || d.settings.managedSourcesBehavior !== void 0);
+  if (steering?.settings.managedSourcesBehavior === "merge" && withPolicy.length > 1) {
+    const settings = [...withPolicy].reverse().reduce((acc, d) => mergeSettings(acc, d.settings), {});
+    return { sources: withPolicy, settings };
+  }
+  const first = withPolicy[0];
+  if (first) return { sources: [first], settings: first.settings };
+  const hkcu = readers.hkcu();
+  if (hkcu && hasPolicyKey(hkcu.settings)) return { sources: [hkcu], settings: hkcu.settings };
+  return null;
+}
+
+// packages/peer-agent/src/session-identity.ts
+var loginCache = null;
+function readClaudeLogin(path = claudeGlobalConfigPath()) {
+  try {
+    const mtimeMs = statSync3(path).mtimeMs;
     if (loginCache && loginCache.path === path && loginCache.mtimeMs === mtimeMs) return loginCache.login;
-    const j = JSON.parse(readFileSync3(path, "utf8"));
+    const j = JSON.parse(readFileSync4(path, "utf8"));
     const email2 = j.oauthAccount?.emailAddress;
     const login = typeof email2 === "string" && /^[^\s<>"&]+@[^\s<>"&]+$/.test(email2) && email2.length <= 254 ? email2 : void 0;
     loginCache = { path, mtimeMs, login };
@@ -37080,10 +37243,6 @@ function readClaudeLogin(path = claudeConfigPath()) {
   } catch {
     return void 0;
   }
-}
-function claudeConfigPath() {
-  const dir = process.env.CLAUDE_CONFIG_DIR;
-  return dir ? join3(dir, ".claude.json") : join3(homedir2(), ".claude.json");
 }
 function mintSessionId() {
   return `s_${(0, import_ulid3.ulid)().toLowerCase()}`;
@@ -37102,25 +37261,25 @@ function defaultIsAlive(pid) {
 }
 function readSessionFile(path) {
   try {
-    return JSON.parse(readFileSync3(path, "utf8"));
+    return JSON.parse(readFileSync4(path, "utf8"));
   } catch {
     return void 0;
   }
 }
 function probeClaudeSession(opts = {}) {
-  const dir = opts.sessionsDir ?? join3(homedir2(), ".claude", "sessions");
+  const dir = opts.sessionsDir ?? join4(claudeConfigDir(), "sessions");
   const cwd = opts.cwd ?? process.cwd();
   const isAlive = opts.isAlive ?? defaultIsAlive;
   const fallback = { name: sanitizeName(basename(cwd)), status: "unknown" };
   const ppid = opts.ppid ?? process.ppid;
-  let file = readSessionFile(join3(dir, `${ppid}.json`));
+  let file = readSessionFile(join4(dir, `${ppid}.json`));
   if (!file) {
     let entries = [];
     try {
-      entries = readdirSync(dir).filter((f) => f.endsWith(".json"));
+      entries = readdirSync2(dir).filter((f) => f.endsWith(".json"));
     } catch {
     }
-    const candidates = entries.map((f) => readSessionFile(join3(dir, f))).filter((f) => !!f && f.cwd === cwd && typeof f.pid === "number" && isAlive(f.pid)).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+    const candidates = entries.map((f) => readSessionFile(join4(dir, f))).filter((f) => !!f && f.cwd === cwd && typeof f.pid === "number" && isAlive(f.pid)).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
     file = candidates[0];
   }
   if (!file) return fallback;
@@ -37131,10 +37290,9 @@ function probeClaudeSession(opts = {}) {
 }
 
 // packages/peer-agent/src/join-policy.ts
-import { execFileSync } from "node:child_process";
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
-import { homedir as homedir3 } from "node:os";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
 var FLAG = /(?:^|\s)--(?:channels|dangerously-load-development-channels)(?:=|\s+)((?:(?:plugin|server):\S+(?:\s+|$))+)/g;
 function channelOptInVia(commandLine, serverName = "mesh") {
   for (const m of commandLine.matchAll(FLAG)) {
@@ -37148,12 +37306,10 @@ function channelOptInVia(commandLine, serverName = "mesh") {
   }
   return null;
 }
-function readOrgChannelPolicy(path = join4(homedir3(), ".claude", "remote-settings.json")) {
-  try {
-    return JSON.parse(readFileSync4(path, "utf8"));
-  } catch {
-    return null;
-  }
+function readChannelPolicy(select = selectManagedPolicy) {
+  const managed = select();
+  if (!managed) return { policy: null, source: "no managed settings" };
+  return { policy: managed.settings, source: managed.sources.map((s) => `${s.kind}:${s.label}`).join(" + ") };
 }
 function orgAllows(opt, policy, plugin = "mesh") {
   if (!policy || policy.channelsEnabled !== true) return false;
@@ -37162,7 +37318,7 @@ function orgAllows(opt, policy, plugin = "mesh") {
 }
 function readProcCmdline(pid, procRoot = "/proc") {
   try {
-    return readFileSync4(join4(procRoot, String(pid), "cmdline"), "utf8").split("\0").filter(Boolean).join(" ");
+    return readFileSync5(join5(procRoot, String(pid), "cmdline"), "utf8").split("\0").filter(Boolean).join(" ");
   } catch {
     return "";
   }
@@ -37174,14 +37330,14 @@ function parentCommandLine(ppid = process.ppid) {
   }
   try {
     if (process.platform === "win32") {
-      return execFileSync("powershell.exe", [
+      return execFileSync2("powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId=${ppid}").CommandLine`
       ], { encoding: "utf8", timeout: 1e4, windowsHide: true }).trim();
     }
-    return execFileSync("ps", ["-o", "command=", "-p", String(ppid)], { encoding: "utf8", timeout: 5e3 }).trim();
+    return execFileSync2("ps", ["-o", "command=", "-p", String(ppid)], { encoding: "utf8", timeout: 5e3 }).trim();
   } catch {
     return "";
   }
@@ -37194,18 +37350,18 @@ function decideJoin(opts) {
   }
   const opt = channelOptInVia(opts.commandLine, opts.serverName);
   if (!opt) return { join: false, reason: "parent not launched with the mesh channel" };
-  const policy = opts.policy === void 0 ? readOrgChannelPolicy() : opts.policy;
+  const { policy, source } = opts.policy === void 0 ? readChannelPolicy(opts.select) : { policy: opts.policy, source: "given policy" };
   if (!orgAllows(opt, policy)) {
-    return { join: false, reason: `org policy would reject the channel (${opt.via}); restart once the managed settings are cached` };
+    return { join: false, reason: `managed policy would reject the channel (${opt.via}; ${source}); restart once the managed settings are in place` };
   }
-  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by org policy` };
+  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by managed policy (${source})` };
 }
 
 // packages/peer-agent/src/index.ts
 import { pathToFileURL } from "node:url";
 var IDENTITY_POLL_MS = 3e3;
 async function main() {
-  if (!existsSync2(defaultConfigPath())) {
+  if (!existsSync3(defaultConfigPath())) {
     const { server: server2 } = createMcpServer({ permissionRelay: false });
     server2.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
     logJson("info", "peer.unpaired", { config: defaultConfigPath() });

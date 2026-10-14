@@ -529,6 +529,345 @@ var init_send = __esm({
   }
 });
 
+// packages/peer-agent/src/managed-policy.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, statSync } from "node:fs";
+import { join as join8 } from "node:path";
+import { homedir as homedir2, userInfo } from "node:os";
+function claudeConfigDir(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR || join8(homedir2(), ".claude");
+}
+function claudeGlobalConfigPath(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR ? join8(env.CLAUDE_CONFIG_DIR, ".claude.json") : join8(homedir2(), ".claude.json");
+}
+function systemManagedDir(platform = process.platform) {
+  if (platform === "darwin") return "/Library/Application Support/ClaudeCode";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
+  return "/etc/claude-code";
+}
+function hasPolicyKey(doc) {
+  if (!doc) return false;
+  return Object.entries(doc).some(([k, v]) => !CONTROL_KEYS.has(k) && v !== null && v !== void 0);
+}
+function isObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function mergeSettings(base, over) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const prev = out[k];
+    if (Array.isArray(prev) && Array.isArray(v)) {
+      const seen = /* @__PURE__ */ new Set();
+      out[k] = [...prev, ...v].filter((x) => {
+        const key = JSON.stringify(x);
+        return seen.has(key) ? false : (seen.add(key), true);
+      });
+    } else if (isObject(prev) && isObject(v)) {
+      out[k] = mergeSettings(prev, v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+function readJsonObject(path) {
+  try {
+    const v = JSON.parse(readFileSync4(path, "utf8"));
+    return isObject(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function readLoginPlan(path = claudeGlobalConfigPath()) {
+  const j = readJsonObject(path);
+  const oa = j?.oauthAccount;
+  return isObject(oa) && typeof oa.organizationType === "string" ? oa.organizationType : void 0;
+}
+function readRemoteDocument(configDir = claudeConfigDir()) {
+  const label = join8(configDir, "remote-settings.json");
+  const settings = readJsonObject(label);
+  return settings ? { kind: "remote", label, settings } : null;
+}
+function readFileDocument(dir = systemManagedDir()) {
+  let merged = readJsonObject(join8(dir, "managed-settings.json"));
+  const dropDir = join8(dir, "managed-settings.d");
+  let names = [];
+  try {
+    names = readdirSync(dropDir).filter((n) => n.endsWith(".json") && !n.startsWith(".")).sort();
+  } catch {
+  }
+  for (const n of names) {
+    const p = join8(dropDir, n);
+    try {
+      if (!statSync(p).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const doc = readJsonObject(p);
+    if (doc) merged = merged ? mergeSettings(merged, doc) : doc;
+  }
+  return merged ? { kind: "file", label: dir, settings: merged } : null;
+}
+function parseRegQuery(out) {
+  const m = /^\s*Settings\s+REG_(?:EXPAND_)?SZ\s+(.*)$/m.exec(out);
+  if (!m) return null;
+  try {
+    const v = JSON.parse(m[1].trim());
+    return isObject(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function readRegistry(hive, run) {
+  try {
+    return parseRegQuery(run("reg.exe", ["query", `${hive}\\SOFTWARE\\Policies\\ClaudeCode`, "/v", "Settings"]));
+  } catch {
+    return null;
+  }
+}
+function managedPlistPaths() {
+  let user = "";
+  try {
+    user = userInfo().username;
+  } catch {
+  }
+  return [
+    ...user ? [`/Library/Managed Preferences/${user}/com.anthropic.claudecode.plist`] : [],
+    "/Library/Managed Preferences/com.anthropic.claudecode.plist"
+  ];
+}
+function readMdmDocument(platform = process.platform, run = runCommand, plists = managedPlistPaths()) {
+  if (platform === "darwin") {
+    for (const p of plists) {
+      if (!existsSync5(p)) continue;
+      try {
+        const v = JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", p]));
+        if (isObject(v)) return { kind: "mdm", label: p, settings: v };
+      } catch {
+      }
+    }
+    return null;
+  }
+  if (platform === "win32") {
+    const settings = readRegistry("HKLM", run);
+    return settings ? { kind: "mdm", label: "HKLM\\SOFTWARE\\Policies\\ClaudeCode", settings } : null;
+  }
+  return null;
+}
+function readHkcuDocument(platform = process.platform, run = runCommand) {
+  if (platform !== "win32") return null;
+  const settings = readRegistry("HKCU", run);
+  return settings ? { kind: "hkcu", label: "HKCU\\SOFTWARE\\Policies\\ClaudeCode", settings } : null;
+}
+function defaultReaders(env = process.env, platform = process.platform) {
+  return {
+    remote: () => readRemoteDocument(claudeConfigDir(env)),
+    mdm: () => readMdmDocument(platform),
+    file: () => readFileDocument(systemManagedDir(platform)),
+    hkcu: () => readHkcuDocument(platform),
+    loginPlan: () => readLoginPlan(claudeGlobalConfigPath(env))
+  };
+}
+function selectManagedPolicy(readers = defaultReaders()) {
+  const plan = readers.loginPlan();
+  const admin = [
+    ...plan !== void 0 && PERSONAL_PLANS.has(plan) ? [] : [readers.remote()],
+    readers.mdm(),
+    readers.file()
+  ].filter((d) => d !== null);
+  const withPolicy = admin.filter((d) => hasPolicyKey(d.settings));
+  const steering = admin.find((d) => hasPolicyKey(d.settings) || d.settings.managedSourcesBehavior !== void 0);
+  if (steering?.settings.managedSourcesBehavior === "merge" && withPolicy.length > 1) {
+    const settings = [...withPolicy].reverse().reduce((acc, d) => mergeSettings(acc, d.settings), {});
+    return { sources: withPolicy, settings };
+  }
+  const first = withPolicy[0];
+  if (first) return { sources: [first], settings: first.settings };
+  const hkcu = readers.hkcu();
+  if (hkcu && hasPolicyKey(hkcu.settings)) return { sources: [hkcu], settings: hkcu.settings };
+  return null;
+}
+var CONTROL_KEYS, PERSONAL_PLANS, runCommand;
+var init_managed_policy = __esm({
+  "packages/peer-agent/src/managed-policy.ts"() {
+    "use strict";
+    CONTROL_KEYS = /* @__PURE__ */ new Set(["wslInheritsWindowsSettings", "managedSourcesBehavior"]);
+    PERSONAL_PLANS = /* @__PURE__ */ new Set(["claude_pro", "claude_max"]);
+    runCommand = (file, args) => execFileSync(file, args, { encoding: "utf8", timeout: 5e3, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+  }
+});
+
+// packages/peer-agent/src/join-policy.ts
+function channelOptInVia(commandLine, serverName = "mesh") {
+  for (const m of commandLine.matchAll(FLAG)) {
+    const dev = m[0].includes("--dangerously-load-development-channels");
+    for (const entry of m[1].trim().split(/\s+/)) {
+      if (entry === `server:${serverName}`) return dev ? { via: "dev" } : null;
+      if (entry.startsWith(`plugin:${serverName}@`)) {
+        return dev ? { via: "dev" } : { via: "channels", marketplace: entry.slice(`plugin:${serverName}@`.length) };
+      }
+    }
+  }
+  return null;
+}
+function readChannelPolicy(select = selectManagedPolicy) {
+  const managed = select();
+  if (!managed) return { policy: null, source: "no managed settings" };
+  return { policy: managed.settings, source: managed.sources.map((s) => `${s.kind}:${s.label}`).join(" + ") };
+}
+function orgAllows(opt, policy, plugin = "mesh") {
+  if (!policy || policy.channelsEnabled !== true) return false;
+  if (opt.via === "dev") return true;
+  return (policy.allowedChannelPlugins ?? []).some((e) => e.marketplace === opt.marketplace && e.plugin === plugin);
+}
+function decideJoin(opts) {
+  if (opts.env === "always") return { join: true, reason: "MESH_JOIN=always" };
+  if (opts.env === "never") return { join: false, reason: "MESH_JOIN=never" };
+  if (opts.sessionKind && opts.sessionKind !== "interactive") {
+    return { join: false, reason: `session kind ${opts.sessionKind}` };
+  }
+  const opt = channelOptInVia(opts.commandLine, opts.serverName);
+  if (!opt) return { join: false, reason: "parent not launched with the mesh channel" };
+  const { policy, source } = opts.policy === void 0 ? readChannelPolicy(opts.select) : { policy: opts.policy, source: "given policy" };
+  if (!orgAllows(opt, policy)) {
+    return { join: false, reason: `managed policy would reject the channel (${opt.via}; ${source}); restart once the managed settings are in place` };
+  }
+  return { join: true, reason: `channel opt-in via ${opt.via}, allowed by managed policy (${source})` };
+}
+var FLAG;
+var init_join_policy = __esm({
+  "packages/peer-agent/src/join-policy.ts"() {
+    "use strict";
+    init_managed_policy();
+    FLAG = /(?:^|\s)--(?:channels|dangerously-load-development-channels)(?:=|\s+)((?:(?:plugin|server):\S+(?:\s+|$))+)/g;
+  }
+});
+
+// packages/peer-agent/src/cli/policy.ts
+var policy_exports = {};
+__export(policy_exports, {
+  OFFICIAL_CHANNEL_PLUGINS: () => OFFICIAL_CHANNEL_PLUGINS,
+  elevatedCommands: () => elevatedCommands,
+  planInstall: () => planInstall,
+  runPolicy: () => runPolicy,
+  runPolicyInstall: () => runPolicyInstall,
+  runPolicyStatus: () => runPolicyStatus,
+  withMeshChannel: () => withMeshChannel
+});
+import { accessSync, constants, existsSync as existsSync6, mkdtempSync, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname2, join as join9, win32 } from "node:path";
+import { tmpdir } from "node:os";
+function withMeshChannel(existing, entry) {
+  const out = { ...existing ?? {} };
+  const current = Array.isArray(out.allowedChannelPlugins) ? out.allowedChannelPlugins : null;
+  const list = current ? [...current] : [...OFFICIAL_CHANNEL_PLUGINS];
+  const has = list.some((e) => typeof e === "object" && e !== null && e.marketplace === entry.marketplace && e.plugin === entry.plugin);
+  if (!has) list.push({ marketplace: entry.marketplace, plugin: entry.plugin });
+  out.channelsEnabled = true;
+  out.allowedChannelPlugins = list;
+  return out;
+}
+function planInstall(dir, entry) {
+  const target = join9(dir, "managed-settings.json");
+  let existing = null;
+  if (existsSync6(target)) {
+    const raw = readFileSync5(target, "utf8");
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${target} exists but is not valid JSON; fix or remove it first (Claude Code refuses to start with it as well)`);
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`${target} does not hold a JSON object`);
+    existing = parsed;
+  }
+  const next = withMeshChannel(existing, entry);
+  const notes = [];
+  if (existing?.channelsEnabled === false) notes.push("channelsEnabled was explicitly false in this file; it becomes true");
+  return { target, existing, next, upToDate: existing !== null && JSON.stringify(existing) === JSON.stringify(next), notes };
+}
+function elevatedCommands(platform, staged, target) {
+  const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+  if (platform === "win32") {
+    const ps = (s) => `'${s.replace(/'/g, "''")}'`;
+    return [
+      "# in an elevated PowerShell (Run as administrator):",
+      `New-Item -ItemType Directory -Force ${ps(win32.dirname(target))} | Out-Null`,
+      `Copy-Item ${ps(staged)} ${ps(target)} -Force`
+    ];
+  }
+  return [
+    `sudo mkdir -p ${q(dirname2(target))}`,
+    `sudo install -m 0644 ${q(staged)} ${q(target)}`
+  ];
+}
+function canWrite(target) {
+  try {
+    accessSync(existsSync6(target) ? target : dirname2(target), constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function argValue4(args, flag) {
+  const i = args.indexOf(flag);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
+}
+function runPolicyInstall(args, opts = {}) {
+  const log = opts.log ?? console.log;
+  const platform = opts.platform ?? process.platform;
+  const entry = { marketplace: argValue4(args, "--marketplace") ?? "sunkit", plugin: argValue4(args, "--plugin") ?? "mesh" };
+  const plan = planInstall(opts.dir ?? systemManagedDir(platform), entry);
+  const body = JSON.stringify(plan.next, null, 2) + "\n";
+  log(`target: ${plan.target}${plan.existing ? " (exists; merged, other keys kept)" : " (new file)"}`);
+  for (const n of plan.notes) log(`note: ${n}`);
+  if (plan.upToDate) {
+    log("already up to date; nothing to do");
+    return 0;
+  }
+  log(body.trimEnd());
+  if (args.includes("--write") && canWrite(plan.target)) {
+    writeFileSync4(plan.target, body);
+    log(`wrote ${plan.target}`);
+    return 0;
+  }
+  const staged = join9(mkdtempSync(join9(tmpdir(), "mesh-policy-")), "managed-settings.json");
+  writeFileSync4(staged, body);
+  log(args.includes("--write") ? `no write access to ${dirname2(plan.target)}; this tool does not elevate. Run:` : "dry run (pass --write to write it when you already have access). To install it, run:");
+  for (const c of elevatedCommands(platform, staged, plan.target)) log(`  ${c}`);
+  log("The file applies to every account on this machine; see the mesh README before installing it.");
+  return 0;
+}
+function runPolicyStatus(args, opts = {}) {
+  const log = opts.log ?? console.log;
+  const marketplace = argValue4(args, "--marketplace") ?? "sunkit";
+  const managed = selectManagedPolicy();
+  const { policy, source } = readChannelPolicy(() => managed);
+  log(`config dir:  ${claudeConfigDir()}`);
+  log(`login plan:  ${readLoginPlan(claudeGlobalConfigPath()) ?? "unknown"}`);
+  log(`policy from: ${source}`);
+  log(`channel keys: ${JSON.stringify({ channelsEnabled: policy?.channelsEnabled, allowedChannelPlugins: policy?.allowedChannelPlugins })}`);
+  const d = decideJoin({ commandLine: `claude --channels plugin:mesh@${marketplace}`, sessionKind: "interactive", select: () => managed });
+  log(`a session launched with --channels plugin:mesh@${marketplace} would ${d.join ? "join (send + receive)" : "be send-only"}: ${d.reason}`);
+  return 0;
+}
+function runPolicy(args) {
+  const [sub, ...rest] = args;
+  if (sub === "install") return runPolicyInstall(rest);
+  if (sub === "status") return runPolicyStatus(rest);
+  console.error("usage: mesh policy status [--marketplace <name>]\n       mesh policy install [--marketplace <name>] [--plugin <name>] [--write]");
+  return 2;
+}
+var OFFICIAL_CHANNEL_PLUGINS;
+var init_policy = __esm({
+  "packages/peer-agent/src/cli/policy.ts"() {
+    "use strict";
+    init_managed_policy();
+    init_join_policy();
+    OFFICIAL_CHANNEL_PLUGINS = ["telegram", "discord", "imessage", "fakechat"].map((plugin) => ({ marketplace: "claude-plugins-official", plugin }));
+  }
+});
+
 // packages/shared/dist/constants.js
 var PROTOCOL_VERSION = 1;
 var MAX_CONTENT_BYTES = 65536;
@@ -4723,7 +5062,7 @@ function writeMeshMcpConfig(dir = meshDir()) {
 // packages/peer-agent/src/cli.ts
 init_relay_url();
 loadEnvFiles();
-function argValue4(args, flag) {
+function argValue5(args, flag) {
   const i = args.indexOf(flag);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
@@ -4731,7 +5070,7 @@ async function main() {
   const [, , cmd, ...args] = process.argv;
   if (cmd === "pair") {
     const pairCode = args.find((a) => /^MESH-/.test(a)) ?? process.env.MESH_PAIR_CODE ?? "";
-    const label = argValue4(args, "--label") ?? process.env.HOSTNAME ?? "device";
+    const label = argValue5(args, "--label") ?? process.env.HOSTNAME ?? "device";
     if (!pairCode) {
       console.error("usage: mesh pair <pair-code> [--relay <url>] [--label <device>]");
       process.exit(2);
@@ -4768,7 +5107,12 @@ async function main() {
     await runSend2(args);
     return;
   }
-  console.error("commands: pair, admin, respond, send");
+  if (cmd === "policy") {
+    const { runPolicy: runPolicy2 } = await Promise.resolve().then(() => (init_policy(), policy_exports));
+    process.exitCode = runPolicy2(args);
+    return;
+  }
+  console.error("commands: pair, admin, respond, send, policy");
   process.exit(2);
 }
 main().catch((err) => {
