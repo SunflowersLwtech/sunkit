@@ -13,5 +13,6 @@ function claude {
     if ($a -in @('-p', '--print', '-h', '--help', '-v', '--version', '--channels') -or
         "$a" -like '--channels=*' -or "$a" -like '--dangerously-load-development-channels*') { $passThrough = $true }
   }
-  if ($passThrough) { & $exe @args } else { & $exe --channels plugin:mesh@claude-mesh @args }
+  # Appended, not prepended: --channels is variadic and would swallow a following prompt.
+  if ($passThrough) { & $exe @args } else { & $exe @args --channels plugin:mesh@claude-mesh }
 }

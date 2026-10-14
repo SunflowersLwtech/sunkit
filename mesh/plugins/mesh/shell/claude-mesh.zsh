@@ -12,7 +12,8 @@ claude() {
           command claude "$@"; return ;;
       esac
     done
-    command claude --channels plugin:mesh@claude-mesh "$@"
+    # Appended, not prepended: --channels is variadic and would swallow a following prompt.
+    command claude "$@" --channels plugin:mesh@claude-mesh
   else
     command claude "$@"
   fi
