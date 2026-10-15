@@ -5202,15 +5202,34 @@ __export(devin_exports, {
   devinAddArgs: () => devinAddArgs,
   parseDevinInstall: () => parseDevinInstall,
   runDevin: () => runDevin,
-  shellQuote: () => shellQuote
+  shellQuote: () => shellQuote,
+  stableNode: () => stableNode
 });
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { accessSync as accessSync2, constants as constants2 } from "node:fs";
+import { delimiter, join as join11 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function devinAddArgs(o) {
   return ["mcp", "add", "-s", o.scope, o.name, "-e", "MESH_JOIN=pull", "--", o.node, o.peer];
 }
 function shellQuote(s) {
   return /^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function isExecutable(p) {
+  try {
+    accessSync2(p, constants2.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function stableNode(path, fallback, exists = isExecutable) {
+  for (const dir of (path ?? "").split(delimiter)) {
+    if (!dir || dir.includes("fnm_multishells")) continue;
+    const candidate = join11(dir, process.platform === "win32" ? "node.exe" : "node");
+    if (exists(candidate)) return candidate;
+  }
+  return fallback;
 }
 function flag(args, name) {
   const i = args.indexOf(name);
@@ -5219,7 +5238,7 @@ function flag(args, name) {
 function parseDevinInstall(args, defaults) {
   const scope = flag(args, "--scope") ?? "user";
   if (scope !== "user" && scope !== "project" && scope !== "local") throw new Error(DEVIN_USAGE);
-  return { node: defaults.node, peer: flag(args, "--peer") ?? defaults.peer, scope, name: flag(args, "--name") ?? "mesh" };
+  return { node: flag(args, "--node") ?? defaults.node, peer: flag(args, "--peer") ?? defaults.peer, scope, name: flag(args, "--name") ?? "mesh" };
 }
 function runDevin(args, io = {}) {
   const log = io.log ?? console.log;
@@ -5229,7 +5248,7 @@ function runDevin(args, io = {}) {
     return 2;
   }
   const peer = fileURLToPath2(new URL("./mesh-peer.mjs", import.meta.url));
-  const o = parseDevinInstall(rest, { node: process.execPath, peer });
+  const o = parseDevinInstall(rest, { node: stableNode(process.env.PATH, process.execPath), peer });
   const argv = devinAddArgs(o);
   log(`devin ${argv.map(shellQuote).join(" ")}`);
   log(`If a "${o.name}" server is already configured in that scope, remove it first: devin mcp remove -s ${o.scope} ${o.name}`);
@@ -5248,7 +5267,7 @@ var DEVIN_USAGE;
 var init_devin = __esm({
   "packages/peer-agent/src/cli/devin.ts"() {
     "use strict";
-    DEVIN_USAGE = "usage: mesh devin install [--scope user|project|local] [--name mesh] [--peer <path to mesh-peer.mjs>] [--write]";
+    DEVIN_USAGE = "usage: mesh devin install [--scope user|project|local] [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--write]";
   }
 });
 

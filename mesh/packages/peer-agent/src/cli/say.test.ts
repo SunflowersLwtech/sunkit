@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parseSayArgs, sayWith, SAY_USAGE } from './say.ts'
-import { devinAddArgs, parseDevinInstall, runDevin, shellQuote } from './devin.ts'
+import { devinAddArgs, parseDevinInstall, runDevin, shellQuote, stableNode } from './devin.ts'
 import type { SessionRow } from '../resolve-target.ts'
 
 const rows: SessionRow[] = [
@@ -68,6 +68,14 @@ describe('mesh devin install', () => {
     expect(run).toHaveBeenCalledWith('devin', expect.arrayContaining(['mcp', 'add', '-e', 'MESH_JOIN=pull']))
     expect(runDevin(['bogus'], { log: () => {} })).toBe(2)
   })
+  it('uses the node on PATH (a link that survives upgrades), skipping fnm per-shell dirs; --node overrides', () => {
+    const exists = (p: string) => ['/x/fnm_multishells/123_456/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node'].includes(p)
+    expect(stableNode('/x/fnm_multishells/123_456/bin:/opt/homebrew/bin:/usr/bin', '/opt/homebrew/Cellar/node/26.0.0/bin/node', exists)).toBe('/opt/homebrew/bin/node')
+    expect(stableNode('/nowhere', '/fallback/node', exists)).toBe('/fallback/node')
+    expect(stableNode(undefined, '/fallback/node', exists)).toBe('/fallback/node')
+    expect(parseDevinInstall(['--node', '/usr/local/bin/node'], defaults).node).toBe('/usr/local/bin/node')
+  })
+
   it('quotes paths with spaces for the shell', () => {
     expect(shellQuote('/Library/Application Support/x')).toBe("'/Library/Application Support/x'")
     expect(shellQuote('/usr/bin/node')).toBe('/usr/bin/node')
