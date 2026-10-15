@@ -13,12 +13,19 @@ import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
 import { decideJoin, parentCommandLine } from './join-policy.ts'
+import { onHostClosed } from './host-lifetime.ts'
 import { fileURLToPath } from 'node:url'
 import { logJson } from './logger.ts'
 
 const IDENTITY_POLL_MS = 3_000
 
 async function main(): Promise<void> {
+  // The host closing stdin means it is gone; without this the relay stream keeps the
+  // peer alive and listed after a host that does not signal its servers (Devin CLI) exits.
+  onHostClosed(process.stdin, reason => {
+    logJson('info', 'peer.host_closed', { reason })
+    process.exit(0)
+  })
   // Installed as a plugin on a machine that was never paired: stay a silent,
   // tool-less server instead of failing (a failed server is noise in /mcp).
   if (!existsSync(defaultConfigPath())) {

@@ -37429,10 +37429,26 @@ function decideJoin(opts) {
   return { join: true, reason: `channel opt-in via ${opt.via}, allowed by managed policy (${source})` };
 }
 
+// packages/peer-agent/src/host-lifetime.ts
+function onHostClosed(stdin, onGone) {
+  let done = false;
+  const fire = (reason) => {
+    if (done) return;
+    done = true;
+    onGone(reason);
+  };
+  stdin.once("end", () => fire("stdin_end"));
+  stdin.once("close", () => fire("stdin_close"));
+}
+
 // packages/peer-agent/src/index.ts
 import { fileURLToPath } from "node:url";
 var IDENTITY_POLL_MS = 3e3;
 async function main() {
+  onHostClosed(process.stdin, (reason) => {
+    logJson("info", "peer.host_closed", { reason });
+    process.exit(0);
+  });
   if (!existsSync3(defaultConfigPath())) {
     const { server: server2 } = createMcpServer({ permissionRelay: false });
     server2.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));

@@ -31,6 +31,9 @@ afterAll(() => { rmSync(outDir, { recursive: true, force: true }) })
 interface Peer {
   call: (tool: string, args?: Record<string, unknown>) => Promise<string>
   stop: () => void
+  /** What a host such as Devin CLI does when it exits: close the pipe, send no signal. */
+  closeStdin: () => void
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
 }
 
 function childEnv(meshHome: string, extra: Record<string, string>): NodeJS.ProcessEnv {
@@ -50,6 +53,7 @@ async function startPeer(h: Harness, who: string, extra: Record<string, string>)
   let next = 1
   const waiting = new Map<number, (m: { result?: { content?: Array<{ text: string }>; isError?: boolean }; error?: unknown }) => void>()
   p.stderr.on('data', d => { stderr += d })
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(res => { p.on('exit', (code, signal) => res({ code, signal })) })
   p.on('exit', code => {
     for (const [id, res] of waiting) { waiting.delete(id); res({ error: `peer exited (${code}): ${stderr.slice(-2000)}` }) }
   })
@@ -77,6 +81,8 @@ async function startPeer(h: Harness, who: string, extra: Record<string, string>)
       return text
     },
     stop: () => { p.kill() },
+    closeStdin: () => { p.stdin.end() },
+    exited,
   }
 }
 
@@ -151,6 +157,18 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     const got = await nextMessage(inbox)
     expect(got.attrs.from).toBe('alice')
     expect(got.attrs).not.toHaveProperty('sender')
+  })
+
+  it('a pull peer exits when its host closes stdin without signalling it, and its session stops being live', async () => {
+    const devin = await peer('alice', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'devin-gone' })
+    const watcher = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-watch' })
+    await until(async () => ((await watcher.call('list_agents')).match(/^devin-gone \[[0-9a-z]{6}\] — alice@e2e · unknown · pull/m) ? true : undefined), 'devin-gone live')
+
+    devin.closeStdin()
+    const exit = await Promise.race([devin.exited, new Promise<'still running'>(r => setTimeout(() => r('still running'), 5_000))])
+    expect(exit).toEqual({ code: 0, signal: null })
+    const after = await until(async () => { const t = await watcher.call('list_agents'); return /^devin-gone .* · reconnecting/m.test(t) ? t : undefined }, 'devin-gone reconnecting')
+    expect(after).toMatch(/^devin-gone \[[0-9a-z]{6}\] — alice@e2e · reconnecting/m)
   })
 
   it('mesh say --as sends one message under that name, with --reply-to', async () => {
