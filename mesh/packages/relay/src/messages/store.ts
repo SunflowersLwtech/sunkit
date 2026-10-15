@@ -17,7 +17,7 @@ export class MessageStore {
     team_id: string,
     from_handle: string,
     msg: OutboundMessage,
-    sender: { session: string; name: string; login?: string } | null = null,
+    sender: { session?: string; name: string; login?: string } | null = null,
   ): Envelope {
     if (msg.to !== TEAM_BROADCAST_HANDLE) {
       const rcpt = this.db.prepare(

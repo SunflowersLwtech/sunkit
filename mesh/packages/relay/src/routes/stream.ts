@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { isValidMessageId, SessionIdSchema, SessionNameSchema, LoginSchema, type Envelope } from '@claude-mesh/shared'
-import { SessionOwnershipError, type SessionStatus } from '../sessions/registry.ts'
+import { SessionOwnershipError, type SessionMode, type SessionStatus } from '../sessions/registry.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
 import type { Subscriber } from '../fanout.ts'
@@ -28,6 +28,7 @@ export function streamRoute(deps: Deps) {
       const statusQ = c.req.query('status')
       const status: SessionStatus | undefined =
         statusQ === 'busy' || statusQ === 'idle' ? statusQ : undefined
+      const mode: SessionMode = c.req.query('mode') === 'pull' ? 'pull' : 'push'
       try {
         deps.sessions!.attach({
           session_id: sid.data,
@@ -39,6 +40,7 @@ export function streamRoute(deps: Deps) {
           cwd: c.req.query('cwd')?.slice(0, 1024),
           login: LoginSchema.safeParse(c.req.query('login')).data,
           status,
+          mode,
         })
       } catch (err) {
         if (err instanceof SessionOwnershipError) return c.json({ error: 'session_owned_elsewhere' }, 409)

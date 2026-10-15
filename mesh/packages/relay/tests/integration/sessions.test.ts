@@ -189,6 +189,60 @@ describe('self-reported Claude login', () => {
   })
 })
 
+describe('send-only sender labels and session modes', () => {
+  let app: ReturnType<typeof buildApp>
+  let sessions: SessionRegistry
+  let tok: { alice: string; bob: string }
+  const post = (token: string, body: unknown, headers: Record<string, string> = {}) =>
+    app.request('/v1/messages', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+
+  beforeEach(() => {
+    const db = openDatabase(':memory:')
+    tok = seed(db)
+    sessions = new SessionRegistry()
+    app = buildApp({ db, store: new MessageStore(db), fanout: new Fanout(), presence: new PresenceRegistry(), sessions, now: () => new Date() })
+  })
+
+  it('stamps the name a session-less sender gives as from_name, without a from_session', async () => {
+    const bob1 = await app.request(`/v1/stream?session=${S_BOB1}&name=repo-x`, { headers: { authorization: `Bearer ${tok.bob}` } })
+    const res = await post(tok.alice, { to: 'bob', to_session: S_BOB1, kind: 'chat', content: 'from a script' }, { 'x-mesh-sender-name': 'devin-smoke' })
+    expect(res.status).toBe(201)
+    const env = await res.json() as Record<string, unknown>
+    expect(env.from).toBe('alice')
+    expect(env.from_name).toBe('devin-smoke')
+    expect(env.from_session).toBeNull()
+    const [got] = await readEvents(bob1.body!, 1)
+    expect(got).toContain('"from_name":"devin-smoke"')
+    expect(got).toContain('"from_session":null')
+  })
+
+  it('rejects a sender label that is not a valid session name', async () => {
+    const res = await post(tok.alice, { to: 'bob', kind: 'chat', content: 'x' }, { 'x-mesh-sender-name': 'fr-artifacts [vx3kf7]' })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid_sender_name' })
+  })
+
+  it('a claimed sender session wins over a label: the label cannot rename a session', async () => {
+    await app.request(`/v1/stream?session=${S_ALICE}&name=alice-main`, { headers: { authorization: `Bearer ${tok.alice}` } })
+    const res = await post(tok.alice, { to: 'bob', kind: 'chat', content: 'x' }, { 'x-mesh-session': S_ALICE, 'x-mesh-sender-name': 'someone-else' })
+    const env = await res.json() as Record<string, unknown>
+    expect(env.from_name).toBe('alice-main')
+    expect(env.from_session).toBe(S_ALICE)
+  })
+
+  it('records the session mode from the stream (pull when asked, push otherwise) and lists it', async () => {
+    await app.request(`/v1/stream?session=${S_ALICE}&name=devin-a&mode=pull`, { headers: { authorization: `Bearer ${tok.alice}` } })
+    await app.request(`/v1/stream?session=${S_BOB1}&name=repo-x`, { headers: { authorization: `Bearer ${tok.bob}` } })
+    await app.request(`/v1/stream?session=${S_BOB2}&name=repo-y&mode=bogus`, { headers: { authorization: `Bearer ${tok.bob}` } })
+    const list = await (await app.request('/v1/sessions', { headers: { authorization: `Bearer ${tok.alice}` } })).json() as Array<Record<string, string>>
+    expect(Object.fromEntries(list.map(r => [r.name, r.mode]))).toEqual({ 'devin-a': 'pull', 'repo-x': 'push', 'repo-y': 'push' })
+  })
+})
+
 describe('POST /v1/auth/pair rate limit', () => {
   it('returns 429 after 10 attempts per minute from one address', async () => {
     const db = openDatabase(':memory:')

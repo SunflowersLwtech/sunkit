@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { OutboundMessageSchema, TEAM_BROADCAST_HANDLE, type Envelope } from '@claude-mesh/shared'
+import { OutboundMessageSchema, SessionNameSchema, TEAM_BROADCAST_HANDLE, type Envelope } from '@claude-mesh/shared'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import { hashToken } from '../auth/hash.ts'
 import { rateLimit } from '../middleware/rate-limit.ts'
@@ -27,12 +27,21 @@ export function messagesRoute(deps: Deps) {
     }
 
     // Sender session: optional, but if claimed it must belong to this token.
-    let sender: { session: string; name: string; login?: string } | null = null
+    let sender: { session?: string; name: string; login?: string } | null = null
     const claimed = c.req.header('x-mesh-session')
     if (claimed !== undefined) {
       const own = deps.sessions!.owned(claimed, tokenId)
       if (!own) return c.json({ error: 'unknown_sender_session' }, 403)
       sender = { session: own.session_id, name: own.name, ...(own.login ? { login: own.login } : {}) }
+    } else {
+      // A send-only sender (a script, a CLI, an agent without a session) may label itself.
+      // The label is the account's own choice, like a session name; only the account is verified.
+      const label = c.req.header('x-mesh-sender-name')
+      if (label !== undefined) {
+        const name = SessionNameSchema.safeParse(label)
+        if (!name.success) return c.json({ error: 'invalid_sender_name' }, 400)
+        sender = { name: name.data }
+      }
     }
 
     // Session-addressed messages need a live (or reconnecting) target owned by `to`.

@@ -50,8 +50,10 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
       // Sender-controlled meta goes first so relay-set identity fields always win.
       meta: {
         ...withoutReserved(safeMeta),
-        // `from` is the reply address: the sender's session when it has one, else its handle.
-        from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from,
+        // `from` is the reply address: the sender's session when it has one, else the name a
+        // send-only sender gave (marked by `sender`), else its handle.
+        from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : (e.from_name ?? e.from),
+        ...(!e.from_session && e.from_name ? { sender: 'send-only' } : {}),
         account: e.from,
         ...(e.from_login ? { login: e.from_login } : {}),
         msg_id: e.id,
@@ -63,7 +65,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
   }
 }
 
-const RESERVED_META_KEYS = new Set(['from', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+const RESERVED_META_KEYS = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 function withoutReserved(meta: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)))

@@ -33,6 +33,21 @@ describe('envelopeToChannelNotification', () => {
     expect(n.params.meta.account).toBe('alice')
   })
 
+  it('shows a send-only sender by the name it gave, marked sender="send-only"; a session sender has no marker', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({ from_name: 'devin-smoke' }))
+    expect(n.params.meta.from).toBe('devin-smoke')
+    expect(n.params.meta.sender).toBe('send-only')
+    expect(n.params.meta.account).toBe('alice')
+    const s = envelopeToChannelNotification(baseEnvelope({ from_session: 's_01hrk7y00000000000a1b2c3', from_name: 'devin-smoke' }))
+    expect(s.params.meta).not.toHaveProperty('sender')
+    expect(envelopeToChannelNotification(baseEnvelope()).params.meta).not.toHaveProperty('sender')
+  })
+
+  it('sender meta cannot forge the send-only marker', () => {
+    const n = envelopeToChannelNotification(baseEnvelope({ meta: { sender: 'send-only' } }))
+    expect(n.params.meta).not.toHaveProperty('sender')
+  })
+
   it('shows the relay-stamped login, and sender meta cannot forge it', () => {
     const n = envelopeToChannelNotification(baseEnvelope({ from_login: 'real@x.com', meta: { login: 'ceo@x.com' } }))
     expect(n.params.meta.login).toBe('real@x.com')
