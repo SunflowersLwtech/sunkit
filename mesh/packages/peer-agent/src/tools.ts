@@ -3,8 +3,10 @@ import type { OutboundMessage, MessageId } from '@claude-mesh/shared'
 import type { RelayClient } from './outbound.ts'
 import type { ReplyLimiter } from './reply-limiter.ts'
 import { resolveTarget, formatListing, formatAddress } from './resolve-target.ts'
+import { formatInbox, type Inbox } from './inbox.ts'
 
 const ListInput = z.object({}).strict()
+const ReadInput = z.object({ limit: z.number().int().min(1).max(100).optional() }).strict()
 const SendMessageInput = z.object({
   to: z.string().min(1),
   message: z.string().min(1),
@@ -14,7 +16,7 @@ const SendMessageInput = z.object({
 export const TOOL_DESCRIPTORS = [
   {
     name: 'list_agents',
-    description: 'List the live Claude Code sessions on the mesh — including sessions signed in to other accounts on other machines — that send_message can reach. Each row is "name [ref] — account@device · busy|idle · cwd".',
+    description: 'List the live Claude Code sessions on the mesh — including sessions signed in to other accounts on other machines — that send_message can reach. Each row is "name [ref] — account@device · busy|idle · cwd". Rows marked "pull" are agents that read their messages when they check their inbox, so their replies can take a while.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -32,14 +34,29 @@ export const TOOL_DESCRIPTORS = [
   },
 ] as const
 
+/** Pull mode (hosts without channels) also gets read_messages. */
+export const PULL_TOOL_DESCRIPTORS = [
+  ...TOOL_DESCRIPTORS,
+  {
+    name: 'read_messages',
+    description: 'Return the messages other sessions sent to this session since the last call, oldest first, and clear them from the inbox. This host does not show mesh messages on its own: call it when you start a task, before you report back, and while you wait for a reply.',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'number', description: 'at most this many messages (default 20, max 100)' } },
+    },
+  },
+] as const
+
 export interface ToolOpts {
   /** This session's id; excluded from send targets and marked in listings. */
   selfSessionId: string
   replyLimiter?: ReplyLimiter | undefined
+  /** Set in pull mode: enables read_messages. */
+  inbox?: Inbox | undefined
 }
 
 export function registerTools(client: RelayClient, opts: ToolOpts) {
-  const { selfSessionId, replyLimiter } = opts
+  const { selfSessionId, replyLimiter, inbox } = opts
   async function callTool(name: string, args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
     if (name === 'list_agents') {
       ListInput.parse(args)
@@ -66,6 +83,10 @@ export function registerTools(client: RelayClient, opts: ToolOpts) {
       replyLimiter?.recordOutbound(address)
       const state = env.delivered_at ? 'delivered' : 'queued (session reconnecting)'
       return { content: [{ type: 'text', text: `${state} to ${address} (${env.id})` }] }
+    }
+    if (name === 'read_messages' && inbox) {
+      const input = ReadInput.parse(args ?? {})
+      return { content: [{ type: 'text', text: formatInbox(inbox.take(input.limit)) }] }
     }
     throw new Error(`unknown tool: ${name}`)
   }

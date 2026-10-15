@@ -7,6 +7,8 @@ export interface RelayClientOpts {
   token: string
   /** This Claude Code session's id; sent as x-mesh-session so the relay can stamp from_session. */
   sessionId?: string
+  /** Name a send-only sender gives itself (no session); sent as x-mesh-sender-name. */
+  senderName?: string
 }
 
 interface Injected { fetch?: typeof globalThis.fetch }
@@ -34,7 +36,9 @@ export class RelayClient {
         authorization: `Bearer ${this.opts.token}`,
         'content-type': 'application/json',
         'idempotency-key': ulid().toLowerCase(),
-        ...(this.opts.sessionId ? { 'x-mesh-session': this.opts.sessionId } : {}),
+        ...(this.opts.sessionId
+          ? { 'x-mesh-session': this.opts.sessionId }
+          : this.opts.senderName ? { 'x-mesh-sender-name': this.opts.senderName } : {}),
       },
       body: JSON.stringify(msg),
     })

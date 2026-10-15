@@ -3,16 +3,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer } from './mcp-server.ts'
 import { loadConfig, loadToken, assertTokenNotInRepo, defaultConfigPath } from './config.ts'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { RelayClient } from './outbound.ts'
-import { registerTools, TOOL_DESCRIPTORS } from './tools.ts'
+import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.ts'
+import { chooseJoinMode, Inbox } from './inbox.ts'
 import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
 import { decideJoin, parentCommandLine } from './join-policy.ts'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { logJson } from './logger.ts'
 
 const IDENTITY_POLL_MS = 3_000
@@ -31,28 +32,42 @@ async function main(): Promise<void> {
   assertTokenNotInRepo(cfg.token_path)
   const token = loadToken(cfg.token_path)
 
-  // Permission relay is deliberately never offered: under bypass-permissions it
-  // would only add a path for a peer to answer prompts on this machine.
-  const { server } = createMcpServer({ permissionRelay: false })
-
   const cwd = process.cwd()
   let identity: SessionSnapshot = probeClaudeSession({ cwd })
-  let login = readClaudeLogin()
-  // Only sessions that will actually receive pushes register as reachable.
-  const decision = decideJoin({
+  // Only sessions that will actually receive messages register as reachable: pushed
+  // through a Claude Code channel, or (MESH_JOIN=pull) held for read_messages.
+  const decision = chooseJoinMode(process.env.MESH_JOIN, () => decideJoin({
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
     sessionKind: identity.kind,
-  })
-  const sessionId = decision.join ? mintSessionId() : ''
-  const client = new RelayClient({ relayUrl: cfg.relay_url, token, ...(decision.join ? { sessionId } : {}) })
+  }))
+  const pull = decision.mode === 'pull'
+  const joins = decision.mode !== 'send'
+  // The login shown in list_agents is the machine's Claude login; a pull host is not Claude.
+  const readLogin = () => (pull ? undefined : readClaudeLogin())
+  let login = readLogin()
 
+  // Permission relay is deliberately never offered: under bypass-permissions it
+  // would only add a path for a peer to answer prompts on this machine.
+  const { server } = createMcpServer({ permissionRelay: false, pull })
+
+  const sessionId = joins ? mintSessionId() : ''
+  // A send-only peer with a name set (MESH_SESSION_NAME) still signs its messages with it.
+  const senderName = !joins && process.env.MESH_SESSION_NAME?.trim() ? identity.name : undefined
+  const client = new RelayClient({
+    relayUrl: cfg.relay_url, token,
+    ...(joins ? { sessionId } : {}),
+    ...(senderName ? { senderName } : {}),
+  })
+
+  const inbox = pull ? new Inbox() : undefined
   const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
-  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter })
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox })
 
   // Static tool list: never changes for the life of the process, so it never
   // invalidates the session's prompt cache.
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOL_DESCRIPTORS] }))
+  const tools = pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...tools] }))
   server.setRequestHandler(CallToolRequestSchema, async req => {
     try { return await callTool(req.params.name, req.params.arguments ?? {}) }
     catch (err) {
@@ -64,11 +79,11 @@ async function main(): Promise<void> {
   server.onerror = err => { logJson('error', 'peer.mcp.error', describeError(err)) }
 
   logJson('info', 'peer.startup', {
-    relay_url: cfg.relay_url, session: sessionId, name: identity.name, join: decision.join, reason: decision.reason,
+    relay_url: cfg.relay_url, session: sessionId, name: identity.name, join: joins, mode: decision.mode, reason: decision.reason,
   })
   await server.connect(new StdioServerTransport())
   // Send-only: tools work, but this session is not listed and receives nothing.
-  if (!decision.join) return
+  if (!joins) return
 
   // Seed the roster. A relay outage at startup must not break the Claude Code
   // session: start empty and let the refresh loop recover.
@@ -87,7 +102,7 @@ async function main(): Promise<void> {
   // Follow Claude Code's own name/status for this session (read-only).
   setInterval(() => {
     const next = probeClaudeSession({ cwd })
-    const nextLogin = readClaudeLogin()
+    const nextLogin = readLogin()
     if (next.name === identity.name && next.status === identity.status && nextLogin === login) return
     identity = next
     login = nextLogin
@@ -100,7 +115,11 @@ async function main(): Promise<void> {
     gate,
     sessionId,
     chatOnly: true,
-    emit: n => { void server.notification(n as never) },
+    // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
+    emit: n => {
+      if (inbox) { if (n.method === 'notifications/claude/channel') inbox.push(n.params as { content: string; meta: Record<string, string> }) }
+      else void server.notification(n as never)
+    },
     setCursor: id => { cursor = id },
     replyLimiter,
   })
@@ -109,7 +128,7 @@ async function main(): Promise<void> {
     relayUrl: cfg.relay_url,
     token,
     sinceCursor: () => cursor,
-    sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...(login ? { login } : {}) }),
+    sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...(login ? { login } : {}), ...(pull ? { mode: 'pull' } : {}) }),
     onEnvelope: e => dispatcher.handle(e),
     onAuthError: () => { logJson('error', 'peer.auth_failed'); process.exit(2) },
   })
@@ -139,8 +158,13 @@ function describeError(err: unknown): Record<string, string> {
   return out
 }
 
-const invokedAsScript = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]!).href
-if (invokedAsScript) {
+// Compare real paths: started through a symlink (macOS /var -> /private/var, a linked
+// checkout), the two spellings differ and the server would exit without running.
+function invokedAsScript(): boolean {
+  if (!process.argv[1]) return false
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]) } catch { return false }
+}
+if (invokedAsScript()) {
   main().catch(err => {
     logJson('error', 'peer.fatal', describeError(err))
     process.exit(1)
