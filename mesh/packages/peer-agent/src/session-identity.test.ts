@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -8,7 +8,9 @@ import { utimesSync } from 'node:fs'
 
 describe('session identity', () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mesh-sess-')) })
+  const savedEnvName = process.env.MESH_SESSION_NAME
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mesh-sess-')); delete process.env.MESH_SESSION_NAME })
+  afterEach(() => { if (savedEnvName === undefined) delete process.env.MESH_SESSION_NAME; else process.env.MESH_SESSION_NAME = savedEnvName })
   const put = (pid: number, body: object) => writeFileSync(join(dir, `${pid}.json`), JSON.stringify(body))
 
   it('mints ids the relay accepts', () => {
@@ -42,6 +44,33 @@ describe('session identity', () => {
     expect(probeClaudeSession({ sessionsDir: join(dir, 'nope'), ppid: 7, cwd: '/w/my repo' }))
       .toEqual({ name: 'my-repo', status: 'unknown' })
     expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' })).toEqual({ name: 'x', status: 'unknown' })
+  })
+
+  it('MESH_SESSION_NAME names a session that has no Claude session file (Devin, scripts)', () => {
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x', envName: 'devin-a' }))
+      .toEqual({ name: 'devin-a', status: 'unknown' })
+  })
+
+  it('a Claude session file still wins over MESH_SESSION_NAME (Claude Code behaviour unchanged)', () => {
+    put(4242, { pid: 4242, cwd: '/w/repo', name: 'repo-1c', status: 'busy', kind: 'interactive' })
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 4242, cwd: '/w/repo', envName: 'devin-a' }))
+      .toEqual({ name: 'repo-1c', status: 'busy', kind: 'interactive' })
+  })
+
+  it('a set name is not replaced by a live Claude session that happens to share the directory', () => {
+    put(3, { pid: 3, cwd: '/w/repo', name: 'claude-x', status: 'idle', startedAt: 5 })
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 999, cwd: '/w/repo', isAlive: () => true, envName: 'devin-b' }).name).toBe('devin-b')
+    // Without a set name the wrapped-launch lookup still applies, as before.
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 999, cwd: '/w/repo', isAlive: () => true }).name).toBe('claude-x')
+  })
+
+  it('reads MESH_SESSION_NAME from the environment, trimmed and sanitized; blank means unset', () => {
+    process.env.MESH_SESSION_NAME = '  my devin [1] '
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' }).name).toBe('my-devin-1')
+    process.env.MESH_SESSION_NAME = '   '
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' }).name).toBe('x')
+    delete process.env.MESH_SESSION_NAME
+    expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' }).name).toBe('x')
   })
 
   it('reads the signed-in claude.ai email and notices a /login switch', () => {

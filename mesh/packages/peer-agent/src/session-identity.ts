@@ -58,6 +58,8 @@ export interface IdentityProbeOpts {
   ppid?: number
   cwd?: string
   isAlive?: (pid: number) => boolean
+  /** Name for hosts other than Claude Code; defaults to MESH_SESSION_NAME. */
+  envName?: string | undefined
 }
 
 function defaultIsAlive(pid: number): boolean {
@@ -82,14 +84,18 @@ export function probeClaudeSession(opts: IdentityProbeOpts = {}): SessionSnapsho
   const dir = opts.sessionsDir ?? join(claudeConfigDir(), 'sessions')
   const cwd = opts.cwd ?? process.cwd()
   const isAlive = opts.isAlive ?? defaultIsAlive
-  const fallback: SessionSnapshot = { name: sanitizeName(basename(cwd)), status: 'unknown' }
+  // A name set for this server (MESH_SESSION_NAME) beats the working directory's.
+  const envName = (opts.envName ?? process.env.MESH_SESSION_NAME)?.trim() || undefined
+  const fallback: SessionSnapshot = { name: sanitizeName(envName ?? basename(cwd)), status: 'unknown' }
 
   // 1) The common case: Claude Code spawned us directly, so our parent is the session.
   const ppid = opts.ppid ?? process.ppid
   let file = readSessionFile(join(dir, `${ppid}.json`))
 
   // 2) Wrapped launch (e.g. cmd.exe on Windows): newest live session in the same cwd.
-  if (!file) {
+  //    Skipped when a name was set: another host (Devin, a script) running in a Claude
+  //    session's directory must not borrow that session's name.
+  if (!file && !envName) {
     let entries: string[] = []
     try { entries = readdirSync(dir).filter(f => f.endsWith('.json')) } catch { /* no registry */ }
     const candidates = entries

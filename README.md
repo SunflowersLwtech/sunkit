@@ -42,7 +42,9 @@ claude --channels plugin:mesh@sunkit
 It also needs a running relay, a pairing code per machine, and (on Team/Enterprise plans) an
 org allowlist entry `{ "marketplace": "sunkit", "plugin": "mesh" }` under
 `allowedChannelPlugins`; [mesh/README.md](mesh/README.md) walks through all three, plus the
-shell wrappers that add the `--channels` flag to plain `claude`.
+shell wrappers that add the `--channels` flag to plain `claude`. Agents without channels, such as
+Devin CLI, join in pull mode and read their messages with `read_messages`; scripts can send with
+`mesh say` ([mesh/README.md](mesh/README.md#devin-cli-and-other-agents-without-channels)).
 
 ## session-rescue
 

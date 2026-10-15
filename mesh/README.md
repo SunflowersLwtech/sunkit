@@ -250,6 +250,67 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI and other MCP hosts), named send-only senders, `mesh say` |
+
+## Devin CLI and other agents without channels
+
+Claude Code shows mesh messages as they arrive through its channel. Devin CLI, and other agents
+that speak MCP but have no channels, can't receive pushed messages, so the peer runs in **pull
+mode** for them: the session is listed like any other, marked `pull`, and messages addressed to it
+wait in an inbox until the agent calls `read_messages`. Expect replies from a pull session to come
+later than from a Claude Code session.
+
+Set it up once per machine (after `mesh pair`):
+
+```bash
+M=~/sunkit/mesh/plugins/mesh/server/mesh-cli.mjs
+node $M devin install            # prints the devin mcp add command
+node $M devin install --write    # or runs it (user scope; --scope local for one project)
+```
+
+which amounts to:
+
+```bash
+devin mcp add -s user mesh -e MESH_JOIN=pull -- /path/to/node ~/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs
+```
+
+Give each Devin session a name before starting it, so others can address it and see who wrote:
+
+```bash
+export MESH_SESSION_NAME=docs-devin
+devin
+```
+
+A session's name comes from the first of: Claude Code's own name for the session, then
+`MESH_SESSION_NAME`, then the working directory's name. Claude Code sessions are therefore named as
+before, and a Devin session started in a Claude Code session's directory keeps its own name instead
+of borrowing that session's.
+
+**Sending without a session.** A script, or an agent that has no MCP connection to the mesh, can
+send one message with:
+
+```bash
+node $M say --as docs-devin lead "[docs-devin] gates are green"
+node $M say --as docs-devin --reply-to msg_… lead -    # message from stdin
+```
+
+The name comes from `--as`, else `MESH_SESSION_NAME`. Such a sender is not registered, so it
+receives nothing; recipients see `from="docs-devin"` with `sender="send-only"`. Only the
+account is verified for these: the name is a label the account chose, the same trust as a session
+name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOIN=never` and
+`MESH_SESSION_NAME` signs its messages the same way.
+
+| Variable | Effect |
+|---|---|
+| `MESH_JOIN` | `pull`: join in pull mode (hosts without channels). `never`: send only. `always`: join regardless. Unset: Claude Code's rules above. |
+| `MESH_SESSION_NAME` | name for a session that Claude Code doesn't name, and for send-only senders |
+| `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
+
+The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from
+this version. Against an older relay, pull sessions still work but show no marker, and send-only
+senders show their account handle as before; older peers on the receiving side also show the handle.
+The inbox holds the 200 most recent messages; anything older is dropped and the next
+`read_messages` says how many.
 
 ## Development
 

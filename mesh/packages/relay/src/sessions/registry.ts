@@ -1,6 +1,8 @@
 import { sessionRef } from '@claude-mesh/shared'
 
 export type SessionStatus = 'busy' | 'idle' | 'unknown'
+/** push: the host shows messages as they arrive (Claude Code channels); pull: the host reads them when it checks its inbox. */
+export type SessionMode = 'push' | 'pull'
 
 export interface SessionEntry {
   session_id: string
@@ -12,6 +14,7 @@ export interface SessionEntry {
   cwd?: string
   login?: string
   status: SessionStatus
+  mode: SessionMode
   streams: number
   last_seen: string
   /** Epoch ms when the last stream closed; the entry stays addressable until the grace period ends. */
@@ -28,6 +31,7 @@ export interface SessionView {
   cwd?: string
   login?: string
   status: SessionStatus | 'reconnecting'
+  mode: SessionMode
   last_seen: string
 }
 
@@ -41,6 +45,7 @@ export interface AttachInput {
   cwd?: string | undefined
   login?: string | undefined
   status?: SessionStatus | undefined
+  mode?: SessionMode | undefined
 }
 
 export class SessionOwnershipError extends Error {}
@@ -72,6 +77,7 @@ export class SessionRegistry {
       device: input.device,
       name: input.name,
       status: input.status ?? existing?.status ?? 'unknown',
+      mode: input.mode ?? existing?.mode ?? 'push',
       streams: (existing?.streams ?? 0) + 1,
       last_seen: new Date(this.now()).toISOString(),
     }
@@ -126,6 +132,7 @@ export class SessionRegistry {
         account: e.handle,
         device: e.device,
         status: e.streams > 0 ? e.status : 'reconnecting',
+        mode: e.mode,
         last_seen: e.last_seen,
       }
       if (e.cwd !== undefined) view.cwd = e.cwd

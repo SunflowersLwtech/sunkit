@@ -18,7 +18,7 @@ upgrades.
 
 | # | Threat | v1 mitigation |
 |---|---|---|
-| 1 | Peer impersonation | Relay stamps `from`/`account` from the authenticated bearer token and the sending session from the session that token owns; sender-supplied metadata can no longer override them (an upstream bug let `meta.from` overwrite the relay value). A session id cannot be attached or spoken for by another token. |
+| 1 | Peer impersonation | Relay stamps `from`/`account` from the authenticated bearer token and the sending session from the session that token owns; sender-supplied metadata can no longer override them (an upstream bug let `meta.from` overwrite the relay value). A session id cannot be attached or spoken for by another token. A send-only sender may label its messages with a name (`x-mesh-sender-name`); for those only the account is verified, and receivers see `sender="send-only"` and no `[ref]`. |
 | 2 | Outsider injection | Bearer auth + team-scoped tokens on every route. |
 | 3 | Relay compromise | **Out of scope in v1.** The relay is a trust anchor — a compromised relay could forge `from`. Client-side signatures are the planned v2 answer. Host it accordingly (Tailscale/private network, not the open internet). |
 | 4 | Compromised peer machine | Containment + no permission relay + reply-storm limiter. **Under `--dangerously-skip-permissions` a paired peer can effectively drive your session; pair only accounts you trust that far.** |

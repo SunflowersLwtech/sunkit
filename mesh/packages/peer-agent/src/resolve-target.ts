@@ -7,6 +7,8 @@ export interface SessionRow {
   cwd?: string
   login?: string
   status: string
+  /** Set by relays that know it; "pull" sessions read their inbox on their own schedule. */
+  mode?: string
   last_seen: string
 }
 
@@ -52,6 +54,7 @@ export function formatListing(rows: SessionRow[], selfId: string): string {
     const self = r.session_id === selfId ? ' (this session)' : ''
     const where = r.cwd ? ` · ${r.cwd}` : ''
     const who = r.login ? `${r.login} (mesh ${r.account}@${r.device})` : `${r.account}@${r.device}`
-    return `${formatAddress(r)}${self} — ${who} · ${r.status}${where}`
+    const pull = r.mode === 'pull' ? ' · pull' : ''
+    return `${formatAddress(r)}${self} — ${who} · ${r.status}${pull}${where}`
   }).join('\n')
 }
