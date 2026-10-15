@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionIdSchema, SessionNameSchema } from '@claude-mesh/shared'
@@ -61,5 +61,19 @@ describe('session identity', () => {
     utimesSync(f, new Date(), new Date(Date.now() + 9000))
     expect(readClaudeLogin(f)).toBeUndefined()
     expect(readClaudeLogin(join(dir, 'nope.json'))).toBeUndefined()
+  })
+
+  it('reads the session registry and the login from CLAUDE_CONFIG_DIR when it is set', () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = dir
+      mkdirSync(join(dir, 'sessions'))
+      writeFileSync(join(dir, 'sessions', '5150.json'), JSON.stringify({ pid: 5150, cwd: '/w/max', name: 'max-1', status: 'idle', kind: 'interactive' }))
+      writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'max@example.com' } }))
+      expect(probeClaudeSession({ ppid: 5150, cwd: '/w/max' })).toEqual({ name: 'max-1', status: 'idle', kind: 'interactive' })
+      expect(readClaudeLogin()).toBe('max@example.com')
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved
+    }
   })
 })

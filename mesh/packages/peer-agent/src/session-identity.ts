@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
-import { homedir } from 'node:os'
 import { ulid } from 'ulid'
+import { claudeConfigDir, claudeGlobalConfigPath } from './managed-policy.ts'
 
 export type SessionStatus = 'busy' | 'idle' | 'unknown'
 
@@ -19,7 +19,7 @@ let loginCache: { path: string; mtimeMs: number; login: string | undefined } | n
  * from its global config. Display only: the mesh identity is the paired token.
  * Re-read only when the file changes, so `/login` mid-session shows up.
  */
-export function readClaudeLogin(path = claudeConfigPath()): string | undefined {
+export function readClaudeLogin(path = claudeGlobalConfigPath()): string | undefined {
   try {
     const mtimeMs = statSync(path).mtimeMs
     if (loginCache && loginCache.path === path && loginCache.mtimeMs === mtimeMs) return loginCache.login
@@ -31,11 +31,6 @@ export function readClaudeLogin(path = claudeConfigPath()): string | undefined {
   } catch {
     return undefined
   }
-}
-
-function claudeConfigPath(): string {
-  const dir = process.env.CLAUDE_CONFIG_DIR
-  return dir ? join(dir, '.claude.json') : join(homedir(), '.claude.json')
 }
 
 /** One id per peer-agent process, i.e. per Claude Code session. */
@@ -77,13 +72,14 @@ function readSessionFile(path: string): ClaudeSessionFile | undefined {
 
 /**
  * Read-only peek at Claude Code's own per-process session registry
- * (~/.claude/sessions/<pid>.json) so a mesh session carries the same name and
- * busy/idle status the user sees natively. The file format is internal to
+ * (<config dir>/sessions/<pid>.json; the config dir is CLAUDE_CONFIG_DIR or
+ * ~/.claude) so a mesh session carries the same name and busy/idle status
+ * the user sees natively. The file format is internal to
  * Claude Code, so every field is optional and any failure falls back to the
  * working directory's basename with status "unknown". Nothing is ever written.
  */
 export function probeClaudeSession(opts: IdentityProbeOpts = {}): SessionSnapshot {
-  const dir = opts.sessionsDir ?? join(homedir(), '.claude', 'sessions')
+  const dir = opts.sessionsDir ?? join(claudeConfigDir(), 'sessions')
   const cwd = opts.cwd ?? process.cwd()
   const isAlive = opts.isAlive ?? defaultIsAlive
   const fallback: SessionSnapshot = { name: sanitizeName(basename(cwd)), status: 'unknown' }

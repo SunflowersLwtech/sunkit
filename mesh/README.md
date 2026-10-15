@@ -99,6 +99,49 @@ entries. Without this step you can still use the mesh, but every launch needs
 `--dangerously-load-development-channels plugin:mesh@sunkit` and shows a confirmation
 dialog.
 
+#### Personal Pro / Max accounts (no organization)
+
+A personal Pro or Max login has no organization, so no server-managed settings reach it and
+Claude Code checks `--channels` against Anthropic's default channel list, which doesn't include
+this plugin: the session starts, but the channel doesn't register. The development flag gets
+around that, but it shows a confirmation dialog on every launch, has no "remember" option, and
+skips the allowlist altogether.
+
+Put the same two keys in the machine's own managed settings file instead. Claude Code applies
+the first managed source that carries a policy key, and it checks the org's server-managed
+settings before the machine's MDM profile and `managed-settings.json`
+([how Claude Code combines managed sources](https://code.claude.com/docs/en/managed-settings#how-claude-code-combines-managed-sources)):
+
+- signed in to a Team/Enterprise org whose managed settings carry a policy: the org's settings
+  apply and the file is ignored;
+- signed in with a personal Pro/Max plan: the file applies, and plain `--channels` (or the shell
+  wrapper) registers the channel without a dialog.
+
+```bash
+M=~/sunkit/mesh/plugins/mesh/server/mesh-cli.mjs
+node $M policy install   # prints the merged file and the commands that put it in place
+node $M policy status    # which managed source applies here, and whether a session would join
+```
+
+`policy install` merges into an existing file: other keys stay, and an existing
+`allowedChannelPlugins` only gains the mesh entry (without one, the four official entries come
+along). It stages the result in a temp directory and prints the commands that copy it to
+`/Library/Application Support/ClaudeCode/` (macOS), `/etc/claude-code/` (Linux) or
+`C:\Program Files\ClaudeCode\` (Windows, elevated PowerShell). It never elevates itself;
+`--write` writes directly only when you already have write access there.
+
+**What the file means for the machine.** It is an administrator policy for every account and
+every OS user on the machine, not a personal preference:
+
+- It turns channels on and replaces Anthropic's default channel list for every login that gets
+  no server-managed policy: personal plans, Console API keys, and also Team/Enterprise orgs
+  that haven't set any managed settings, whose admins never turned channels on. Sessions still
+  opt in one by one with `--channels`.
+- It cannot loosen an org's server-managed settings; those win whenever they carry a policy key.
+- Whoever can write the system directory controls it. If another tool already owns
+  `managed-settings.json`, Claude Code also merges `managed-settings.d/*.json` drop-ins (lists
+  union), but `policy install` only edits `managed-settings.json`.
+
 ### 3. Each machine
 
 ```bash
@@ -148,13 +191,20 @@ A session is listed (and can receive) only when **all** of these hold:
 1. it is interactive (not `claude -p`, not an SDK run);
 2. its Claude Code process was launched with the mesh channel (`--channels plugin:mesh@…`, or
    the dev flag);
-3. Claude Code's cached org policy will actually accept that channel.
+3. the managed settings Claude Code applies will actually accept that channel: the org's cached
+   server-managed settings when they carry a policy, otherwise the machine's MDM profile,
+   `managed-settings.json` (plus drop-ins) or, on Windows, the HKCU policy value, in Claude
+   Code's order. A personal Pro/Max login skips a server-managed cache left behind by another
+   login, because Claude Code doesn't deliver server-managed settings to personal plans.
 
 Claude Code tells an MCP server nothing about whether it was opted in as a channel (the
 `initialize` handshake is identical either way), and a session without the opt-in silently
 drops pushed messages. So the plugin checks the parent process's command line and the same
-policy cache Claude Code uses. Sessions that fail a check can still **send**; they just don't
-advertise themselves as reachable. `MESH_JOIN=always|never` overrides this.
+managed sources Claude Code reads. It also requires `channelsEnabled: true`, which Claude Code
+itself skips for personal plans; `policy install` always writes it. Sessions that fail a check
+can still **send**; they just don't advertise themselves as reachable.
+`MESH_JOIN=always|never` overrides this. With `CLAUDE_CONFIG_DIR` set, the policy cache, the
+session registry and the signed-in account are read from that directory.
 
 ## Security model
 
@@ -181,6 +231,10 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
   prefix (`mcp__plugin_mesh_mesh__send_message`).
 - With deferred tool loading, Claude may first look the tools up before its first send.
 - In `cmd.exe` on Windows the wrapper does not apply; use PowerShell or pass `--channels`.
+- The join check mirrors Claude Code's managed-source ranking, not every corner of it:
+  unreadable admin documents count as absent (Claude Code refuses to start on a malformed one),
+  WSL's `wslInheritsWindowsSettings` chain and settings delivered by a Claude apps gateway are
+  not read.
 - There is no "tell me when that session is idle" yet.
 
 ## What changed from upstream
@@ -191,7 +245,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Tools | `send_to_peer`, `list_peers`, `set_summary`, `respond_to_permission` | `list_agents`, `send_message` |
 | Sender spoofing | sender `meta.from` overwrote the relay-set `from` | fixed; identity fields are reserved |
 | Install | `mesh pair` writes into `~/.claude.json` (every session loads it) | plugin + marketplace; one bundled file, no `npm install` |
-| Launch | `--dangerously-load-development-channels server:…` every time | org allowlist + `--channels`, wrapped so plain `claude` works |
+| Launch | `--dangerously-load-development-channels server:…` every time | org allowlist (or a machine-level `managed-settings.json` for personal plans) + `--channels`, wrapped so plain `claude` works |
 | Non-channel sessions | registered anyway; pushes silently dropped | send-only, not listed |
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |

@@ -71,7 +71,7 @@ Every change is a TDD cycle: **failing test → RED → implement → GREEN → 
 1. **`ulid()` default export is not monotonic** — use `monotonicFactory()` (done in `shared/src/ulid.ts`). SSE resume depends on it.
 2. **TS 5.7+ needs `allowImportingTsExtensions` + `rewriteRelativeImportExtensions`** for the `import './foo.ts'` convention (set in `tsconfig.base.json`).
 3. **MCP SDK ≥1.29 is typed against `zod/v4`.** Extending SDK schemas (e.g. `NotificationSchema.extend`) requires `import { z } from 'zod/v4'` — the v3 root export fails typecheck with a missing `_zod` property.
-4. **Channel notifications are silently dropped** unless Claude Code launches with `--channels plugin:mesh@sunkit` (org allowlist) or the dev flag, and the org's cached managed settings allow it. The only trace is a "Channel notifications skipped" line in `~/.claude/debug/*.txt`. The `initialize` handshake is identical either way, which is why `join-policy.ts` reads the parent command line.
+4. **Channel notifications are silently dropped** unless Claude Code launches with `--channels plugin:mesh@sunkit` (org allowlist) or the dev flag, and the managed settings Claude Code applies allow it (the org's server-managed cache first, then the machine's MDM profile / `managed-settings.json`; see `managed-policy.ts`). The only trace is a "Channel notifications skipped" line in `~/.claude/debug/*.txt`. The `initialize` handshake is identical either way, which is why `join-policy.ts` reads the parent command line.
 
 ## What *not* to do
 

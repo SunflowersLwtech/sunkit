@@ -54,7 +54,12 @@ async function main(): Promise<void> {
     await runSend(args)
     return
   }
-  console.error('commands: pair, admin, respond, send')
+  if (cmd === 'policy') {
+    const { runPolicy } = await import('./cli/policy.ts')
+    process.exitCode = runPolicy(args)
+    return
+  }
+  console.error('commands: pair, admin, respond, send, policy')
   process.exit(2)
 }
 
