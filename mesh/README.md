@@ -277,7 +277,7 @@ devin mcp add -s user mesh -e MESH_JOIN=pull -- /path/to/node ~/sunkit/mesh/plug
 Give each Devin session a name before starting it, so others can address it and see who wrote:
 
 ```bash
-export MESH_SESSION_NAME=hipimind-devin
+export MESH_SESSION_NAME=docs-devin
 devin
 ```
 
@@ -290,12 +290,12 @@ of borrowing that session's.
 send one message with:
 
 ```bash
-node $M say --as hipimind-devin feishu-assistant "[m4/hipimind-devin] gates are green"
-node $M say --as hipimind-devin --reply-to msg_… feishu-assistant -    # message from stdin
+node $M say --as docs-devin lead "[docs-devin] gates are green"
+node $M say --as docs-devin --reply-to msg_… lead -    # message from stdin
 ```
 
 The name comes from `--as`, else `MESH_SESSION_NAME`. Such a sender is not registered, so it
-receives nothing; recipients see `from="hipimind-devin"` with `sender="send-only"`. Only the
+receives nothing; recipients see `from="docs-devin"` with `sender="send-only"`. Only the
 account is verified for these: the name is a label the account chose, the same trust as a session
 name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOIN=never` and
 `MESH_SESSION_NAME` signs its messages the same way.

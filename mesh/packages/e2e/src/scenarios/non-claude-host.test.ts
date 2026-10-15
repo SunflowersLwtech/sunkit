@@ -159,14 +159,14 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     await until(async () => ((await lister.call('list_agents')).includes('bob-inbox') ? true : undefined), 'bob-inbox listed')
     await lister.call('send_message', { to: 'bob-inbox', message: 'earlier message' })
     const replyTo = (await nextMessage(inbox)).attrs.msg_id!
-    const { stdout } = await promisify(execFile)(process.execPath, [CLI, 'say', '--as', 'hipimind-devin', '--reply-to', replyTo, 'bob-inbox', '[m4/hipimind-devin]', 'gates', 'green'], {
+    const { stdout } = await promisify(execFile)(process.execPath, [CLI, 'say', '--as', 'docs-devin', '--reply-to', replyTo, 'bob-inbox', '[docs-devin]', 'gates', 'green'], {
       env: childEnv(join(h.humans.alice!.configDir, '.claude-mesh'), {}),
     })
-    expect(stdout).toMatch(/^delivered to bob-inbox \[[0-9a-z]{6}\] as hipimind-devin \(msg_/)
+    expect(stdout).toMatch(/^delivered to bob-inbox \[[0-9a-z]{6}\] as docs-devin \(msg_/)
     const got = await nextMessage(inbox)
-    expect(got.attrs.from).toBe('hipimind-devin')
+    expect(got.attrs.from).toBe('docs-devin')
     expect(got.attrs.sender).toBe('send-only')
     expect(got.attrs.in_reply_to).toBe(replyTo)
-    expect(got.body).toBe('[m4/hipimind-devin] gates green')
+    expect(got.body).toBe('[docs-devin] gates green')
   })
 })
