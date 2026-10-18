@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { channelOptIn, decideJoin, parentCommandLine, readProcCmdline } from './join-policy.ts'
+import { channelOptIn, decideJoin, isOneShotHostRun, parentCommandLine, readProcCmdline } from './join-policy.ts'
 
 describe('channelOptIn', () => {
   it.each([
@@ -91,5 +91,34 @@ describe('readProcCmdline', () => {
   it('returns empty for a missing pid so the caller can fall back', () => {
     const root = mkdtempSync(join(tmpdir(), 'proc-'))
     expect(readProcCmdline(999, root)).toBe('')
+  })
+})
+
+describe('isOneShotHostRun', () => {
+  it('agy and devin in print mode are one-shot', () => {
+    for (const line of [
+      'agy -p /usage --output-format json',
+      '/Users/x/.local/bin/agy --print hello',
+      'agy --prompt hi',
+      'agy --model gemini-3.8-flash-low --print=hi',
+      'agy --prompt=hi',
+      'devin -p fix the bug',
+      '/opt/homebrew/bin/devin --print',
+      'C:\\Users\\x\\agy.exe -p hi',
+    ]) expect(isOneShotHostRun(line), line).toBe(true)
+  })
+  it('interactive runs, other flags that look alike, and other programs are not', () => {
+    for (const line of [
+      'agy',
+      'agy --model gemini-3.8-flash-medium --dangerously-skip-permissions',
+      'agy -i "do -p things"',
+      'agy --prompt-interactive hello',
+      'agy --print-timeout 30s',
+      'devin --permission-mode dangerous',
+      'devin --prompt-file task.md',
+      'claude -p hello',
+      'node mesh-peer.mjs -p',
+      '',
+    ]) expect(isOneShotHostRun(line), line).toBe(false)
   })
 })

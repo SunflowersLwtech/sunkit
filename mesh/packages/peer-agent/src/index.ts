@@ -12,7 +12,7 @@ import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
-import { decideJoin, parentCommandLine } from './join-policy.ts'
+import { decideJoin, isOneShotHostRun, parentCommandLine } from './join-policy.ts'
 import { onHostClosed } from './host-lifetime.ts'
 import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
 import { herdrWaker } from './wake.ts'
@@ -51,11 +51,11 @@ async function main(): Promise<void> {
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
     sessionKind: identity.kind,
-  }))
+  }), () => isOneShotHostRun(parentCommandLine()))
   const pull = decision.mode === 'pull'
   const joins = decision.mode !== 'send'
   // The login shown in list_agents is the machine's Claude login; a pull host is not Claude.
-  const readLogin = () => (pull ? undefined : readClaudeLogin())
+  const readLogin = () => (pullHost ? undefined : readClaudeLogin())
   let login = readLogin()
 
   // Permission relay is deliberately never offered: under bypass-permissions it
