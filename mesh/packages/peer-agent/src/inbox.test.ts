@@ -15,6 +15,10 @@ describe('chooseJoinMode', () => {
     expect(chooseJoinMode('pull', decide)).toEqual({ mode: 'pull', reason: 'MESH_JOIN=pull' })
     expect(decide).not.toHaveBeenCalled()
   })
+  it('MESH_JOIN=pull under a one-shot host run (agy -p, devin -p) is send-only: it would only leave a stray row', () => {
+    expect(chooseJoinMode('pull', () => ({ join: true, reason: 'x' }), () => true)).toEqual({ mode: 'send', reason: 'one-shot host run (print mode)' })
+    expect(chooseJoinMode('pull', () => ({ join: true, reason: 'x' }), () => false)).toEqual({ mode: 'pull', reason: 'MESH_JOIN=pull' })
+  })
   it('otherwise follows the Claude Code join decision: push when it joins, send-only when it does not', () => {
     expect(chooseJoinMode(undefined, () => ({ join: true, reason: 'ok' })).mode).toBe('push')
     expect(chooseJoinMode('never', () => ({ join: false, reason: 'MESH_JOIN=never' }))).toEqual({ mode: 'send', reason: 'MESH_JOIN=never' })

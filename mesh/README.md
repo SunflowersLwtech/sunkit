@@ -283,7 +283,8 @@ devin
 
 A Claude Code session's name comes from Claude Code's own name for it, as before. A pull session
 (Devin, Antigravity) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
-Herdr tab it runs in, then its working directory's name; the last two are prefixed with
+Herdr tab it runs in (with its pane id appended when the tab has more than one pane, since the label
+then names the tab's main agent), then its working directory's name; the last two are prefixed with
 `MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
 is never read for a pull session, so one started in a Claude Code session's directory does not
 borrow that session's name, and the name does not change while it runs.
@@ -328,6 +329,9 @@ as trusted, unlike rules pasted into the first prompt:
 ```bash
 AGY_SESSION_RULES_B64=$(printf '%s' 'Report to lead over the mesh when done.' | base64) MESH_SESSION_NAME=agy-review agy
 ```
+
+Print-mode runs (`agy -p …`, `devin -p …`) start the server too, but only send: they are not listed,
+so a one-off `agy -p "/usage"` leaves no row behind.
 
 The hooks find the peer through a socket under `MESH_HOME/hooks/`, keyed by the agy process id (both
 are children of that process). To remove: `agy mcp remove mesh` and delete the `mesh` entry from

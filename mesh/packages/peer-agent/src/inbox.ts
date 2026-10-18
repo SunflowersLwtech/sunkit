@@ -9,9 +9,12 @@ import type { JoinDecision } from './join-policy.ts'
  */
 export type JoinMode = 'push' | 'pull' | 'send'
 
-/** MESH_JOIN=pull opts into pull mode; anything else keeps the Claude Code join rules. */
-export function chooseJoinMode(env: string | undefined, decide: () => JoinDecision): { mode: JoinMode; reason: string } {
-  if (env === 'pull') return { mode: 'pull', reason: 'MESH_JOIN=pull' }
+/**
+ * MESH_JOIN=pull opts into pull mode, except under a one-shot host run (agy -p), which only
+ * sends; anything else keeps the Claude Code join rules.
+ */
+export function chooseJoinMode(env: string | undefined, decide: () => JoinDecision, oneShot: () => boolean = () => false): { mode: JoinMode; reason: string } {
+  if (env === 'pull') return oneShot() ? { mode: 'send', reason: 'one-shot host run (print mode)' } : { mode: 'pull', reason: 'MESH_JOIN=pull' }
   const d = decide()
   return { mode: d.join ? 'push' : 'send', reason: d.reason }
 }

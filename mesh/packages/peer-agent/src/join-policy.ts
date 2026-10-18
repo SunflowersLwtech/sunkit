@@ -95,6 +95,31 @@ export function parentCommandLine(ppid: number = process.ppid): string {
   }
 }
 
+const PRINT_FLAGS: Record<string, string[]> = {
+  agy: ['-p', '--print', '--prompt'],
+  devin: ['-p', '--print'],
+}
+const INTERACTIVE_FLAGS: Record<string, string[]> = {
+  agy: ['-i', '--prompt-interactive'],
+  devin: [],
+}
+
+/**
+ * Whether the parent is a pull host answering one prompt and exiting (`agy -p`, `devin -p`).
+ * Joining from such a run only leaves a row behind for the relay's grace period, under a
+ * fallback name that can equal a live session's. The command line comes from ps, which loses
+ * quoting, so an interactive flag wins over a "-p" that may be part of the prompt text.
+ */
+export function isOneShotHostRun(commandLine: string): boolean {
+  const argv = commandLine.trim().split(/\s+/)
+  const exe = (argv[0] ?? '').split(/[\\/]/).pop()!.replace(/\.exe$/i, '').toLowerCase()
+  const print = PRINT_FLAGS[exe]
+  if (!print) return false
+  const rest = argv.slice(1)
+  if (rest.some(a => INTERACTIVE_FLAGS[exe]!.includes(a) || INTERACTIVE_FLAGS[exe]!.some(f => a.startsWith(`${f}=`)))) return false
+  return rest.some(a => print.includes(a) || print.some(f => f.startsWith('--') && a.startsWith(`${f}=`)))
+}
+
 export interface JoinDecision { join: boolean; reason: string }
 
 export function decideJoin(opts: {

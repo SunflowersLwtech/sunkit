@@ -140,16 +140,25 @@ export function probeHostSession(opts: HostProbeOpts = {}): SessionSnapshot {
   return { name: sanitizeName(name), status: 'unknown' }
 }
 
-/** Label of the Herdr tab this process runs in, or undefined outside Herdr or on any failure. */
+/**
+ * Name base from the Herdr tab this process runs in: its label, plus this pane's id when the
+ * tab has more than one pane (the label then names the tab's main agent, often a Claude
+ * session, and an agy split beside it must not take that name). Undefined outside Herdr or on
+ * any failure.
+ */
 export function herdrTabLabel(
   env: NodeJS.ProcessEnv = process.env,
   run: (file: string, args: string[]) => string = (file, args) => execFileSync(file, args, { encoding: 'utf8', timeout: 3_000 }),
 ): string | undefined {
   if (env.HERDR_ENV !== '1' || !env.HERDR_TAB_ID) return undefined
   try {
-    const j = JSON.parse(run(env.HERDR_BIN_PATH || 'herdr', ['tab', 'get', env.HERDR_TAB_ID])) as { result?: { tab?: { label?: unknown } } }
+    const j = JSON.parse(run(env.HERDR_BIN_PATH || 'herdr', ['tab', 'get', env.HERDR_TAB_ID])) as { result?: { tab?: { label?: unknown; pane_count?: unknown } } }
     const label = j.result?.tab?.label
-    return typeof label === 'string' && label.trim() ? label : undefined
+    if (typeof label !== 'string' || !label.trim()) return undefined
+    const panes = j.result?.tab?.pane_count
+    if (typeof panes !== 'number' || panes <= 1) return label
+    const pane = env.HERDR_PANE_ID?.split(':').pop()
+    return pane ? `${label}-${pane}` : undefined
   } catch {
     return undefined
   }
