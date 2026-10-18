@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { askHookSocket, hookSocketPath, type HookReply, type HookRequest } from '../hook-socket.ts'
 import { shellQuote, stableNode } from './devin.ts'
 
-export const AGY_USAGE = 'usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <PreInvocation|Stop>   (run by Antigravity CLI)'
+export const AGY_USAGE = 'usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <SessionStart|PreInvocation|Stop>   (run by Antigravity CLI)'
 
 export interface AgyInstallOpts {
   /** Absolute path of the node binary agy should run. */
@@ -29,15 +29,34 @@ export function agyAddArgs(o: AgyInstallOpts): string[] {
   return ['mcp', 'add', '-e', 'MESH_JOIN=pull', '-e', 'MESH_HOST=agy', o.name, '--', o.node, o.peer]
 }
 
-/** The hooks that tell a busy agent about new messages and report busy/idle to the mesh. */
+/**
+ * The hooks: SessionStart injects the session's standing rules (AGY_SESSION_RULES_*), the
+ * other two tell a busy agent about new messages and report busy/idle to the mesh.
+ */
 export function agyHookEntry(o: AgyInstallOpts): Record<string, unknown> {
   const handler = (event: string) => ({ type: 'command', command: `${shellQuote(o.node)} ${shellQuote(o.cli)} agy hook ${event}`, timeout: 5 })
-  return { PreInvocation: [handler('PreInvocation')], Stop: [handler('Stop')] }
+  return { SessionStart: [handler('SessionStart')], PreInvocation: [handler('PreInvocation')], Stop: [handler('Stop')] }
+}
+
+/**
+ * Standing rules for this session, from the environment agy was started with:
+ * AGY_SESSION_RULES_B64 (base64 of UTF-8 text, so a launcher need not shell-quote it) or
+ * AGY_SESSION_RULES_FILE (a UTF-8 file). agy has no --append-system-prompt; a SessionStart
+ * system message is the closest trusted place for rules such as "report to X over the mesh".
+ */
+export function sessionRules(env: NodeJS.ProcessEnv = process.env, read: (path: string) => string = p => readFileSync(p, 'utf8')): string {
+  try {
+    const text = env.AGY_SESSION_RULES_B64 ? Buffer.from(env.AGY_SESSION_RULES_B64, 'base64').toString('utf8')
+      : env.AGY_SESSION_RULES_FILE ? read(env.AGY_SESSION_RULES_FILE) : ''
+    return text.trim().slice(0, 20_000)
+  } catch {
+    return ''
+  }
 }
 
 /** hooks.json with our entry set under `name`; every other named hook is kept as it was. */
 export function mergeHooks(existing: string | undefined, name: string, entry: Record<string, unknown>): string {
-  const text = (existing ?? '').replace(/^﻿/, '').trim()
+  const text = (existing ?? '').replace(/^\uFEFF/, '').trim()
   const parsed: unknown = text ? JSON.parse(text) : {}
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('hooks.json is not a JSON object; fix or move it first')
   return JSON.stringify({ ...(parsed as Record<string, unknown>), [name]: entry }, null, 2) + '\n'
@@ -76,6 +95,7 @@ export function runAgyInstall(args: string[], io: { log?: (s: string) => void; r
   log(`agy ${argv.map(shellQuote).join(' ')}`)
   log(`${o.hooks}: set "${o.name}" to ${JSON.stringify(agyHookEntry(o))}`)
   log('Name each session before starting it: export MESH_SESSION_NAME=<name>; agy. Unnamed sessions are agy-<Herdr tab label> or agy-<directory>.')
+  log('Standing rules for a session: export AGY_SESSION_RULES_B64=<base64 text> (or AGY_SESSION_RULES_FILE=<path>) before starting agy; they arrive as a system message.')
   log('Messages wait in an inbox read with read_messages; while the agent works, the hooks tell it when one arrives. With MESH_WAKE=herdr set before starting agy in a Herdr pane, a message to an idle session also prompts it to read.')
   if (!args.includes('--write')) return 0
   const run = io.run ?? ((file: string, a: string[]) => { execFileSync(file, a, { stdio: 'inherit' }) })
@@ -136,6 +156,11 @@ export async function runAgyHook(args: string[], io: { stdin?: () => Promise<str
   try {
     const event = args[0] ?? ''
     const raw = await (io.stdin ?? readStdin)()
+    if (event === 'SessionStart') {
+      const rules = sessionRules()
+      write(JSON.stringify(rules ? { injectSteps: [{ systemMessage: { systemMessage: rules } }] } : {}) + '\n')
+      return 0
+    }
     let payload: unknown = undefined
     try { payload = raw.trim() ? JSON.parse(raw) : undefined } catch { /* not JSON */ }
     const req = hookRequest(event, payload)

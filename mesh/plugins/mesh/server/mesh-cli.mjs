@@ -5330,7 +5330,8 @@ __export(agy_exports, {
   parseAgyInstall: () => parseAgyInstall,
   runAgy: () => runAgy,
   runAgyHook: () => runAgyHook,
-  runAgyInstall: () => runAgyInstall
+  runAgyInstall: () => runAgyInstall,
+  sessionRules: () => sessionRules
 });
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { copyFileSync, existsSync as existsSync8, mkdirSync as mkdirSync4, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
@@ -5342,10 +5343,18 @@ function agyAddArgs(o) {
 }
 function agyHookEntry(o) {
   const handler = (event) => ({ type: "command", command: `${shellQuote(o.node)} ${shellQuote(o.cli)} agy hook ${event}`, timeout: 5 });
-  return { PreInvocation: [handler("PreInvocation")], Stop: [handler("Stop")] };
+  return { SessionStart: [handler("SessionStart")], PreInvocation: [handler("PreInvocation")], Stop: [handler("Stop")] };
+}
+function sessionRules(env = process.env, read = (p) => readFileSync8(p, "utf8")) {
+  try {
+    const text = env.AGY_SESSION_RULES_B64 ? Buffer.from(env.AGY_SESSION_RULES_B64, "base64").toString("utf8") : env.AGY_SESSION_RULES_FILE ? read(env.AGY_SESSION_RULES_FILE) : "";
+    return text.trim().slice(0, 2e4);
+  } catch {
+    return "";
+  }
 }
 function mergeHooks(existing, name, entry) {
-  const text = (existing ?? "").replace(/^﻿/, "").trim();
+  const text = (existing ?? "").replace(/^\uFEFF/, "").trim();
   const parsed = text ? JSON.parse(text) : {};
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("hooks.json is not a JSON object; fix or move it first");
   return JSON.stringify({ ...parsed, [name]: entry }, null, 2) + "\n";
@@ -5379,6 +5388,7 @@ function runAgyInstall(args, io = {}) {
   log(`agy ${argv.map(shellQuote).join(" ")}`);
   log(`${o.hooks}: set "${o.name}" to ${JSON.stringify(agyHookEntry(o))}`);
   log("Name each session before starting it: export MESH_SESSION_NAME=<name>; agy. Unnamed sessions are agy-<Herdr tab label> or agy-<directory>.");
+  log("Standing rules for a session: export AGY_SESSION_RULES_B64=<base64 text> (or AGY_SESSION_RULES_FILE=<path>) before starting agy; they arrive as a system message.");
   log("Messages wait in an inbox read with read_messages; while the agent works, the hooks tell it when one arrives. With MESH_WAKE=herdr set before starting agy in a Herdr pane, a message to an idle session also prompts it to read.");
   if (!args.includes("--write")) return 0;
   const run = io.run ?? ((file, a) => {
@@ -5429,6 +5439,11 @@ async function runAgyHook(args, io = {}) {
   try {
     const event = args[0] ?? "";
     const raw = await (io.stdin ?? readStdin)();
+    if (event === "SessionStart") {
+      const rules = sessionRules();
+      write(JSON.stringify(rules ? { injectSteps: [{ systemMessage: { systemMessage: rules } }] } : {}) + "\n");
+      return 0;
+    }
     let payload = void 0;
     try {
       payload = raw.trim() ? JSON.parse(raw) : void 0;
@@ -5491,7 +5506,7 @@ var init_agy = __esm({
     "use strict";
     init_hook_socket();
     init_devin();
-    AGY_USAGE = "usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <PreInvocation|Stop>   (run by Antigravity CLI)";
+    AGY_USAGE = "usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <SessionStart|PreInvocation|Stop>   (run by Antigravity CLI)";
     plural = (n, one, many) => n === 1 ? one : many;
   }
 });

@@ -311,13 +311,22 @@ node $M agy install --write    # agy mcp add … and a "mesh" entry in ~/.gemini
 ```
 
 which amounts to `agy mcp add -e MESH_JOIN=pull -e MESH_HOST=agy mesh -- /path/to/node …/mesh-peer.mjs`
-plus `PreInvocation` and `Stop` hooks running `node …/mesh-cli.mjs agy hook <event>`. Other named hooks
+plus `SessionStart`, `PreInvocation` and `Stop` hooks running `node …/mesh-cli.mjs agy hook <event>`. Other named hooks
 in that file (Herdr's, for example) are kept, and the old file is saved as `hooks.json.bak-mesh-*`.
 Don't put `MESH_SESSION_NAME` into the server's config: agy lets a server's configured `env` override
 the session's environment, so every session would get that name. Name sessions when starting them:
 
 ```bash
 MESH_SESSION_NAME=agy-review agy
+```
+
+**Standing rules.** agy has no `--append-system-prompt`. The installed `SessionStart` hook injects
+the text in `AGY_SESSION_RULES_B64` (base64 of UTF-8, so a launcher needn't shell-quote it) or the file
+named by `AGY_SESSION_RULES_FILE` as a system message when the conversation starts, which agents treat
+as trusted, unlike rules pasted into the first prompt:
+
+```bash
+AGY_SESSION_RULES_B64=$(printf '%s' 'Report to lead over the mesh when done.' | base64) MESH_SESSION_NAME=agy-review agy
 ```
 
 The hooks find the peer through a socket under `MESH_HOME/hooks/`, keyed by the agy process id (both

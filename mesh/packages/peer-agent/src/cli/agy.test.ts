@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { agyAddArgs, agyHookEntry, agyHookOutput, hookRequest, mergeHooks, runAgyHook, runAgyInstall } from './agy.ts'
+import { agyAddArgs, agyHookEntry, agyHookOutput, hookRequest, mergeHooks, runAgyHook, runAgyInstall, sessionRules } from './agy.ts'
 import { HookChannel, hookSocketPath, serveHookSocket } from '../hook-socket.ts'
 import { Inbox } from '../inbox.ts'
 import { IdleWaker, herdrWaker } from '../wake.ts'
@@ -17,6 +17,7 @@ describe('mesh agy install', () => {
 
   it('hooks run the bundled CLI with the same node, quoted for sh -c', () => {
     expect(agyHookEntry(opts)).toEqual({
+      SessionStart: [{ type: 'command', command: "/opt/homebrew/bin/node '/k/mesh cli.mjs' agy hook SessionStart", timeout: 5 }],
       PreInvocation: [{ type: 'command', command: "/opt/homebrew/bin/node '/k/mesh cli.mjs' agy hook PreInvocation", timeout: 5 }],
       Stop: [{ type: 'command', command: "/opt/homebrew/bin/node '/k/mesh cli.mjs' agy hook Stop", timeout: 5 }],
     })
@@ -67,6 +68,33 @@ describe('mesh agy install', () => {
 })
 
 describe('mesh agy hook', () => {
+  it('session rules come from AGY_SESSION_RULES_B64, else AGY_SESSION_RULES_FILE, trimmed and capped', () => {
+    const b64 = (t: string) => Buffer.from(t, 'utf8').toString('base64')
+    expect(sessionRules({ AGY_SESSION_RULES_B64: b64('  汇报给「秘书」\n第二条 \'x\'  ') })).toBe('汇报给「秘书」\n第二条 \'x\'')
+    const dir = mkdtempSync(join(tmpdir(), 'agy-rules-'))
+    writeFileSync(join(dir, 'r.txt'), 'from file\n')
+    expect(sessionRules({ AGY_SESSION_RULES_FILE: join(dir, 'r.txt') })).toBe('from file')
+    expect(sessionRules({ AGY_SESSION_RULES_B64: b64('b64 wins'), AGY_SESSION_RULES_FILE: join(dir, 'r.txt') })).toBe('b64 wins')
+    expect(sessionRules({ AGY_SESSION_RULES_FILE: join(dir, 'missing.txt') })).toBe('')
+    expect(sessionRules({})).toBe('')
+    expect(sessionRules({ AGY_SESSION_RULES_B64: b64('x'.repeat(30_000)) })).toHaveLength(20_000)
+  })
+
+  it('SessionStart injects the rules as a system message, or nothing', async () => {
+    const saved = process.env.AGY_SESSION_RULES_B64
+    try {
+      const out: string[] = []
+      const run = () => runAgyHook(['SessionStart'], { stdin: async () => '{"conversationId":"c"}', write: s => out.push(s), ppid: 1 })
+      delete process.env.AGY_SESSION_RULES_B64
+      await run()
+      process.env.AGY_SESSION_RULES_B64 = Buffer.from('每条消息末行写「— ok」', 'utf8').toString('base64')
+      await run()
+      expect(out).toEqual(['{}\n', JSON.stringify({ injectSteps: [{ systemMessage: { systemMessage: '每条消息末行写「— ok」' } }] }) + '\n'])
+    } finally {
+      if (saved === undefined) delete process.env.AGY_SESSION_RULES_B64; else process.env.AGY_SESSION_RULES_B64 = saved
+    }
+  })
+
   it('maps agy events to requests', () => {
     expect(hookRequest('PreInvocation', {})).toEqual({ op: 'turn' })
     expect(hookRequest('Stop', { terminationReason: 'NO_TOOL_CALL' })).toEqual({ op: 'stop', reason: 'NO_TOOL_CALL' })
