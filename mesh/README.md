@@ -250,9 +250,9 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
-| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI and other MCP hosts), named send-only senders, `mesh say` |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI and other MCP hosts), hook notices and busy/idle for Antigravity, named send-only senders, `mesh say` |
 
-## Devin CLI and other agents without channels
+## Devin CLI, Antigravity CLI and other agents without channels
 
 Claude Code shows mesh messages as they arrive through its channel. Devin CLI, and other agents
 that speak MCP but have no channels, can't receive pushed messages, so the peer runs in **pull
@@ -281,10 +281,48 @@ export MESH_SESSION_NAME=docs-devin
 devin
 ```
 
-A session's name comes from the first of: Claude Code's own name for the session, then
-`MESH_SESSION_NAME`, then the working directory's name. Claude Code sessions are therefore named as
-before, and a Devin session started in a Claude Code session's directory keeps its own name instead
-of borrowing that session's.
+A Claude Code session's name comes from Claude Code's own name for it, as before. A pull session
+(Devin, Antigravity) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
+Herdr tab it runs in, then its working directory's name; the last two are prefixed with
+`MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
+is never read for a pull session, so one started in a Claude Code session's directory does not
+borrow that session's name, and the name does not change while it runs.
+
+### Antigravity CLI (agy)
+
+Antigravity CLI runs MCP servers the same way, and it also has lifecycle hooks. The peer uses them,
+so a working agy agent does not have to remember to check its inbox:
+
+- before each model call, if messages are waiting, the agent gets a one-line notice naming the
+  senders and telling it to call `read_messages`;
+- when a turn ends on its own while a message that arrived during it is still unread, the agent is
+  kept going once to read it (a stop you asked for with Esc, an error or a limit is never overridden);
+- the session shows `busy` or `idle` in `list_agents` instead of `unknown`.
+
+The notice never contains the message itself; the body still comes back from `read_messages`, under
+the same rules as any peer message. An idle session is not interrupted unless you opt in: with
+`MESH_WAKE=herdr` set before starting agy in a [Herdr](https://herdr.dev) pane, a message to an idle
+session prompts that pane once (`herdr agent prompt`), at most every 20 seconds. Leave it off in panes
+a person is typing in.
+
+```bash
+node $M agy install            # prints what it would do
+node $M agy install --write    # agy mcp add … and a "mesh" entry in ~/.gemini/config/hooks.json
+```
+
+which amounts to `agy mcp add -e MESH_JOIN=pull -e MESH_HOST=agy mesh -- /path/to/node …/mesh-peer.mjs`
+plus `PreInvocation` and `Stop` hooks running `node …/mesh-cli.mjs agy hook <event>`. Other named hooks
+in that file (Herdr's, for example) are kept, and the old file is saved as `hooks.json.bak-mesh-*`.
+Don't put `MESH_SESSION_NAME` into the server's config: agy lets a server's configured `env` override
+the session's environment, so every session would get that name. Name sessions when starting them:
+
+```bash
+MESH_SESSION_NAME=agy-review agy
+```
+
+The hooks find the peer through a socket under `MESH_HOME/hooks/`, keyed by the agy process id (both
+are children of that process). To remove: `agy mcp remove mesh` and delete the `mesh` entry from
+`~/.gemini/config/hooks.json`.
 
 **Sending without a session.** A script, or an agent that has no MCP connection to the mesh, can
 send one message with:
@@ -304,6 +342,8 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 |---|---|
 | `MESH_JOIN` | `pull`: join in pull mode (hosts without channels). `never`: send only. `always`: join regardless. Unset: Claude Code's rules above. |
 | `MESH_SESSION_NAME` | name for a session that Claude Code doesn't name, and for send-only senders |
+| `MESH_HOST` | short host label (`agy`) that prefixes a pull session's fallback name |
+| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy hooks) |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from

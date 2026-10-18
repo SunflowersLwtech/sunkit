@@ -4330,8 +4330,8 @@ var init_paths = __esm({
 // packages/peer-agent/src/cli/relay-url.ts
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
 import { join as join4 } from "node:path";
-function argValue(args, flag2) {
-  const i = args.indexOf(flag2);
+function argValue(args, flag3) {
+  const i = args.indexOf(flag3);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readConfigRelayUrl() {
@@ -4396,8 +4396,8 @@ __export(admin_exports, {
 });
 import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, chmodSync as chmodSync2, existsSync as existsSync4 } from "node:fs";
 import { join as join5 } from "node:path";
-function argValue2(args, flag2) {
-  const i = args.indexOf(flag2);
+function argValue2(args, flag3) {
+  const i = args.indexOf(flag3);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readAdminToken() {
@@ -4553,8 +4553,8 @@ __export(respond_exports, {
   runRespond: () => runRespond
 });
 import { join as join6 } from "node:path";
-function argValue3(args, flag2) {
-  const i = args.indexOf(flag2);
+function argValue3(args, flag3) {
+  const i = args.indexOf(flag3);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function callRespond(opts) {
@@ -4915,8 +4915,8 @@ function canWrite(target) {
     return false;
   }
 }
-function argValue4(args, flag2) {
-  const i = args.indexOf(flag2);
+function argValue4(args, flag3) {
+  const i = args.indexOf(flag3);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function runPolicyInstall(args, opts = {}) {
@@ -5195,6 +5195,53 @@ var init_say = __esm({
   }
 });
 
+// packages/peer-agent/src/hook-socket.ts
+import { createServer, connect } from "node:net";
+import { createHash } from "node:crypto";
+import { join as join11 } from "node:path";
+function hookSocketPath(hostPid, dir = meshDir()) {
+  if (process.platform === "win32") {
+    const tag = createHash("sha256").update(dir).digest("hex").slice(0, 8);
+    return `\\\\.\\pipe\\claude-mesh-hook-${tag}-${hostPid}`;
+  }
+  return join11(dir, "hooks", `${hostPid}.sock`);
+}
+function askHookSocket(path, req, timeoutMs = 1500) {
+  return new Promise((resolve4) => {
+    let buf = "";
+    let done = false;
+    const finish = (v) => {
+      if (!done) {
+        done = true;
+        sock.destroy();
+        resolve4(v);
+      }
+    };
+    const sock = connect(path);
+    sock.setEncoding("utf8");
+    sock.setTimeout(timeoutMs, () => finish(void 0));
+    sock.on("error", () => finish(void 0));
+    sock.on("connect", () => sock.write(JSON.stringify(req) + "\n"));
+    sock.on("data", (chunk) => {
+      buf += chunk;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      try {
+        finish(JSON.parse(buf.slice(0, i)));
+      } catch {
+        finish(void 0);
+      }
+    });
+    sock.on("end", () => finish(void 0));
+  });
+}
+var init_hook_socket = __esm({
+  "packages/peer-agent/src/hook-socket.ts"() {
+    "use strict";
+    init_paths();
+  }
+});
+
 // packages/peer-agent/src/cli/devin.ts
 var devin_exports = {};
 __export(devin_exports, {
@@ -5207,7 +5254,7 @@ __export(devin_exports, {
 });
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { accessSync as accessSync2, constants as constants2 } from "node:fs";
-import { delimiter, join as join11 } from "node:path";
+import { delimiter, join as join12 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function devinAddArgs(o) {
   return ["mcp", "add", "-s", o.scope, o.name, "-e", "MESH_JOIN=pull", "--", o.node, o.peer];
@@ -5226,7 +5273,7 @@ function isExecutable(p) {
 function stableNode(path, fallback, exists = isExecutable) {
   for (const dir of (path ?? "").split(delimiter)) {
     if (!dir || dir.includes("fnm_multishells")) continue;
-    const candidate = join11(dir, process.platform === "win32" ? "node.exe" : "node");
+    const candidate = join12(dir, process.platform === "win32" ? "node.exe" : "node");
     if (exists(candidate)) return candidate;
   }
   return fallback;
@@ -5268,6 +5315,184 @@ var init_devin = __esm({
   "packages/peer-agent/src/cli/devin.ts"() {
     "use strict";
     DEVIN_USAGE = "usage: mesh devin install [--scope user|project|local] [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--write]";
+  }
+});
+
+// packages/peer-agent/src/cli/agy.ts
+var agy_exports = {};
+__export(agy_exports, {
+  AGY_USAGE: () => AGY_USAGE,
+  agyAddArgs: () => agyAddArgs,
+  agyHookEntry: () => agyHookEntry,
+  agyHookOutput: () => agyHookOutput,
+  hookRequest: () => hookRequest,
+  mergeHooks: () => mergeHooks,
+  parseAgyInstall: () => parseAgyInstall,
+  runAgy: () => runAgy,
+  runAgyHook: () => runAgyHook,
+  runAgyInstall: () => runAgyInstall
+});
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { copyFileSync, existsSync as existsSync8, mkdirSync as mkdirSync4, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname4, join as join13 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+function agyAddArgs(o) {
+  return ["mcp", "add", "-e", "MESH_JOIN=pull", "-e", "MESH_HOST=agy", o.name, "--", o.node, o.peer];
+}
+function agyHookEntry(o) {
+  const handler = (event) => ({ type: "command", command: `${shellQuote(o.node)} ${shellQuote(o.cli)} agy hook ${event}`, timeout: 5 });
+  return { PreInvocation: [handler("PreInvocation")], Stop: [handler("Stop")] };
+}
+function mergeHooks(existing, name, entry) {
+  const text = (existing ?? "").replace(/^﻿/, "").trim();
+  const parsed = text ? JSON.parse(text) : {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("hooks.json is not a JSON object; fix or move it first");
+  return JSON.stringify({ ...parsed, [name]: entry }, null, 2) + "\n";
+}
+function flag2(args, name) {
+  const i = args.indexOf(name);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
+}
+function parseAgyInstall(args, defaults) {
+  return {
+    node: flag2(args, "--node") ?? defaults.node,
+    peer: flag2(args, "--peer") ?? defaults.peer,
+    cli: flag2(args, "--cli") ?? defaults.cli,
+    hooks: flag2(args, "--hooks") ?? defaults.hooks,
+    name: flag2(args, "--name") ?? "mesh"
+  };
+}
+function stamp(d = /* @__PURE__ */ new Date()) {
+  return d.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
+}
+function runAgyInstall(args, io = {}) {
+  const log = io.log ?? console.log;
+  const cli = fileURLToPath3(import.meta.url);
+  const o = parseAgyInstall(args, {
+    node: stableNode(process.env.PATH, process.execPath),
+    peer: fileURLToPath3(new URL("./mesh-peer.mjs", import.meta.url)),
+    cli,
+    hooks: join13(homedir3(), ".gemini", "config", "hooks.json")
+  });
+  const argv = agyAddArgs(o);
+  log(`agy ${argv.map(shellQuote).join(" ")}`);
+  log(`${o.hooks}: set "${o.name}" to ${JSON.stringify(agyHookEntry(o))}`);
+  log("Name each session before starting it: export MESH_SESSION_NAME=<name>; agy. Unnamed sessions are agy-<Herdr tab label> or agy-<directory>.");
+  log("Messages wait in an inbox read with read_messages; while the agent works, the hooks tell it when one arrives. With MESH_WAKE=herdr set before starting agy in a Herdr pane, a message to an idle session also prompts it to read.");
+  if (!args.includes("--write")) return 0;
+  const run = io.run ?? ((file, a) => {
+    execFileSync3(file, a, { stdio: "inherit" });
+  });
+  run("agy", argv);
+  const before = existsSync8(o.hooks) ? readFileSync8(o.hooks, "utf8") : void 0;
+  const after = mergeHooks(before, o.name, agyHookEntry(o));
+  if (before !== after) {
+    mkdirSync4(dirname4(o.hooks), { recursive: true });
+    if (before !== void 0) copyFileSync(o.hooks, `${o.hooks}.bak-mesh-${stamp()}`);
+    writeFileSync5(o.hooks, after);
+  }
+  log("written");
+  return 0;
+}
+function agyHookOutput(event, r) {
+  if (!r || r.unread <= 0) return {};
+  const n = r.unread;
+  const who = r.from.join(", ");
+  if (event === "PreInvocation") {
+    return { injectSteps: [{ ephemeralMessage: `[mesh] ${n} unread ${plural(n, "message", "messages")} from ${who} ${plural(n, "is", "are")} waiting. Call the mesh read_messages tool to read ${plural(n, "it", "them")}.` }] };
+  }
+  if (event === "Stop" && r.continue) {
+    return { decision: "continue", reason: `[mesh] ${n} ${plural(n, "message", "messages")} from ${who} arrived and ${plural(n, "is", "are")} still unread. Call the mesh read_messages tool and deal with ${plural(n, "it", "them")} before you finish.` };
+  }
+  return {};
+}
+function hookRequest(event, payload) {
+  if (event === "PreInvocation") return { op: "turn" };
+  if (event === "Stop") {
+    const reason = payload?.terminationReason;
+    return typeof reason === "string" ? { op: "stop", reason } : { op: "stop" };
+  }
+  return void 0;
+}
+function parentOf(pid) {
+  try {
+    if (process.platform === "linux") return Number(readFileSync8(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").split(" ")[1]) || void 0;
+    if (process.platform === "win32") return void 0;
+    return Number(execFileSync3("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3 }).trim()) || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function runAgyHook(args, io = {}) {
+  const write = io.write ?? ((s) => process.stdout.write(s));
+  try {
+    const event = args[0] ?? "";
+    const raw = await (io.stdin ?? readStdin)();
+    let payload = void 0;
+    try {
+      payload = raw.trim() ? JSON.parse(raw) : void 0;
+    } catch {
+    }
+    const req = hookRequest(event, payload);
+    let reply;
+    if (req) {
+      const ppid = io.ppid ?? process.ppid;
+      for (const pid of [ppid, parentOf(ppid)]) {
+        if (!pid) continue;
+        const path = hookSocketPath(pid);
+        if (process.platform !== "win32" && !existsSync8(path)) continue;
+        reply = await askHookSocket(path, req);
+        if (reply) break;
+      }
+    }
+    write(JSON.stringify(agyHookOutput(event, reply)) + "\n");
+  } catch {
+    write("{}\n");
+  }
+  return 0;
+}
+function readStdin() {
+  return new Promise((resolve4) => {
+    if (process.stdin.isTTY) {
+      resolve4("");
+      return;
+    }
+    let buf = "";
+    const timer = setTimeout(() => resolve4(buf), 2e3);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (d) => {
+      buf += d;
+      if (buf.length > 1e6) {
+        clearTimeout(timer);
+        resolve4(buf);
+      }
+    });
+    process.stdin.on("end", () => {
+      clearTimeout(timer);
+      resolve4(buf);
+    });
+    process.stdin.on("error", () => {
+      clearTimeout(timer);
+      resolve4(buf);
+    });
+  });
+}
+async function runAgy(args) {
+  const [sub, ...rest] = args;
+  if (sub === "install") return runAgyInstall(rest);
+  if (sub === "hook") return runAgyHook(rest);
+  console.error(AGY_USAGE);
+  return 2;
+}
+var AGY_USAGE, plural;
+var init_agy = __esm({
+  "packages/peer-agent/src/cli/agy.ts"() {
+    "use strict";
+    init_hook_socket();
+    init_devin();
+    AGY_USAGE = "usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <PreInvocation|Stop>   (run by Antigravity CLI)";
+    plural = (n, one, many) => n === 1 ? one : many;
   }
 });
 
@@ -5425,8 +5650,8 @@ function writeMeshMcpConfig(dir = meshDir()) {
 // packages/peer-agent/src/cli.ts
 init_relay_url();
 loadEnvFiles();
-function argValue5(args, flag2) {
-  const i = args.indexOf(flag2);
+function argValue5(args, flag3) {
+  const i = args.indexOf(flag3);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function main() {
@@ -5480,12 +5705,17 @@ async function main() {
     await runSay2(args);
     return;
   }
+  if (cmd === "agy") {
+    const { runAgy: runAgy2 } = await Promise.resolve().then(() => (init_agy(), agy_exports));
+    process.exitCode = await runAgy2(args);
+    return;
+  }
   if (cmd === "devin") {
     const { runDevin: runDevin2 } = await Promise.resolve().then(() => (init_devin(), devin_exports));
     process.exitCode = runDevin2(args);
     return;
   }
-  console.error("commands: pair, admin, respond, send, policy, say, devin");
+  console.error("commands: pair, admin, respond, send, policy, say, devin, agy");
   process.exit(2);
 }
 main().catch((err) => {

@@ -9208,7 +9208,7 @@ var require_connect = __commonJS({
       const sessionCache = new SessionCache(maxCachedSessions == null ? 100 : maxCachedSessions);
       timeout = timeout == null ? 1e4 : timeout;
       allowH2 = allowH2 != null ? allowH2 : false;
-      return function connect({ hostname: hostname2, host, protocol, port, servername, localAddress, httpSocket }, callback) {
+      return function connect2({ hostname: hostname2, host, protocol, port, servername, localAddress, httpSocket }, callback) {
         let socket;
         if (protocol === "https:") {
           if (!tls) {
@@ -14198,7 +14198,7 @@ var require_client = __commonJS({
         strictContentLength,
         maxCachedSessions,
         maxRedirections,
-        connect: connect2,
+        connect: connect3,
         maxRequestsPerClient,
         localAddress,
         maxResponseSize,
@@ -14249,7 +14249,7 @@ var require_client = __commonJS({
         if (bodyTimeout != null && (!Number.isInteger(bodyTimeout) || bodyTimeout < 0)) {
           throw new InvalidArgumentError("bodyTimeout must be a positive integer or zero");
         }
-        if (connect2 != null && typeof connect2 !== "function" && typeof connect2 !== "object") {
+        if (connect3 != null && typeof connect3 !== "function" && typeof connect3 !== "object") {
           throw new InvalidArgumentError("connect must be a function or an object");
         }
         if (maxRedirections != null && (!Number.isInteger(maxRedirections) || maxRedirections < 0)) {
@@ -14273,15 +14273,15 @@ var require_client = __commonJS({
         if (maxConcurrentStreams != null && (typeof maxConcurrentStreams !== "number" || maxConcurrentStreams < 1)) {
           throw new InvalidArgumentError("maxConcurrentStreams must be a positive integer, greater than 0");
         }
-        if (typeof connect2 !== "function") {
-          connect2 = buildConnector({
+        if (typeof connect3 !== "function") {
+          connect3 = buildConnector({
             ...tls,
             maxCachedSessions,
             allowH2,
             socketPath,
             timeout: connectTimeout,
             ...autoSelectFamily ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : void 0,
-            ...connect2
+            ...connect3
           });
         }
         if (interceptors?.Client && Array.isArray(interceptors.Client)) {
@@ -14296,7 +14296,7 @@ var require_client = __commonJS({
           this[kInterceptors] = [createRedirectInterceptor({ maxRedirections })];
         }
         this[kUrl] = util2.parseOrigin(url);
-        this[kConnector] = connect2;
+        this[kConnector] = connect3;
         this[kPipelining] = pipelining != null ? pipelining : 1;
         this[kMaxHeadersSize] = maxHeaderSize || http.maxHeaderSize;
         this[kKeepAliveDefaultTimeout] = keepAliveTimeout == null ? 4e3 : keepAliveTimeout;
@@ -14350,7 +14350,7 @@ var require_client = __commonJS({
       }
       /* istanbul ignore: only used for test */
       [kConnect](cb) {
-        connect(this);
+        connect2(this);
         this.once("connect", cb);
       }
       [kDispatch](opts, handler) {
@@ -14414,7 +14414,7 @@ var require_client = __commonJS({
         assert2(client[kSize] === 0);
       }
     }
-    async function connect(client) {
+    async function connect2(client) {
       assert2(!client[kConnecting]);
       assert2(!client[kHTTPContext]);
       let { host, hostname: hostname2, protocol, port } = client[kUrl];
@@ -14585,7 +14585,7 @@ var require_client = __commonJS({
           return;
         }
         if (!client[kHTTPContext]) {
-          connect(client);
+          connect2(client);
           return;
         }
         if (client[kHTTPContext].destroyed) {
@@ -14877,7 +14877,7 @@ var require_pool = __commonJS({
       constructor(origin, {
         connections,
         factory = defaultFactory,
-        connect,
+        connect: connect2,
         connectTimeout,
         tls,
         maxCachedSessions,
@@ -14893,25 +14893,25 @@ var require_pool = __commonJS({
         if (typeof factory !== "function") {
           throw new InvalidArgumentError("factory must be a function.");
         }
-        if (connect != null && typeof connect !== "function" && typeof connect !== "object") {
+        if (connect2 != null && typeof connect2 !== "function" && typeof connect2 !== "object") {
           throw new InvalidArgumentError("connect must be a function or an object");
         }
-        if (typeof connect !== "function") {
-          connect = buildConnector({
+        if (typeof connect2 !== "function") {
+          connect2 = buildConnector({
             ...tls,
             maxCachedSessions,
             allowH2,
             socketPath,
             timeout: connectTimeout,
             ...autoSelectFamily ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : void 0,
-            ...connect
+            ...connect2
           });
         }
         super(options);
         this[kInterceptors] = options.interceptors?.Pool && Array.isArray(options.interceptors.Pool) ? options.interceptors.Pool : [];
         this[kConnections] = connections || null;
         this[kUrl] = util2.parseOrigin(origin);
-        this[kOptions] = { ...util2.deepClone(options), connect, allowH2 };
+        this[kOptions] = { ...util2.deepClone(options), connect: connect2, allowH2 };
         this[kOptions].interceptors = options.interceptors ? { ...options.interceptors } : void 0;
         this[kFactory] = factory;
         this.on("connectionError", (origin2, targets, error2) => {
@@ -15106,22 +15106,22 @@ var require_agent = __commonJS({
       return opts && opts.connections === 1 ? new Client(origin, opts) : new Pool(origin, opts);
     }
     var Agent = class extends DispatcherBase {
-      constructor({ factory = defaultFactory, maxRedirections = 0, connect, ...options } = {}) {
+      constructor({ factory = defaultFactory, maxRedirections = 0, connect: connect2, ...options } = {}) {
         if (typeof factory !== "function") {
           throw new InvalidArgumentError("factory must be a function.");
         }
-        if (connect != null && typeof connect !== "function" && typeof connect !== "object") {
+        if (connect2 != null && typeof connect2 !== "function" && typeof connect2 !== "object") {
           throw new InvalidArgumentError("connect must be a function or an object");
         }
         if (!Number.isInteger(maxRedirections) || maxRedirections < 0) {
           throw new InvalidArgumentError("maxRedirections must be a positive number");
         }
         super(options);
-        if (connect && typeof connect !== "function") {
-          connect = { ...connect };
+        if (connect2 && typeof connect2 !== "function") {
+          connect2 = { ...connect2 };
         }
         this[kInterceptors] = options.interceptors?.Agent && Array.isArray(options.interceptors.Agent) ? options.interceptors.Agent : [createRedirectInterceptor({ maxRedirections })];
-        this[kOptions] = { ...util2.deepClone(options), connect };
+        this[kOptions] = { ...util2.deepClone(options), connect: connect2 };
         this[kOptions].interceptors = options.interceptors ? { ...options.interceptors } : void 0;
         this[kMaxRedirections] = maxRedirections;
         this[kFactory] = factory;
@@ -15216,16 +15216,16 @@ var require_proxy_agent = __commonJS({
     }
     var Http1ProxyWrapper = class extends DispatcherBase {
       #client;
-      constructor(proxyUrl, { headers = {}, connect, factory }) {
+      constructor(proxyUrl, { headers = {}, connect: connect2, factory }) {
         super();
         if (!proxyUrl) {
           throw new InvalidArgumentError("Proxy URL is mandatory");
         }
         this[kProxyHeaders] = headers;
         if (factory) {
-          this.#client = factory(proxyUrl, { connect });
+          this.#client = factory(proxyUrl, { connect: connect2 });
         } else {
-          this.#client = new Client(proxyUrl, { connect });
+          this.#client = new Client(proxyUrl, { connect: connect2 });
         }
       }
       [kDispatch](opts, handler) {
@@ -15287,7 +15287,7 @@ var require_proxy_agent = __commonJS({
         } else if (username && password) {
           this[kProxyHeaders]["proxy-authorization"] = `Basic ${Buffer.from(`${decodeURIComponent(username)}:${decodeURIComponent(password)}`).toString("base64")}`;
         }
-        const connect = buildConnector({ ...opts.proxyTls });
+        const connect2 = buildConnector({ ...opts.proxyTls });
         this[kConnectEndpoint] = buildConnector({ ...opts.requestTls });
         const agentFactory = opts.factory || defaultAgentFactory;
         const factory = (origin2, options) => {
@@ -15295,13 +15295,13 @@ var require_proxy_agent = __commonJS({
           if (!this[kTunnelProxy] && protocol2 === "http:" && this[kProxy].protocol === "http:") {
             return new Http1ProxyWrapper(this[kProxy].uri, {
               headers: this[kProxyHeaders],
-              connect,
+              connect: connect2,
               factory: agentFactory
             });
           }
           return agentFactory(origin2, options);
         };
-        this[kClient] = clientFactory(url, { connect });
+        this[kClient] = clientFactory(url, { connect: connect2 });
         this[kAgent] = new Agent({
           ...opts,
           factory,
@@ -16996,10 +16996,10 @@ var require_api_connect = __commonJS({
         }
       }
     };
-    function connect(opts, callback) {
+    function connect2(opts, callback) {
       if (callback === void 0) {
         return new Promise((resolve2, reject) => {
-          connect.call(this, opts, (err, data) => {
+          connect2.call(this, opts, (err, data) => {
             return err ? reject(err) : resolve2(data);
           });
         });
@@ -17015,7 +17015,7 @@ var require_api_connect = __commonJS({
         queueMicrotask(() => callback(err, { opaque }));
       }
     }
-    module.exports = connect;
+    module.exports = connect2;
   }
 });
 
@@ -36582,7 +36582,7 @@ function assertTokenNotInRepo(tokenPath) {
 }
 
 // packages/peer-agent/src/index.ts
-import { existsSync as existsSync3, realpathSync } from "node:fs";
+import { existsSync as existsSync3, realpathSync, rmSync as rmSync2 } from "node:fs";
 
 // packages/peer-agent/src/outbound.ts
 var import_ulid = __toESM(require_index_umd(), 1);
@@ -36691,7 +36691,9 @@ var Inbox = class {
   max;
   items = [];
   dropped = 0;
+  arrived = 0;
   push(item) {
+    this.arrived++;
     this.items.push(item);
     if (this.items.length > this.max) {
       this.items.shift();
@@ -36700,6 +36702,11 @@ var Inbox = class {
   }
   get size() {
     return this.items.length;
+  }
+  /** What is waiting, without taking it: count, up to five distinct senders, and a counter of every arrival so far. */
+  peek() {
+    const from = [...new Set(this.items.map((m) => m.meta.from ?? "?"))].slice(0, 5);
+    return { size: this.items.length, seq: this.arrived, from };
   }
   /** Remove and return up to `limit` of the oldest messages, plus how many were dropped since the last take. */
   take(limit = 20) {
@@ -37135,6 +37142,7 @@ var ReplyLimiter = class {
 
 // packages/peer-agent/src/session-identity.ts
 var import_ulid3 = __toESM(require_index_umd(), 1);
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync4, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
 import { join as join4, basename } from "node:path";
 
@@ -37360,9 +37368,27 @@ function probeClaudeSession(opts = {}) {
   if (typeof file.kind === "string") snap.kind = file.kind;
   return snap;
 }
+function probeHostSession(opts = {}) {
+  const envName = (opts.envName ?? process.env.MESH_SESSION_NAME)?.trim();
+  if (envName) return { name: sanitizeName(envName), status: "unknown" };
+  const host = (opts.host ?? process.env.MESH_HOST)?.trim().replace(/[^A-Za-z0-9_-]+/g, "") ?? "";
+  const base = (opts.tabLabel ?? (() => herdrTabLabel()))()?.trim() || basename(opts.cwd ?? process.cwd());
+  const name = host && !base.toLowerCase().startsWith(host.toLowerCase()) ? `${host}-${base}` : base;
+  return { name: sanitizeName(name), status: "unknown" };
+}
+function herdrTabLabel(env = process.env, run = (file, args) => execFileSync2(file, args, { encoding: "utf8", timeout: 3e3 })) {
+  if (env.HERDR_ENV !== "1" || !env.HERDR_TAB_ID) return void 0;
+  try {
+    const j = JSON.parse(run(env.HERDR_BIN_PATH || "herdr", ["tab", "get", env.HERDR_TAB_ID]));
+    const label = j.result?.tab?.label;
+    return typeof label === "string" && label.trim() ? label : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // packages/peer-agent/src/join-policy.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join5 } from "node:path";
 var FLAG = /(?:^|\s)--(?:channels|dangerously-load-development-channels)(?:=|\s+)((?:(?:plugin|server):\S+(?:\s+|$))+)/g;
@@ -37402,14 +37428,14 @@ function parentCommandLine(ppid = process.ppid) {
   }
   try {
     if (process.platform === "win32") {
-      return execFileSync2("powershell.exe", [
+      return execFileSync3("powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId=${ppid}").CommandLine`
       ], { encoding: "utf8", timeout: 1e4, windowsHide: true }).trim();
     }
-    return execFileSync2("ps", ["-o", "command=", "-p", String(ppid)], { encoding: "utf8", timeout: 5e3 }).trim();
+    return execFileSync3("ps", ["-o", "command=", "-p", String(ppid)], { encoding: "utf8", timeout: 5e3 }).trim();
   } catch {
     return "";
   }
@@ -37441,6 +37467,120 @@ function onHostClosed(stdin, onGone) {
   stdin.once("close", () => fire("stdin_close"));
 }
 
+// packages/peer-agent/src/hook-socket.ts
+import { createServer, connect } from "node:net";
+import { chmodSync, mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join as join6 } from "node:path";
+function hookSocketPath(hostPid, dir = meshDir()) {
+  if (process.platform === "win32") {
+    const tag = createHash("sha256").update(dir).digest("hex").slice(0, 8);
+    return `\\\\.\\pipe\\claude-mesh-hook-${tag}-${hostPid}`;
+  }
+  return join6(dir, "hooks", `${hostPid}.sock`);
+}
+var HookChannel = class {
+  constructor(inbox, onStatus) {
+    this.inbox = inbox;
+    this.onStatus = onStatus;
+  }
+  inbox;
+  onStatus;
+  nudgedSeq = 0;
+  handle(req) {
+    const p = this.inbox.peek();
+    const base = { unread: p.size, from: p.from };
+    if (req.op === "turn") {
+      this.onStatus("busy");
+      return base;
+    }
+    if (req.op === "stop") {
+      if (p.size > 0 && p.seq > this.nudgedSeq && req.reason === "NO_TOOL_CALL") {
+        this.nudgedSeq = p.seq;
+        return { ...base, continue: true };
+      }
+      this.onStatus("idle");
+      return { ...base, continue: false };
+    }
+    return base;
+  }
+};
+async function serveHookSocket(path, channel) {
+  if (process.platform !== "win32") {
+    const dir = join6(path, "..");
+    mkdirSync(dir, { recursive: true, mode: 448 });
+    chmodSync(dir, 448);
+    rmSync(path, { force: true });
+  }
+  const server = createServer((sock) => {
+    let buf = "";
+    sock.setEncoding("utf8");
+    sock.setTimeout(2e3, () => sock.destroy());
+    sock.on("error", () => {
+    });
+    sock.on("data", (chunk) => {
+      buf += chunk;
+      if (buf.length > 4096) {
+        sock.destroy();
+        return;
+      }
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      let reply;
+      try {
+        reply = channel.handle(JSON.parse(buf.slice(0, i)));
+      } catch {
+        sock.destroy();
+        return;
+      }
+      sock.end(JSON.stringify(reply) + "\n");
+    });
+  });
+  await new Promise((resolve2, reject) => {
+    server.once("error", reject);
+    server.listen(path, () => {
+      server.off("error", reject);
+      resolve2();
+    });
+  });
+  if (process.platform !== "win32") chmodSync(path, 384);
+  return server;
+}
+
+// packages/peer-agent/src/wake.ts
+import { spawn } from "node:child_process";
+var IdleWaker = class {
+  constructor(opts) {
+    this.opts = opts;
+  }
+  opts;
+  last = Number.NEGATIVE_INFINITY;
+  maybeWake(status, waiting) {
+    if (status !== "idle" || waiting.size <= 0) return false;
+    const now = (this.opts.now ?? Date.now)();
+    if (now - this.last < (this.opts.minIntervalMs ?? 2e4)) return false;
+    this.last = now;
+    const n = waiting.size;
+    this.opts.send(`[mesh] ${n} new ${n === 1 ? "message" : "messages"} from ${waiting.from.join(", ")}. Call the mesh read_messages tool to read ${n === 1 ? "it" : "them"}.`);
+    return true;
+  }
+};
+function herdrWaker(env = process.env, start = startDetached) {
+  if (env.MESH_WAKE !== "herdr" || env.HERDR_ENV !== "1" || !env.HERDR_PANE_ID) return void 0;
+  const bin = env.HERDR_BIN_PATH || "herdr";
+  const pane = env.HERDR_PANE_ID;
+  return new IdleWaker({ send: (text) => start(bin, ["agent", "prompt", pane, text]) });
+}
+function startDetached(file, args) {
+  try {
+    const child = spawn(file, args, { stdio: "ignore", detached: true });
+    child.on("error", () => {
+    });
+    child.unref();
+  } catch {
+  }
+}
+
 // packages/peer-agent/src/index.ts
 import { fileURLToPath } from "node:url";
 var IDENTITY_POLL_MS = 3e3;
@@ -37460,7 +37600,8 @@ async function main() {
   assertTokenNotInRepo(cfg.token_path);
   const token = loadToken(cfg.token_path);
   const cwd = process.cwd();
-  let identity = probeClaudeSession({ cwd });
+  const pullHost = process.env.MESH_JOIN === "pull";
+  let identity = pullHost ? probeHostSession({ cwd }) : probeClaudeSession({ cwd });
   const decision = chooseJoinMode(process.env.MESH_JOIN, () => decideJoin({
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
@@ -37516,7 +37657,7 @@ async function main() {
   };
   void refreshRoster();
   setInterval(refreshRoster, 6e4).unref();
-  setInterval(() => {
+  if (!pull) setInterval(() => {
     const next = probeClaudeSession({ cwd });
     const nextLogin = readLogin();
     if (next.name === identity.name && next.status === identity.status && nextLogin === login) return;
@@ -37524,6 +37665,25 @@ async function main() {
     login = nextLogin;
     client.updateSelf({ name: next.name, status: next.status, ...nextLogin ? { login: nextLogin } : {} }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
   }, IDENTITY_POLL_MS).unref();
+  const waker = inbox ? herdrWaker() : void 0;
+  if (inbox) {
+    const setStatus = (status) => {
+      if (identity.status === status) return;
+      identity = { ...identity, status };
+      client.updateSelf({ status }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
+    };
+    const hookPath = hookSocketPath(process.ppid);
+    serveHookSocket(hookPath, new HookChannel(inbox, setStatus)).then((server2) => {
+      server2.unref();
+      if (process.platform !== "win32") process.on("exit", () => {
+        try {
+          rmSync2(hookPath, { force: true });
+        } catch {
+        }
+      });
+      logJson("info", "peer.hooks.listening", { path: hookPath, wake: !!waker });
+    }).catch((err) => logJson("warn", "peer.hooks.listen_error", describeError(err)));
+  }
   let cursor;
   const dispatcher = new InboundDispatcher({
     gate,
@@ -37532,7 +37692,10 @@ async function main() {
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: (n) => {
       if (inbox) {
-        if (n.method === "notifications/claude/channel") inbox.push(n.params);
+        if (n.method === "notifications/claude/channel") {
+          inbox.push(n.params);
+          waker?.maybeWake(identity.status, inbox.peek());
+        }
       } else void server.notification(n);
     },
     setCursor: (id) => {
