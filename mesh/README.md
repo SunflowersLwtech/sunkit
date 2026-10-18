@@ -329,6 +329,9 @@ as trusted, unlike rules pasted into the first prompt:
 AGY_SESSION_RULES_B64=$(printf '%s' 'Report to lead over the mesh when done.' | base64) MESH_SESSION_NAME=agy-review agy
 ```
 
+Print-mode runs (`agy -p …`, `devin -p …`) start the server too, but only send: they are not listed,
+so a one-off `agy -p "/usage"` leaves no row behind.
+
 The hooks find the peer through a socket under `MESH_HOME/hooks/`, keyed by the agy process id (both
 are children of that process). To remove: `agy mcp remove mesh` and delete the `mesh` entry from
 `~/.gemini/config/hooks.json`.

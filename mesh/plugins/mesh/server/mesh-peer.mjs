@@ -36679,8 +36679,8 @@ function formatListing(rows, selfId) {
 }
 
 // packages/peer-agent/src/inbox.ts
-function chooseJoinMode(env, decide) {
-  if (env === "pull") return { mode: "pull", reason: "MESH_JOIN=pull" };
+function chooseJoinMode(env, decide, oneShot = () => false) {
+  if (env === "pull") return oneShot() ? { mode: "send", reason: "one-shot host run (print mode)" } : { mode: "pull", reason: "MESH_JOIN=pull" };
   const d = decide();
   return { mode: d.join ? "push" : "send", reason: d.reason };
 }
@@ -37440,6 +37440,23 @@ function parentCommandLine(ppid = process.ppid) {
     return "";
   }
 }
+var PRINT_FLAGS = {
+  agy: ["-p", "--print", "--prompt"],
+  devin: ["-p", "--print"]
+};
+var INTERACTIVE_FLAGS = {
+  agy: ["-i", "--prompt-interactive"],
+  devin: []
+};
+function isOneShotHostRun(commandLine) {
+  const argv = commandLine.trim().split(/\s+/);
+  const exe = (argv[0] ?? "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+  const print = PRINT_FLAGS[exe];
+  if (!print) return false;
+  const rest = argv.slice(1);
+  if (rest.some((a) => INTERACTIVE_FLAGS[exe].includes(a) || INTERACTIVE_FLAGS[exe].some((f) => a.startsWith(`${f}=`)))) return false;
+  return rest.some((a) => print.includes(a) || print.some((f) => f.startsWith("--") && a.startsWith(`${f}=`)));
+}
 function decideJoin(opts) {
   if (opts.env === "always") return { join: true, reason: "MESH_JOIN=always" };
   if (opts.env === "never") return { join: false, reason: "MESH_JOIN=never" };
@@ -37606,10 +37623,10 @@ async function main() {
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
     sessionKind: identity.kind
-  }));
+  }), () => isOneShotHostRun(parentCommandLine()));
   const pull = decision.mode === "pull";
   const joins = decision.mode !== "send";
-  const readLogin = () => pull ? void 0 : readClaudeLogin();
+  const readLogin = () => pullHost ? void 0 : readClaudeLogin();
   let login = readLogin();
   const { server } = createMcpServer({ permissionRelay: false, pull });
   const sessionId = joins ? mintSessionId() : "";
