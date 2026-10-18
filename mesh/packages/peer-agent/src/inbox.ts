@@ -29,10 +29,12 @@ export interface InboxItem {
 export class Inbox {
   private items: InboxItem[] = []
   private dropped = 0
+  private arrived = 0
 
   constructor(private readonly max = 200) {}
 
   push(item: InboxItem): void {
+    this.arrived++
     this.items.push(item)
     if (this.items.length > this.max) {
       this.items.shift()
@@ -42,6 +44,12 @@ export class Inbox {
 
   get size(): number {
     return this.items.length
+  }
+
+  /** What is waiting, without taking it: count, up to five distinct senders, and a counter of every arrival so far. */
+  peek(): { size: number; seq: number; from: string[] } {
+    const from = [...new Set(this.items.map(m => m.meta.from ?? '?'))].slice(0, 5)
+    return { size: this.items.length, seq: this.arrived, from }
   }
 
   /** Remove and return up to `limit` of the oldest messages, plus how many were dropped since the last take. */

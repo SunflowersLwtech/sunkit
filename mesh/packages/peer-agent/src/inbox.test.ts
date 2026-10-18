@@ -31,6 +31,17 @@ describe('Inbox', () => {
     expect(box.take().items.map(m => m.content)).toEqual(['body 3'])
     expect(box.take().items).toEqual([])
   })
+  it('peek counts what is waiting and who sent it, without taking anything; seq counts every arrival', () => {
+    const box = new Inbox()
+    expect(box.peek()).toEqual({ size: 0, seq: 0, from: [] })
+    box.push(msg(1)); box.push(msg(2)); box.push(msg(1))
+    expect(box.peek()).toEqual({ size: 3, seq: 3, from: ['devin-1 [abc121]', 'devin-2 [abc122]'] })
+    box.take(2)
+    expect(box.peek()).toEqual({ size: 1, seq: 3, from: ['devin-1 [abc121]'] })
+    for (let i = 0; i < 8; i++) box.push(msg(i))
+    expect(box.peek().from).toHaveLength(5)
+    expect(box.peek().seq).toBe(11)
+  })
   it('is bounded: when full it drops the oldest and reports how many were dropped, once', () => {
     const box = new Inbox(2)
     box.push(msg(1)); box.push(msg(2)); box.push(msg(3))

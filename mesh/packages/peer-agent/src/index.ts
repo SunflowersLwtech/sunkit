@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer } from './mcp-server.ts'
 import { loadConfig, loadToken, assertTokenNotInRepo, defaultConfigPath } from './config.ts'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, rmSync } from 'node:fs'
 import { RelayClient } from './outbound.ts'
 import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.ts'
 import { chooseJoinMode, Inbox } from './inbox.ts'
@@ -14,6 +14,8 @@ import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
 import { decideJoin, parentCommandLine } from './join-policy.ts'
 import { onHostClosed } from './host-lifetime.ts'
+import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
+import { herdrWaker } from './wake.ts'
 import { fileURLToPath } from 'node:url'
 import { logJson } from './logger.ts'
 
@@ -120,6 +122,26 @@ async function main(): Promise<void> {
       .catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
   }, IDENTITY_POLL_MS).unref()
 
+  // Pull hosts with lifecycle hooks (Antigravity CLI) reach the inbox through a local socket:
+  // the hooks tell a working agent that messages arrived and report busy/idle; MESH_WAKE=herdr
+  // also prompts an idle one.
+  const waker = inbox ? herdrWaker() : undefined
+  if (inbox) {
+    const setStatus = (status: 'busy' | 'idle') => {
+      if (identity.status === status) return
+      identity = { ...identity, status }
+      client.updateSelf({ status }).catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
+    }
+    const hookPath = hookSocketPath(process.ppid)
+    serveHookSocket(hookPath, new HookChannel(inbox, setStatus))
+      .then(server => {
+        server.unref()
+        if (process.platform !== 'win32') process.on('exit', () => { try { rmSync(hookPath, { force: true }) } catch { /* gone */ } })
+        logJson('info', 'peer.hooks.listening', { path: hookPath, wake: !!waker })
+      })
+      .catch(err => logJson('warn', 'peer.hooks.listen_error', describeError(err)))
+  }
+
   let cursor: string | undefined
   const dispatcher = new InboundDispatcher({
     gate,
@@ -127,7 +149,12 @@ async function main(): Promise<void> {
     chatOnly: true,
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: n => {
-      if (inbox) { if (n.method === 'notifications/claude/channel') inbox.push(n.params as { content: string; meta: Record<string, string> }) }
+      if (inbox) {
+        if (n.method === 'notifications/claude/channel') {
+          inbox.push(n.params as { content: string; meta: Record<string, string> })
+          waker?.maybeWake(identity.status, inbox.peek())
+        }
+      }
       else void server.notification(n as never)
     },
     setCursor: id => { cursor = id },

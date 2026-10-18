@@ -64,12 +64,17 @@ async function main(): Promise<void> {
     await runSay(args)
     return
   }
+  if (cmd === 'agy') {
+    const { runAgy } = await import('./cli/agy.ts')
+    process.exitCode = await runAgy(args)
+    return
+  }
   if (cmd === 'devin') {
     const { runDevin } = await import('./cli/devin.ts')
     process.exitCode = runDevin(args)
     return
   }
-  console.error('commands: pair, admin, respond, send, policy, say, devin')
+  console.error('commands: pair, admin, respond, send, policy, say, devin, agy')
   process.exit(2)
 }
 

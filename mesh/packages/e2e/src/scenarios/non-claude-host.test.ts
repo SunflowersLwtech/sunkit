@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -188,6 +188,44 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(exit).toEqual({ code: 0, signal: null })
     const after = await until(async () => { const t = await watcher.call('list_agents'); return /^devin-gone .* · reconnecting/m.test(t) ? t : undefined }, 'devin-gone reconnecting')
     expect(after).toMatch(/^devin-gone \[[0-9a-z]{6}\] — alice@e2e · reconnecting/m)
+  })
+
+  it('agy hooks: told about arrivals mid-turn, nudged once at a stop, busy/idle on the mesh, and an idle pane woken through Herdr', async () => {
+    const meshHome = join(h.humans.alice!.configDir, '.claude-mesh')
+    const work = mkdtempSync(join(tmpdir(), 'agy-wake-'))
+    const wakeLog = join(work, 'herdr-calls')
+    const fakeHerdr = join(work, 'herdr')
+    writeFileSync(fakeHerdr, `#!/bin/sh\nprintf '%s|' "$@" >> '${wakeLog}'\necho >> '${wakeLog}'\n`, { mode: 0o755 })
+    const agy = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'agy', MESH_SESSION_NAME: 'agy-e2e', MESH_WAKE: 'herdr', HERDR_ENV: '1', HERDR_PANE_ID: 'w9:p9', HERDR_BIN_PATH: fakeHerdr })
+    const bob = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-inbox' })
+    // The hook runs as a child of the same process as the peer (this test), the way agy runs both.
+    const hook = async (event: string, payload: object = {}) => {
+      const child = execFile(process.execPath, [CLI, 'agy', 'hook', event], { env: childEnv(meshHome, {}) })
+      child.stdin!.end(JSON.stringify(payload))
+      const out = await new Promise<string>((res, rej) => { let o = ''; child.stdout!.on('data', d => { o += d }); child.on('exit', c => (c === 0 ? res(o) : rej(new Error(`hook exit ${c}`)))) })
+      return JSON.parse(out) as { injectSteps?: Array<{ ephemeralMessage: string }>; decision?: string; reason?: string }
+    }
+    const row = async (state: string) => until(async () => { const t = await bob.call('list_agents'); return new RegExp(`^agy-e2e \\[[0-9a-z]{6}\\] — alice@e2e · ${state} · pull`, 'm').test(t) ? t : undefined }, `agy-e2e ${state}`)
+    await row('unknown')
+    await until(async () => (Object.keys(await hook('PreInvocation')).length === 0 ? true : undefined), 'hook socket up')
+    await row('busy')
+
+    await bob.call('send_message', { to: 'agy-e2e', message: 'please read me' })
+    const turn = await until(async () => { const o = await hook('PreInvocation', { invocationNum: 1 }); return o.injectSteps ? o : undefined }, 'a notice before the next model call')
+    expect(turn.injectSteps![0]!.ephemeralMessage).toMatch(/^\[mesh\] 1 unread message from bob-inbox \[[0-9a-z]{6}\] is waiting\. Call the mesh read_messages tool/)
+    expect(JSON.stringify(turn)).not.toContain('please read me')
+    expect(await hook('Stop', { terminationReason: 'USER_CANCELED' })).toEqual({})
+    await row('idle')
+    expect((await hook('Stop', { terminationReason: 'NO_TOOL_CALL' })).decision).toBe('continue')
+    expect(await hook('Stop', { terminationReason: 'NO_TOOL_CALL' })).toEqual({})
+    expect((await nextMessage(agy)).body).toBe('please read me')
+
+    // Idle now (the last stop): a new message wakes the pane, naming the sender only.
+    expect(existsSync(wakeLog)).toBe(false)
+    await bob.call('send_message', { to: 'agy-e2e', message: 'second' })
+    const calls = await until(async () => (existsSync(wakeLog) ? readFileSync(wakeLog, 'utf8') : undefined), 'a herdr prompt')
+    expect(calls).toMatch(/^agent\|prompt\|w9:p9\|\[mesh\] 1 new message from bob-inbox \[[0-9a-z]{6}\]\. Call the mesh read_messages tool to read it\.\|\n$/)
+    expect(calls).not.toContain('second')
   })
 
   it('mesh say --as sends one message under that name, with --reply-to', async () => {

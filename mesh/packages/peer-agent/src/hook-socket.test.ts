@@ -1,0 +1,107 @@
+import { describe, it, expect, afterEach } from 'vitest'
+import { mkdirSync, mkdtempSync, writeFileSync, statSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Inbox } from './inbox.ts'
+import { HookChannel, hookSocketPath, serveHookSocket, askHookSocket } from './hook-socket.ts'
+
+const msg = (from: string) => ({ content: 'x', meta: { from, account: 'alice', msg_id: 'm', source: 'peers' } })
+
+describe('HookChannel', () => {
+  const make = () => {
+    const inbox = new Inbox()
+    const statuses: string[] = []
+    return { inbox, statuses, ch: new HookChannel(inbox, s => statuses.push(s)) }
+  }
+
+  it('a turn marks the session busy and reports what is unread, by sender', () => {
+    const { inbox, statuses, ch } = make()
+    expect(ch.handle({ op: 'turn' })).toEqual({ unread: 0, from: [] })
+    inbox.push(msg('lead [abc123]')); inbox.push(msg('lead [abc123]')); inbox.push(msg('ops [def456]'))
+    expect(ch.handle({ op: 'turn' })).toEqual({ unread: 3, from: ['lead [abc123]', 'ops [def456]'] })
+    expect(statuses).toEqual(['busy', 'busy'])
+  })
+
+  it('stop asks to continue once per new arrival, then lets the session go idle', () => {
+    const { inbox, statuses, ch } = make()
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' })).toEqual({ unread: 0, from: [], continue: false })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: true })
+    // The agent stopped again without reading it: no second nudge for the same message.
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: false })
+    inbox.push(msg('ops [def456]'))
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' }).continue).toBe(true)
+    inbox.take()
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' })).toEqual({ unread: 0, from: [], continue: false })
+    expect(statuses).toEqual(['idle', 'idle', 'idle'])
+  })
+
+  it('never overrides a stop the user asked for, an error, or a limit', () => {
+    for (const reason of ['USER_CANCELED', 'ERROR', 'MAX_INVOCATIONS', 'MAX_FORCED_INVOCATIONS', undefined]) {
+      const { inbox, statuses, ch } = make()
+      inbox.push(msg('lead [abc123]'))
+      expect(ch.handle({ op: 'stop', ...(reason ? { reason } : {}) }).continue).toBe(false)
+      expect(statuses).toEqual(['idle'])
+      // A user's Esc does not use up the nudge for that message.
+      expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' }).continue).toBe(true)
+    }
+  })
+
+  it('a request it does not know changes nothing', () => {
+    const { inbox, statuses, ch } = make()
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'bogus' } as never)).toEqual({ unread: 1, from: ['lead [abc123]'] })
+    expect(statuses).toEqual([])
+  })
+})
+
+describe('hook socket', () => {
+  const closers: Array<() => void> = []
+  afterEach(() => { for (const c of closers.splice(0)) c() })
+
+  it('lives under the mesh home, one per host process', () => {
+    if (process.platform === 'win32') {
+      expect(hookSocketPath(4242, 'C:\\m')).toMatch(/^\\\\\.\\pipe\\claude-mesh-hook-[0-9a-f]{8}-4242$/)
+    } else {
+      expect(hookSocketPath(4242, '/h/.claude-mesh')).toBe('/h/.claude-mesh/hooks/4242.sock')
+    }
+  })
+
+  it('answers hook requests from the inbox, replacing a stale socket file, readable only by its owner', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mesh-hk-'))
+    const path = hookSocketPath(4242, dir)
+    const inbox = new Inbox()
+    inbox.push(msg('lead [abc123]'))
+    const statuses: string[] = []
+    if (process.platform !== 'win32') {
+      // Left behind by a peer that crashed.
+      mkdirSync(join(dir, 'hooks'), { recursive: true })
+      writeFileSync(path, '')
+    }
+    const server = await serveHookSocket(path, new HookChannel(inbox, s => statuses.push(s)))
+    closers.push(() => server.close())
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
+    expect(await askHookSocket(path, { op: 'turn' })).toEqual({ unread: 1, from: ['lead [abc123]'] })
+    expect(await askHookSocket(path, { op: 'stop', reason: 'NO_TOOL_CALL' })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: true })
+    expect(statuses).toEqual(['busy'])
+    // A second peer for the same host pid (pid reuse after a crash) takes the path over.
+    const again = await serveHookSocket(path, new HookChannel(new Inbox(), () => {}))
+    closers.push(() => again.close())
+    expect(await askHookSocket(path, { op: 'turn' })).toEqual({ unread: 0, from: [] })
+  })
+
+  it('a missing socket or a silent server yields undefined, quickly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mesh-hk-'))
+    expect(await askHookSocket(hookSocketPath(9, dir), { op: 'turn' })).toBeUndefined()
+    if (process.platform === 'win32') return
+    const { createServer } = await import('node:net')
+    const path = join(dir, 'silent.sock')
+    const silent = createServer(() => { /* never answers */ })
+    await new Promise<void>(r => silent.listen(path, r))
+    closers.push(() => silent.close())
+    const t0 = Date.now()
+    expect(await askHookSocket(path, { op: 'turn' }, 300)).toBeUndefined()
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(existsSync(path)).toBe(true)
+  })
+})
