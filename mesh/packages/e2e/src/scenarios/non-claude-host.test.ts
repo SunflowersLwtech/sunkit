@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { startHarness, type Harness } from '../harness.ts'
@@ -36,17 +36,21 @@ interface Peer {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
 }
 
-function childEnv(meshHome: string, extra: Record<string, string>): NodeJS.ProcessEnv {
+function childEnv(meshHome: string, extra: Record<string, string>, home = mkdtempSync(join(tmpdir(), 'mesh-home-'))): NodeJS.ProcessEnv {
   // A throwaway HOME, so no real ~/.claude session file can name these peers.
-  const home = mkdtempSync(join(tmpdir(), 'mesh-home-'))
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home, MESH_HOME: meshHome, ...extra }
   return env
 }
 
-async function startPeer(h: Harness, who: string, extra: Record<string, string>): Promise<Peer> {
-  const cwd = mkdtempSync(join(tmpdir(), `host-${who}-`))
+/** Set up the host's HOME and working directory before the peer starts (real paths, as the peer sees them). */
+type Prepare = (dirs: { home: string; cwd: string }) => void
+
+async function startPeer(h: Harness, who: string, extra: Record<string, string>, prepare?: Prepare): Promise<Peer> {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), `host-${who}-`)))
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'mesh-home-')))
+  prepare?.({ home, cwd })
   const p: ChildProcessWithoutNullStreams = spawn(process.execPath, [PEER], {
-    cwd, env: childEnv(join(h.humans[who]!.configDir, '.claude-mesh'), extra), stdio: ['pipe', 'pipe', 'pipe'],
+    cwd, env: childEnv(join(h.humans[who]!.configDir, '.claude-mesh'), extra, home), stdio: ['pipe', 'pipe', 'pipe'],
   })
   let buf = ''
   let stderr = ''
@@ -108,7 +112,7 @@ async function nextMessage(p: Peer): Promise<{ attrs: Record<string, string>; bo
 describe('L3: hosts without channels (Devin-style), relay-only', () => {
   let h: Harness
   const peers: Peer[] = []
-  const peer = async (who: string, extra: Record<string, string>) => { const p = await startPeer(h, who, extra); peers.push(p); return p }
+  const peer = async (who: string, extra: Record<string, string>, prepare?: Prepare) => { const p = await startPeer(h, who, extra, prepare); peers.push(p); return p }
   beforeEach(async () => { h = await startHarness(['alice', 'bob']) })
   afterEach(async () => { for (const p of peers.splice(0)) p.stop(); await h.cleanup() })
 
@@ -134,6 +138,21 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(back.attrs.in_reply_to).toBe(got.attrs.msg_id)
     expect(back.body).toBe('got it')
     expect(await devin.call('read_messages')).toBe('No new messages.')
+  })
+
+  it('an unnamed pull peer is named after its directory with the host prefix, not after a Claude session in that directory', async () => {
+    let cwd = ''
+    // A live Claude Code session (this test process) registered in the same directory as the host.
+    const neighbour: Prepare = d => {
+      cwd = d.cwd
+      mkdirSync(join(d.home, '.claude', 'sessions'), { recursive: true })
+      writeFileSync(join(d.home, '.claude', 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: d.cwd, name: 'claude-neighbour', status: 'busy', kind: 'interactive', startedAt: Date.now() }))
+    }
+    const agy = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'agy' }, neighbour)
+    const expected = `agy-${basename(cwd)}`
+    const listing = await until(async () => { const t = await agy.call('list_agents'); return t.includes('(this session)') ? t : undefined }, 'own row in list_agents')
+    expect(listing).not.toContain('claude-neighbour')
+    expect(listing).toMatch(new RegExp(`^${expected} \\[[0-9a-z]{6}\\] \\(this session\\) — alice@e2e · unknown · pull · `, 'm'))
   })
 
   it('a send-only peer (MESH_JOIN=never) with MESH_SESSION_NAME is not listed, and its messages carry that name', async () => {

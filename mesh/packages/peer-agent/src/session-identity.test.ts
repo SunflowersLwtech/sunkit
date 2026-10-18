@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionIdSchema, SessionNameSchema } from '@claude-mesh/shared'
-import { mintSessionId, probeClaudeSession, sanitizeName, readClaudeLogin } from './session-identity.ts'
+import { mintSessionId, probeClaudeSession, probeHostSession, herdrTabLabel, sanitizeName, readClaudeLogin } from './session-identity.ts'
 import { utimesSync } from 'node:fs'
 
 describe('session identity', () => {
@@ -71,6 +71,46 @@ describe('session identity', () => {
     expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' }).name).toBe('x')
     delete process.env.MESH_SESSION_NAME
     expect(probeClaudeSession({ sessionsDir: dir, ppid: 7, cwd: '/w/x' }).name).toBe('x')
+  })
+
+  it('a pull host (Devin, Antigravity) never takes the name of a Claude session in its directory', () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = dir
+      mkdirSync(join(dir, 'sessions'))
+      // A live Claude session in the same directory, and one whose pid is our parent's.
+      writeFileSync(join(dir, 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/w/repo', name: 'claude-x', status: 'busy', startedAt: 9 }))
+      writeFileSync(join(dir, 'sessions', `${process.ppid}.json`), JSON.stringify({ pid: process.ppid, cwd: '/w/repo', name: 'claude-y', status: 'busy' }))
+      expect(probeClaudeSession({ cwd: '/w/repo' }).name).toMatch(/^claude-[xy]$/) // the Claude rules still borrow
+      expect(probeHostSession({ cwd: '/w/repo', envName: '', host: 'agy', tabLabel: () => undefined })).toEqual({ name: 'agy-repo', status: 'unknown' })
+      expect(probeHostSession({ cwd: '/w/repo', envName: '', tabLabel: () => undefined })).toEqual({ name: 'repo', status: 'unknown' })
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved
+    }
+  })
+
+  it('names a pull host: MESH_SESSION_NAME as given, else the Herdr tab label, else the directory, with the host prefix', () => {
+    const tab = (label?: string) => () => label
+    expect(probeHostSession({ cwd: '/w/repo', envName: 'review-1', host: 'agy', tabLabel: tab('1') }).name).toBe('review-1')
+    expect(probeHostSession({ cwd: '/w/repo', envName: '', host: 'agy', tabLabel: tab('1') }).name).toBe('agy-1')
+    expect(probeHostSession({ cwd: '/w/repo', envName: '', host: 'agy', tabLabel: tab('agy-review') }).name).toBe('agy-review')
+    expect(probeHostSession({ cwd: '/w/repo', envName: '', host: 'agy', tabLabel: tab('my tab [x]') }).name).toBe('agy-my-tab-x')
+    expect(probeHostSession({ cwd: '/w/my repo', envName: '  ', host: 'agy', tabLabel: tab('  ') }).name).toBe('agy-my-repo')
+    expect(probeHostSession({ cwd: '/w/repo', envName: '', host: ' a g y ', tabLabel: tab() }).name).toBe('agy-repo')
+  })
+
+  it('reads the Herdr tab label only inside Herdr, and survives Herdr failing', () => {
+    const inHerdr = { HERDR_ENV: '1', HERDR_TAB_ID: 'w1:t3', HERDR_BIN_PATH: '/x/herdr' }
+    const calls: string[][] = []
+    const run = (file: string, args: string[]) => { calls.push([file, ...args]); return JSON.stringify({ result: { tab: { label: 'review', tab_id: 'w1:t3' } } }) }
+    expect(herdrTabLabel(inHerdr, run)).toBe('review')
+    expect(calls).toEqual([['/x/herdr', 'tab', 'get', 'w1:t3']])
+    expect(herdrTabLabel({ HERDR_TAB_ID: 'w1:t3' }, run)).toBeUndefined()
+    expect(herdrTabLabel({ HERDR_ENV: '1' }, run)).toBeUndefined()
+    expect(herdrTabLabel(inHerdr, () => { throw new Error('no server') })).toBeUndefined()
+    expect(herdrTabLabel(inHerdr, () => 'not json')).toBeUndefined()
+    expect(herdrTabLabel(inHerdr, () => JSON.stringify({ result: { tab: { label: '' } } }))).toBeUndefined()
+    expect(calls).toHaveLength(1)
   })
 
   it('reads the signed-in claude.ai email and notices a /login switch', () => {

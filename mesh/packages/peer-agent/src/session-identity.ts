@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { ulid } from 'ulid'
@@ -111,4 +112,45 @@ export function probeClaudeSession(opts: IdentityProbeOpts = {}): SessionSnapsho
   const snap: SessionSnapshot = { name: file.name ? sanitizeName(file.name) : fallback.name, status }
   if (typeof file.kind === 'string') snap.kind = file.kind
   return snap
+}
+
+export interface HostProbeOpts {
+  cwd?: string
+  /** Defaults to MESH_SESSION_NAME. */
+  envName?: string | undefined
+  /** Short host label (MESH_HOST, e.g. "agy"), prefixed to names the host did not set itself. */
+  host?: string | undefined
+  /** Label of the Herdr tab the host runs in; defaults to asking Herdr. */
+  tabLabel?: () => string | undefined
+}
+
+/**
+ * Name of a pull-mode host (Devin CLI, Antigravity CLI). Claude Code's session registry is
+ * never read: it describes other processes, and a Claude session in the same directory would
+ * lend this host its name. Order: MESH_SESSION_NAME as given, then the Herdr tab label, then
+ * the working directory's basename; the last two get the host prefix ("agy-1") unless they
+ * already start with it. Status starts unknown; the host's hooks report busy/idle if it has any.
+ */
+export function probeHostSession(opts: HostProbeOpts = {}): SessionSnapshot {
+  const envName = (opts.envName ?? process.env.MESH_SESSION_NAME)?.trim()
+  if (envName) return { name: sanitizeName(envName), status: 'unknown' }
+  const host = (opts.host ?? process.env.MESH_HOST)?.trim().replace(/[^A-Za-z0-9_-]+/g, '') ?? ''
+  const base = (opts.tabLabel ?? (() => herdrTabLabel()))()?.trim() || basename(opts.cwd ?? process.cwd())
+  const name = host && !base.toLowerCase().startsWith(host.toLowerCase()) ? `${host}-${base}` : base
+  return { name: sanitizeName(name), status: 'unknown' }
+}
+
+/** Label of the Herdr tab this process runs in, or undefined outside Herdr or on any failure. */
+export function herdrTabLabel(
+  env: NodeJS.ProcessEnv = process.env,
+  run: (file: string, args: string[]) => string = (file, args) => execFileSync(file, args, { encoding: 'utf8', timeout: 3_000 }),
+): string | undefined {
+  if (env.HERDR_ENV !== '1' || !env.HERDR_TAB_ID) return undefined
+  try {
+    const j = JSON.parse(run(env.HERDR_BIN_PATH || 'herdr', ['tab', 'get', env.HERDR_TAB_ID])) as { result?: { tab?: { label?: unknown } } }
+    const label = j.result?.tab?.label
+    return typeof label === 'string' && label.trim() ? label : undefined
+  } catch {
+    return undefined
+  }
 }

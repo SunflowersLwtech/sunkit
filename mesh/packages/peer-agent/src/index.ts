@@ -11,7 +11,7 @@ import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
-import { mintSessionId, probeClaudeSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
+import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
 import { decideJoin, parentCommandLine } from './join-policy.ts'
 import { onHostClosed } from './host-lifetime.ts'
 import { fileURLToPath } from 'node:url'
@@ -40,7 +40,9 @@ async function main(): Promise<void> {
   const token = loadToken(cfg.token_path)
 
   const cwd = process.cwd()
-  let identity: SessionSnapshot = probeClaudeSession({ cwd })
+  // A pull host is not Claude Code: its name never comes from Claude's session registry.
+  const pullHost = process.env.MESH_JOIN === 'pull'
+  let identity: SessionSnapshot = pullHost ? probeHostSession({ cwd }) : probeClaudeSession({ cwd })
   // Only sessions that will actually receive messages register as reachable: pushed
   // through a Claude Code channel, or (MESH_JOIN=pull) held for read_messages.
   const decision = chooseJoinMode(process.env.MESH_JOIN, () => decideJoin({
@@ -106,8 +108,9 @@ async function main(): Promise<void> {
   void refreshRoster()
   setInterval(refreshRoster, 60_000).unref()
 
-  // Follow Claude Code's own name/status for this session (read-only).
-  setInterval(() => {
+  // Follow Claude Code's own name/status for this session (read-only). A pull host keeps the
+  // name it started with.
+  if (!pull) setInterval(() => {
     const next = probeClaudeSession({ cwd })
     const nextLogin = readLogin()
     if (next.name === identity.name && next.status === identity.status && nextLogin === login) return
