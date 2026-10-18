@@ -37381,7 +37381,11 @@ function herdrTabLabel(env = process.env, run = (file, args) => execFileSync2(fi
   try {
     const j = JSON.parse(run(env.HERDR_BIN_PATH || "herdr", ["tab", "get", env.HERDR_TAB_ID]));
     const label = j.result?.tab?.label;
-    return typeof label === "string" && label.trim() ? label : void 0;
+    if (typeof label !== "string" || !label.trim()) return void 0;
+    const panes = j.result?.tab?.pane_count;
+    if (typeof panes !== "number" || panes <= 1) return label;
+    const pane = env.HERDR_PANE_ID?.split(":").pop();
+    return pane ? `${label}-${pane}` : void 0;
   } catch {
     return void 0;
   }

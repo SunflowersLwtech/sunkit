@@ -113,6 +113,17 @@ describe('session identity', () => {
     expect(calls).toHaveLength(1)
   })
 
+  it('in a tab with several panes the label belongs to the tab\'s main agent, so the pane id is added', () => {
+    const env = { HERDR_ENV: '1', HERDR_TAB_ID: 'wC:t42', HERDR_PANE_ID: 'wC:p4A' }
+    const tab = (pane_count: unknown) => () => JSON.stringify({ result: { tab: { label: 'agy-config', pane_count } } })
+    expect(herdrTabLabel(env, tab(1))).toBe('agy-config')
+    expect(herdrTabLabel(env, tab(2))).toBe('agy-config-p4A')
+    expect(herdrTabLabel(env, tab(undefined))).toBe('agy-config')
+    // Without a pane id there is nothing to tell the panes apart: no name from the tab.
+    expect(herdrTabLabel({ HERDR_ENV: '1', HERDR_TAB_ID: 'wC:t42' }, tab(3))).toBeUndefined()
+    expect(probeHostSession({ cwd: '/w/x', envName: '', host: 'agy', tabLabel: () => herdrTabLabel(env, tab(2)) }).name).toBe('agy-config-p4A')
+  })
+
   it('reads the signed-in claude.ai email and notices a /login switch', () => {
     const f = join(dir, '.claude.json')
     writeFileSync(f, JSON.stringify({ oauthAccount: { emailAddress: 'a@duocodetech.com' } }))
