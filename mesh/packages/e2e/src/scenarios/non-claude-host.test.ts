@@ -228,6 +228,51 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(calls).not.toContain('second')
   })
 
+  it('grok hooks: idle from the start so a fresh pane can be woken, one notice on a tool result, a natural stop kept going once', async () => {
+    const meshHome = join(h.humans.alice!.configDir, '.claude-mesh')
+    const work = mkdtempSync(join(tmpdir(), 'grok-wake-'))
+    const wakeLog = join(work, 'herdr-calls')
+    const fakeHerdr = join(work, 'herdr')
+    writeFileSync(fakeHerdr, `#!/bin/sh\nprintf '%s|' "$@" >> '${wakeLog}'\necho >> '${wakeLog}'\n`, { mode: 0o755 })
+    const grok = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'grok', MESH_SESSION_NAME: 'grok-e2e', MESH_WAKE: 'herdr', HERDR_ENV: '1', HERDR_PANE_ID: 'w9:p8', HERDR_BIN_PATH: fakeHerdr })
+    const bob = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-inbox' })
+    // Grok Build runs hooks and MCP servers as children of the grok process; here that is this test.
+    const hook = async (event: string, payload: object = {}) => {
+      const child = execFile(process.execPath, [CLI, 'grok', 'hook', event], { env: childEnv(meshHome, {}) })
+      child.stdin!.end(JSON.stringify(payload))
+      const out = await new Promise<string>((res, rej) => { let o = ''; child.stdout!.on('data', d => { o += d }); child.on('exit', c => (c === 0 ? res(o) : rej(new Error(`hook exit ${c}`)))) })
+      return JSON.parse(out) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string }; decision?: string; reason?: string }
+    }
+    const row = async (state: string) => until(async () => { const t = await bob.call('list_agents'); return new RegExp(`^grok-e2e \\[[0-9a-z]{6}\\] — alice@e2e · ${state} · pull`, 'm').test(t) ? t : undefined }, `grok-e2e ${state}`)
+    await row('unknown')
+    // SessionStart fires when grok starts, before any prompt.
+    await until(async () => (Object.keys(await hook('SessionStart', { source: 'new' })).length === 0 ? true : undefined), 'hook socket up')
+    await row('idle')
+    await bob.call('send_message', { to: 'grok-e2e', message: 'first' })
+    const calls = await until(async () => (existsSync(wakeLog) ? readFileSync(wakeLog, 'utf8') : undefined), 'a herdr prompt')
+    expect(calls).toMatch(/^agent\|prompt\|w9:p8\|\[mesh\] 1 new message from bob-inbox \[[0-9a-z]{6}\]\. Call the mesh read_messages tool to read it\.\|\n$/)
+    expect(calls).not.toContain('first')
+
+    // The wake prompt starts a turn; the agent reads.
+    expect(await hook('UserPromptSubmit', { prompt: '[mesh] 1 new message' })).toEqual({})
+    await row('busy')
+    expect((await nextMessage(grok)).body).toBe('first')
+    expect(await hook('PostToolUse', { toolName: 'mesh__read_messages' })).toEqual({})
+
+    // Mail during the turn: the next tool result carries one notice, the one after does not.
+    await bob.call('send_message', { to: 'grok-e2e', message: 'second' })
+    const tool = await until(async () => { const o = await hook('PostToolUse', { toolName: 'read_file' }); return o.hookSpecificOutput ? o : undefined }, 'a notice on a tool result')
+    expect(tool.hookSpecificOutput).toEqual({ hookEventName: 'PostToolUse', additionalContext: expect.stringMatching(/^\[mesh\] 1 unread message from bob-inbox \[[0-9a-z]{6}\] is waiting\. Call the mesh read_messages tool/) })
+    expect(JSON.stringify(tool)).not.toContain('second')
+    expect(await hook('PostToolUse', { toolName: 'read_file' })).toEqual({})
+    // An interrupt is never overridden; a turn that ended on its own runs once more.
+    expect(await hook('StopCancelled', { reason: 'user_interrupt' })).toEqual({})
+    await row('idle')
+    expect((await hook('Stop', { reason: 'end_turn', stopHookActive: false })).decision).toBe('block')
+    expect(await hook('Stop', { reason: 'end_turn', stopHookActive: true })).toEqual({})
+    expect((await nextMessage(grok)).body).toBe('second')
+  })
+
   it('mesh say --as sends one message under that name, with --reply-to', async () => {
     const inbox = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-inbox' })
     const lister = await peer('alice', { MESH_JOIN: 'never' })
