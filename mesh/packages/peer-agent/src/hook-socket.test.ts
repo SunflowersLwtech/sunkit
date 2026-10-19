@@ -85,6 +85,21 @@ describe('HookChannel', () => {
     expect(statuses).toEqual(['idle'])
   })
 
+  it('wake starts a turn once per new arrival and shares that count with the stop nudge', () => {
+    const { inbox, statuses, ch } = make()
+    expect(ch.handle({ op: 'wake' })).toEqual({ unread: 0, from: [], continue: false })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'wake' })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: true })
+    // Still unread on the next poll: not woken again for the same message.
+    expect(ch.handle({ op: 'wake' })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: false })
+    // The turn it started ends without reading it: no second nudge either.
+    expect(ch.handle({ op: 'stop', natural: true })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: false })
+    inbox.push(msg('ops [def456]'))
+    expect(ch.handle({ op: 'stop', natural: true }).continue).toBe(true)
+    expect(ch.handle({ op: 'wake' }).continue).toBe(false)
+    expect(statuses).toEqual(['idle', 'idle', 'idle', 'idle'])
+  })
+
   it('a request it does not know changes nothing', () => {
     const { inbox, statuses, ch } = make()
     inbox.push(msg('lead [abc123]'))

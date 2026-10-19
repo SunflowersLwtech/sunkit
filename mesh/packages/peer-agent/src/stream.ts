@@ -30,6 +30,12 @@ export interface StreamClientOpts {
   /** Session binding sent on every (re)connect, so the relay always has current name/status. */
   sessionParams?: () => Record<string, string>
   onEnvelope: (e: Envelope) => void
+  /**
+   * The stream is open, with the session params it was opened with. A status set while the
+   * request was in flight reached the relay before the session was attached (404, dropped):
+   * compare and send it again.
+   */
+  onOpen?: (sent: Record<string, string>) => void
   onAuthError: () => void
   reconnectBaseMs?: number
   reconnectMaxMs?: number
@@ -49,7 +55,8 @@ export class StreamClient {
         const since = this.opts.sinceCursor()
         const url = new URL('/v1/stream', this.opts.relayUrl)
         if (since) url.searchParams.set('since', since)
-        for (const [k, v] of Object.entries(this.opts.sessionParams?.() ?? {})) url.searchParams.set(k, v)
+        const params = this.opts.sessionParams?.() ?? {}
+        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
         const res = await fetch(url, {
           headers: { authorization: `Bearer ${this.opts.token}`, accept: 'text/event-stream' },
           signal: this.aborter.signal,
@@ -58,6 +65,7 @@ export class StreamClient {
         if (res.status !== 200 || !res.body) throw new Error(`stream http ${res.status}`)
         this.attempt = 0
         logJson('info', 'peer.stream.open', { since: since ?? '' })
+        this.opts.onOpen?.(params)
         await this.readStream(res.body as unknown as ReadableStream<Uint8Array>)
       } catch (err) {
         logJson('warn', 'peer.stream.disconnect', { err: String(err instanceof Error ? err.message : err) })

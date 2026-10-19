@@ -74,12 +74,17 @@ async function main(): Promise<void> {
     process.exitCode = await runGrok(args)
     return
   }
+  if (cmd === 'pi') {
+    const { runPi } = await import('./cli/pi.ts')
+    process.exitCode = await runPi(args)
+    return
+  }
   if (cmd === 'devin') {
     const { runDevin } = await import('./cli/devin.ts')
     process.exitCode = runDevin(args)
     return
   }
-  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok')
+  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi')
   process.exit(2)
 }
 
