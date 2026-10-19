@@ -13,4 +13,6 @@ const common = {
 }
 await build({ ...common, entryPoints: ['packages/peer-agent/src/index.ts'], outfile: 'plugins/mesh/server/mesh-peer.mjs' })
 await build({ ...common, entryPoints: ['packages/peer-agent/src/cli.ts'], outfile: 'plugins/mesh/server/mesh-cli.mjs' })
-console.log('bundled plugins/mesh/server/{mesh-peer,mesh-cli}.mjs')
+// The pi extension, imported by the loader `mesh pi install` writes into pi's extensions directory.
+await build({ ...common, entryPoints: ['packages/peer-agent/src/pi-extension.ts'], outfile: 'plugins/mesh/server/mesh-pi.mjs' })
+console.log('bundled plugins/mesh/server/{mesh-peer,mesh-cli,mesh-pi}.mjs')

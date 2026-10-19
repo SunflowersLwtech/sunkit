@@ -37054,7 +37054,8 @@ var StreamClient = class {
         const since = this.opts.sinceCursor();
         const url = new URL("/v1/stream", this.opts.relayUrl);
         if (since) url.searchParams.set("since", since);
-        for (const [k, v] of Object.entries(this.opts.sessionParams?.() ?? {})) url.searchParams.set(k, v);
+        const params = this.opts.sessionParams?.() ?? {};
+        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
         const res = await (0, import_undici.fetch)(url, {
           headers: { authorization: `Bearer ${this.opts.token}`, accept: "text/event-stream" },
           signal: this.aborter.signal
@@ -37066,6 +37067,7 @@ var StreamClient = class {
         if (res.status !== 200 || !res.body) throw new Error(`stream http ${res.status}`);
         this.attempt = 0;
         logJson("info", "peer.stream.open", { since: since ?? "" });
+        this.opts.onOpen?.(params);
         await this.readStream(res.body);
       } catch (err) {
         logJson("warn", "peer.stream.disconnect", { err: String(err instanceof Error ? err.message : err) });
@@ -37563,8 +37565,8 @@ var HookChannel = class {
       this.onStatus("idle");
       return base;
     }
-    if (req.op === "stop") {
-      const natural = req.natural ?? req.reason === "NO_TOOL_CALL";
+    if (req.op === "stop" || req.op === "wake") {
+      const natural = req.op === "wake" || (req.natural ?? req.reason === "NO_TOOL_CALL");
       if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
         this.nudgedSeq = p.seq;
         return { ...base, continue: true };
@@ -37779,6 +37781,12 @@ async function main() {
     sinceCursor: () => cursor,
     sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...login ? { login } : {}, ...pull ? { mode: "pull" } : {} }),
     onEnvelope: (e) => dispatcher.handle(e),
+    // A host that reported busy/idle before the relay attached this session lost that update
+    // (404): send what we have now if it differs from what the stream was opened with.
+    onOpen: (sent) => {
+      if (sent.status === identity.status) return;
+      client.updateSelf({ status: identity.status }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
+    },
     onAuthError: () => {
       logJson("error", "peer.auth_failed");
       process.exit(2);

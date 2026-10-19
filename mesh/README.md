@@ -250,9 +250,9 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
-| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build and other MCP hosts), hook notices and busy/idle for Antigravity and Grok Build, named send-only senders, `mesh say` |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build, pi and other MCP hosts), hook notices and busy/idle for Antigravity, Grok Build and pi (an extension), named send-only senders, `mesh say` |
 
-## Devin CLI, Antigravity CLI, Grok Build and other agents without channels
+## Devin CLI, Antigravity CLI, Grok Build, pi and other agents without channels
 
 Claude Code shows mesh messages as they arrive through its channel. Devin CLI, and other agents
 that speak MCP but have no channels, can't receive pushed messages, so the peer runs in **pull
@@ -282,7 +282,7 @@ devin
 ```
 
 A Claude Code session's name comes from Claude Code's own name for it, as before. A pull session
-(Devin, Antigravity, Grok Build) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
+(Devin, Antigravity, Grok Build, pi) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
 Herdr tab it runs in (with its pane id appended when the tab has more than one pane, since the label
 then names the tab's main agent), then its working directory's name; the last two are prefixed with
 `MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
@@ -369,6 +369,36 @@ loads Claude Code's plugins, including this one from Claude's plugin cache; if `
 it, add `"mesh"` to `[plugins] disabled` in `~/.grok/config.toml` so only the pull-mode server runs.
 To remove: `grok mcp remove mesh` and delete `~/.grok/hooks/mesh.json`.
 
+### pi (pi-coding-agent)
+
+pi has MCP built in (1.3+) but no channels and no hook commands; its extensions get the session's
+lifecycle events instead. `mesh pi install --write` puts a two-line loader in pi's extensions
+directory (`~/.pi/agent/extensions/mesh.ts`, or under `PI_CODING_AGENT_DIR`) that imports the
+bundled `mesh-pi.mjs` from the checkout, so updating the checkout updates what pi runs:
+
+```bash
+node $M pi install            # prints the loader it would write
+node $M pi install --write
+```
+
+The extension registers the peer as a pull-mode MCP server with `direct` tools
+(`mcp__mesh__list_agents`, `mcp__mesh__send_message`, `mcp__mesh__read_messages`), puts the peer's
+instructions into a `<mesh>` system prompt section (pi does not show server instructions for direct
+tools), and maps pi's events onto the same hook socket the agy and Grok hooks use:
+
+- `session_start` reports `idle`; a run (`agent_start`) reports `busy`, and the end of a run
+  (`agent_settled`) `idle` again;
+- when mail arrives during a run, the next tool result gets a one-line notice (once per arrival);
+- a run that completed on its own (`agent_before_settle` with outcome `completed`) while a message
+  that arrived is still unread runs once more to read it; aborted and failed runs never do;
+- with `MESH_WAKE` set (any value but `0`), an idle session checks every 3 seconds and starts a turn
+  itself when mail arrives, once per arrival: no Herdr needed, and nothing is typed into the pane.
+
+Name a session with `MESH_SESSION_NAME=<name> pi` or `pi --name <name>`; unnamed sessions fall back
+to `pi-<Herdr tab label>` or `pi-<directory>`. Print and JSON runs (`pi -p`, `--mode json`) only send,
+signed with the name; `MESH_JOIN=never` keeps any session out. Standing rules go in with pi's own
+`--append-system-prompt`. To remove: delete `~/.pi/agent/extensions/mesh.ts`.
+
 **Sending without a session.** A script, or an agent that has no MCP connection to the mesh, can
 send one message with:
 
@@ -387,8 +417,8 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 |---|---|
 | `MESH_JOIN` | `pull`: join in pull mode (hosts without channels). `never`: send only. `always`: join regardless. Unset: Claude Code's rules above. |
 | `MESH_SESSION_NAME` | name for a session that Claude Code doesn't name, and for send-only senders |
-| `MESH_HOST` | short host label (`agy`, `grok`) that prefixes a pull session's fallback name |
-| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy or grok hooks) |
+| `MESH_HOST` | short host label (`agy`, `grok`, `pi`) that prefixes a pull session's fallback name |
+| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy or grok hooks); for pi, any value but `0` makes the extension start the turn itself |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from

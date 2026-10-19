@@ -4330,8 +4330,8 @@ var init_paths = __esm({
 // packages/peer-agent/src/cli/relay-url.ts
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
 import { join as join4 } from "node:path";
-function argValue(args, flag4) {
-  const i = args.indexOf(flag4);
+function argValue(args, flag5) {
+  const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readConfigRelayUrl() {
@@ -4396,8 +4396,8 @@ __export(admin_exports, {
 });
 import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, chmodSync as chmodSync2, existsSync as existsSync4 } from "node:fs";
 import { join as join5 } from "node:path";
-function argValue2(args, flag4) {
-  const i = args.indexOf(flag4);
+function argValue2(args, flag5) {
+  const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readAdminToken() {
@@ -4553,8 +4553,8 @@ __export(respond_exports, {
   runRespond: () => runRespond
 });
 import { join as join6 } from "node:path";
-function argValue3(args, flag4) {
-  const i = args.indexOf(flag4);
+function argValue3(args, flag5) {
+  const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function callRespond(opts) {
@@ -4915,8 +4915,8 @@ function canWrite(target) {
     return false;
   }
 }
-function argValue4(args, flag4) {
-  const i = args.indexOf(flag4);
+function argValue4(args, flag5) {
+  const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function runPolicyInstall(args, opts = {}) {
@@ -5655,6 +5655,82 @@ var init_grok = __esm({
   }
 });
 
+// packages/peer-agent/src/cli/pi.ts
+var pi_exports = {};
+__export(pi_exports, {
+  PI_USAGE: () => PI_USAGE,
+  parsePiInstall: () => parsePiInstall,
+  piExtensionFile: () => piExtensionFile,
+  runPi: () => runPi,
+  runPiInstall: () => runPiInstall
+});
+import { copyFileSync as copyFileSync3, existsSync as existsSync11, mkdirSync as mkdirSync6, readFileSync as readFileSync11, writeFileSync as writeFileSync7 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname6, join as join15 } from "node:path";
+import { fileURLToPath as fileURLToPath5, pathToFileURL } from "node:url";
+function piExtensionFile(o) {
+  return [
+    "// Written by `mesh pi install` (sunkit mesh plugin). Rerun it instead of editing this file.",
+    `import { createMeshExtension } from ${JSON.stringify(pathToFileURL(o.module).href)}`,
+    `export default createMeshExtension({ node: ${JSON.stringify(o.node)}, peer: ${JSON.stringify(o.peer)} })`,
+    ""
+  ].join("\n");
+}
+function flag4(args, name) {
+  const i = args.indexOf(name);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
+}
+function parsePiInstall(args, defaults) {
+  return {
+    node: flag4(args, "--node") ?? defaults.node,
+    peer: flag4(args, "--peer") ?? defaults.peer,
+    module: flag4(args, "--module") ?? defaults.module,
+    extension: flag4(args, "--extension") ?? defaults.extension
+  };
+}
+function stamp3(d = /* @__PURE__ */ new Date()) {
+  return d.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
+}
+function runPiInstall(args, io = {}) {
+  const log = io.log ?? console.log;
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join15(homedir5(), ".pi", "agent");
+  const o = parsePiInstall(args, {
+    node: stableNode(process.env.PATH, process.execPath),
+    // In the bundle this file is mesh-cli.mjs, next to mesh-peer.mjs and mesh-pi.mjs.
+    peer: fileURLToPath5(new URL("./mesh-peer.mjs", import.meta.url)),
+    module: fileURLToPath5(new URL("./mesh-pi.mjs", import.meta.url)),
+    extension: join15(agentDir, "extensions", "mesh.ts")
+  });
+  const text = piExtensionFile(o);
+  log(`${o.extension}:
+${text}`);
+  log("Name each session before starting it: MESH_SESSION_NAME=<name> pi, or pi --name <name>. Unnamed sessions are pi-<Herdr tab label> or pi-<directory>.");
+  log("Tools: mcp__mesh__list_agents, mcp__mesh__send_message, mcp__mesh__read_messages. Messages wait in an inbox; a tool result says when one arrives, and a run that completes with mail unread runs once more. With MESH_WAKE set (e.g. MESH_WAKE=herdr), mail to an idle session starts a turn. pi -p and --mode json only send.");
+  if (!args.includes("--write")) return 0;
+  const before = existsSync11(o.extension) ? readFileSync11(o.extension, "utf8") : void 0;
+  if (before !== text) {
+    mkdirSync6(dirname6(o.extension), { recursive: true });
+    if (before !== void 0) copyFileSync3(o.extension, `${o.extension}.bak-mesh-${stamp3()}`);
+    writeFileSync7(o.extension, text);
+  }
+  log("written");
+  return 0;
+}
+async function runPi(args) {
+  const [sub, ...rest] = args;
+  if (sub === "install") return runPiInstall(rest);
+  console.error(PI_USAGE);
+  return 2;
+}
+var PI_USAGE;
+var init_pi = __esm({
+  "packages/peer-agent/src/cli/pi.ts"() {
+    "use strict";
+    init_devin();
+    PI_USAGE = "usage: mesh pi install [--node <path>] [--peer <path to mesh-peer.mjs>] [--module <path to mesh-pi.mjs>] [--extension <path>] [--write]";
+  }
+});
+
 // packages/shared/dist/constants.js
 var PROTOCOL_VERSION = 1;
 var MAX_CONTENT_BYTES = 65536;
@@ -5809,8 +5885,8 @@ function writeMeshMcpConfig(dir = meshDir()) {
 // packages/peer-agent/src/cli.ts
 init_relay_url();
 loadEnvFiles();
-function argValue5(args, flag4) {
-  const i = args.indexOf(flag4);
+function argValue5(args, flag5) {
+  const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function main() {
@@ -5874,12 +5950,17 @@ async function main() {
     process.exitCode = await runGrok2(args);
     return;
   }
+  if (cmd === "pi") {
+    const { runPi: runPi2 } = await Promise.resolve().then(() => (init_pi(), pi_exports));
+    process.exitCode = await runPi2(args);
+    return;
+  }
   if (cmd === "devin") {
     const { runDevin: runDevin2 } = await Promise.resolve().then(() => (init_devin(), devin_exports));
     process.exitCode = runDevin2(args);
     return;
   }
-  console.error("commands: pair, admin, respond, send, policy, say, devin, agy, grok");
+  console.error("commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi");
   process.exit(2);
 }
 main().catch((err) => {
