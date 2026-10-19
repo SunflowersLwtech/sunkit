@@ -121,4 +121,30 @@ describe('isOneShotHostRun', () => {
       '',
     ]) expect(isOneShotHostRun(line), line).toBe(false)
   })
+  it('grok in single-turn mode is one-shot', () => {
+    for (const line of [
+      'grok -p Reply with OK.',
+      'grok -m grok-4.7-build-fast -p Reply with the single word OK.',
+      '/Users/x/.grok/bin/grok --single hi',
+      'grok --single=hi',
+      'grok --prompt-file task.md',
+      'grok --prompt-json [{"type":"text"}]',
+      'grok --cwd /tmp/w --always-approve -p hi --rules be brief',
+    ]) expect(isOneShotHostRun(line), line).toBe(true)
+  })
+  it('grok stops reading flags at free text: rules or a first prompt that mention -p stay interactive', () => {
+    for (const line of [
+      'grok',
+      'grok -m grok-4.7 --always-approve',
+      'grok --rules Report over the mesh; never run grok -p yourself',
+      'grok --append-system-prompt use --single sparingly',
+      // Free text that itself starts like a flag (a rule list item, a quoted flag).
+      'grok --rules -p is never allowed for workers',
+      'grok -m grok-4.7 --append-system-prompt --single runs are forbidden',
+      'grok explain why -p is used here',
+      'grok -m grok-4.7 fix the -p flag parsing',
+      'grok --resume abc -c',
+      'grok agent stdio',
+    ]) expect(isOneShotHostRun(line), line).toBe(false)
+  })
 })

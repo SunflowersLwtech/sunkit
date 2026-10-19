@@ -250,9 +250,9 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
-| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI and other MCP hosts), hook notices and busy/idle for Antigravity, named send-only senders, `mesh say` |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build and other MCP hosts), hook notices and busy/idle for Antigravity and Grok Build, named send-only senders, `mesh say` |
 
-## Devin CLI, Antigravity CLI and other agents without channels
+## Devin CLI, Antigravity CLI, Grok Build and other agents without channels
 
 Claude Code shows mesh messages as they arrive through its channel. Devin CLI, and other agents
 that speak MCP but have no channels, can't receive pushed messages, so the peer runs in **pull
@@ -282,7 +282,7 @@ devin
 ```
 
 A Claude Code session's name comes from Claude Code's own name for it, as before. A pull session
-(Devin, Antigravity) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
+(Devin, Antigravity, Grok Build) is named by the first of: `MESH_SESSION_NAME` as given, then the label of the
 Herdr tab it runs in (with its pane id appended when the tab has more than one pane, since the label
 then names the tab's main agent), then its working directory's name; the last two are prefixed with
 `MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
@@ -337,6 +337,38 @@ The hooks find the peer through a socket under `MESH_HOME/hooks/`, keyed by the 
 are children of that process). To remove: `agy mcp remove mesh` and delete the `mesh` entry from
 `~/.gemini/config/hooks.json`.
 
+### Grok Build (grok)
+
+Grok Build starts stdio MCP servers and runs hook commands as children of the `grok` process too,
+and its hooks can add a note to a tool result and keep a turn going, so it gets the same treatment:
+
+- a session reports `idle` as soon as grok starts (its `SessionStart` fires at launch), so with
+  `MESH_WAKE=herdr` a freshly started session can be woken before its first prompt;
+- a prompt marks it `busy`; when mail arrives while it works, the next tool result carries a
+  one-line notice naming the senders (once per arrival: Grok keeps these notes in the conversation);
+- a turn that ends on its own (`Stop` with reason `end_turn`) while a message that arrived is
+  still unread runs once more to read it; interrupts, declined permissions, turn limits
+  (`StopCancelled`) and API errors (`StopFailure`) are never overridden and just report `idle`.
+
+```bash
+node $M grok install            # prints what it would do
+node $M grok install --write    # grok mcp add … and ~/.grok/hooks/mesh.json
+```
+
+which amounts to `grok mcp add -e MESH_JOIN=pull -e MESH_HOST=grok mesh -- /path/to/node …/mesh-peer.mjs`
+plus a hooks file of our own (Grok loads every `~/.grok/hooks/*.json`; a changed one is kept as
+`mesh.json.bak-mesh-*`, which it does not load). As with agy, the server's configured `env` wins over
+the session's, so name sessions when starting them, and give standing rules with grok's own flag:
+
+```bash
+MESH_SESSION_NAME=grok-review grok --rules 'Report to lead over the mesh when done.'
+```
+
+Single-turn runs (`grok -p`, `--single`, `--prompt-file`, `--prompt-json`) only send. Grok Build also
+loads Claude Code's plugins, including this one from Claude's plugin cache; if `grok inspect` lists
+it, add `"mesh"` to `[plugins] disabled` in `~/.grok/config.toml` so only the pull-mode server runs.
+To remove: `grok mcp remove mesh` and delete `~/.grok/hooks/mesh.json`.
+
 **Sending without a session.** A script, or an agent that has no MCP connection to the mesh, can
 send one message with:
 
@@ -355,8 +387,8 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 |---|---|
 | `MESH_JOIN` | `pull`: join in pull mode (hosts without channels). `never`: send only. `always`: join regardless. Unset: Claude Code's rules above. |
 | `MESH_SESSION_NAME` | name for a session that Claude Code doesn't name, and for send-only senders |
-| `MESH_HOST` | short host label (`agy`) that prefixes a pull session's fallback name |
-| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy hooks) |
+| `MESH_HOST` | short host label (`agy`, `grok`) that prefixes a pull session's fallback name |
+| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy or grok hooks) |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from

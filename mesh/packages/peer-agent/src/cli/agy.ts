@@ -3,8 +3,9 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { askHookSocket, hookSocketPath, type HookReply, type HookRequest } from '../hook-socket.ts'
+import type { HookReply, HookRequest } from '../hook-socket.ts'
 import { shellQuote, stableNode } from './devin.ts'
+import { askHostPeer, readStdin } from './host-hook.ts'
 
 export const AGY_USAGE = 'usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <SessionStart|PreInvocation|Stop>   (run by Antigravity CLI)'
 
@@ -136,16 +137,6 @@ export function hookRequest(event: string, payload: unknown): HookRequest | unde
   return undefined
 }
 
-function parentOf(pid: number): number | undefined {
-  try {
-    if (process.platform === 'linux') return Number(readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '').split(' ')[1]) || undefined
-    if (process.platform === 'win32') return undefined
-    return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000 }).trim()) || undefined
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * The hook command itself. agy runs it with `sh -c`, which usually execs it, so the host is
  * our parent; if the shell stayed around, it is our grandparent. Prints a JSON object and
@@ -164,34 +155,12 @@ export async function runAgyHook(args: string[], io: { stdin?: () => Promise<str
     let payload: unknown = undefined
     try { payload = raw.trim() ? JSON.parse(raw) : undefined } catch { /* not JSON */ }
     const req = hookRequest(event, payload)
-    let reply: HookReply | undefined
-    if (req) {
-      const ppid = io.ppid ?? process.ppid
-      for (const pid of [ppid, parentOf(ppid)]) {
-        if (!pid) continue
-        const path = hookSocketPath(pid)
-        if (process.platform !== 'win32' && !existsSync(path)) continue
-        reply = await askHookSocket(path, req)
-        if (reply) break
-      }
-    }
+    const reply = req ? await askHostPeer(req, io.ppid ?? process.ppid) : undefined
     write(JSON.stringify(agyHookOutput(event, reply)) + '\n')
   } catch {
     write('{}\n')
   }
   return 0
-}
-
-function readStdin(): Promise<string> {
-  return new Promise(resolve => {
-    if (process.stdin.isTTY) { resolve(''); return }
-    let buf = ''
-    const timer = setTimeout(() => resolve(buf), 2_000)
-    process.stdin.setEncoding('utf8')
-    process.stdin.on('data', d => { buf += d; if (buf.length > 1_000_000) { clearTimeout(timer); resolve(buf) } })
-    process.stdin.on('end', () => { clearTimeout(timer); resolve(buf) })
-    process.stdin.on('error', () => { clearTimeout(timer); resolve(buf) })
-  })
 }
 
 export async function runAgy(args: string[]): Promise<number> {

@@ -4330,8 +4330,8 @@ var init_paths = __esm({
 // packages/peer-agent/src/cli/relay-url.ts
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
 import { join as join4 } from "node:path";
-function argValue(args, flag3) {
-  const i = args.indexOf(flag3);
+function argValue(args, flag4) {
+  const i = args.indexOf(flag4);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readConfigRelayUrl() {
@@ -4396,8 +4396,8 @@ __export(admin_exports, {
 });
 import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, chmodSync as chmodSync2, existsSync as existsSync4 } from "node:fs";
 import { join as join5 } from "node:path";
-function argValue2(args, flag3) {
-  const i = args.indexOf(flag3);
+function argValue2(args, flag4) {
+  const i = args.indexOf(flag4);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function readAdminToken() {
@@ -4553,8 +4553,8 @@ __export(respond_exports, {
   runRespond: () => runRespond
 });
 import { join as join6 } from "node:path";
-function argValue3(args, flag3) {
-  const i = args.indexOf(flag3);
+function argValue3(args, flag4) {
+  const i = args.indexOf(flag4);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function callRespond(opts) {
@@ -4915,8 +4915,8 @@ function canWrite(target) {
     return false;
   }
 }
-function argValue4(args, flag3) {
-  const i = args.indexOf(flag3);
+function argValue4(args, flag4) {
+  const i = args.indexOf(flag4);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 function runPolicyInstall(args, opts = {}) {
@@ -5195,53 +5195,6 @@ var init_say = __esm({
   }
 });
 
-// packages/peer-agent/src/hook-socket.ts
-import { createServer, connect } from "node:net";
-import { createHash } from "node:crypto";
-import { join as join11 } from "node:path";
-function hookSocketPath(hostPid, dir = meshDir()) {
-  if (process.platform === "win32") {
-    const tag = createHash("sha256").update(dir).digest("hex").slice(0, 8);
-    return `\\\\.\\pipe\\claude-mesh-hook-${tag}-${hostPid}`;
-  }
-  return join11(dir, "hooks", `${hostPid}.sock`);
-}
-function askHookSocket(path, req, timeoutMs = 1500) {
-  return new Promise((resolve4) => {
-    let buf = "";
-    let done = false;
-    const finish = (v) => {
-      if (!done) {
-        done = true;
-        sock.destroy();
-        resolve4(v);
-      }
-    };
-    const sock = connect(path);
-    sock.setEncoding("utf8");
-    sock.setTimeout(timeoutMs, () => finish(void 0));
-    sock.on("error", () => finish(void 0));
-    sock.on("connect", () => sock.write(JSON.stringify(req) + "\n"));
-    sock.on("data", (chunk) => {
-      buf += chunk;
-      const i = buf.indexOf("\n");
-      if (i < 0) return;
-      try {
-        finish(JSON.parse(buf.slice(0, i)));
-      } catch {
-        finish(void 0);
-      }
-    });
-    sock.on("end", () => finish(void 0));
-  });
-}
-var init_hook_socket = __esm({
-  "packages/peer-agent/src/hook-socket.ts"() {
-    "use strict";
-    init_paths();
-  }
-});
-
 // packages/peer-agent/src/cli/devin.ts
 var devin_exports = {};
 __export(devin_exports, {
@@ -5254,7 +5207,7 @@ __export(devin_exports, {
 });
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { accessSync as accessSync2, constants as constants2 } from "node:fs";
-import { delimiter, join as join12 } from "node:path";
+import { delimiter, join as join11 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function devinAddArgs(o) {
   return ["mcp", "add", "-s", o.scope, o.name, "-e", "MESH_JOIN=pull", "--", o.node, o.peer];
@@ -5273,7 +5226,7 @@ function isExecutable(p) {
 function stableNode(path, fallback, exists = isExecutable) {
   for (const dir of (path ?? "").split(delimiter)) {
     if (!dir || dir.includes("fnm_multishells")) continue;
-    const candidate = join12(dir, process.platform === "win32" ? "node.exe" : "node");
+    const candidate = join11(dir, process.platform === "win32" ? "node.exe" : "node");
     if (exists(candidate)) return candidate;
   }
   return fallback;
@@ -5318,6 +5271,108 @@ var init_devin = __esm({
   }
 });
 
+// packages/peer-agent/src/hook-socket.ts
+import { createServer, connect } from "node:net";
+import { createHash } from "node:crypto";
+import { join as join12 } from "node:path";
+function hookSocketPath(hostPid, dir = meshDir()) {
+  if (process.platform === "win32") {
+    const tag = createHash("sha256").update(dir).digest("hex").slice(0, 8);
+    return `\\\\.\\pipe\\claude-mesh-hook-${tag}-${hostPid}`;
+  }
+  return join12(dir, "hooks", `${hostPid}.sock`);
+}
+function askHookSocket(path, req, timeoutMs = 1500) {
+  return new Promise((resolve4) => {
+    let buf = "";
+    let done = false;
+    const finish = (v) => {
+      if (!done) {
+        done = true;
+        sock.destroy();
+        resolve4(v);
+      }
+    };
+    const sock = connect(path);
+    sock.setEncoding("utf8");
+    sock.setTimeout(timeoutMs, () => finish(void 0));
+    sock.on("error", () => finish(void 0));
+    sock.on("connect", () => sock.write(JSON.stringify(req) + "\n"));
+    sock.on("data", (chunk) => {
+      buf += chunk;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      try {
+        finish(JSON.parse(buf.slice(0, i)));
+      } catch {
+        finish(void 0);
+      }
+    });
+    sock.on("end", () => finish(void 0));
+  });
+}
+var init_hook_socket = __esm({
+  "packages/peer-agent/src/hook-socket.ts"() {
+    "use strict";
+    init_paths();
+  }
+});
+
+// packages/peer-agent/src/cli/host-hook.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "node:fs";
+function parentOf(pid) {
+  try {
+    if (process.platform === "linux") return Number(readFileSync8(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").split(" ")[1]) || void 0;
+    if (process.platform === "win32") return void 0;
+    return Number(execFileSync3("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3 }).trim()) || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function askHostPeer(req, ppid = process.ppid) {
+  for (const pid of [ppid, parentOf(ppid)]) {
+    if (!pid) continue;
+    const path = hookSocketPath(pid);
+    if (process.platform !== "win32" && !existsSync8(path)) continue;
+    const reply = await askHookSocket(path, req);
+    if (reply) return reply;
+  }
+  return void 0;
+}
+function readStdin() {
+  return new Promise((resolve4) => {
+    if (process.stdin.isTTY) {
+      resolve4("");
+      return;
+    }
+    let buf = "";
+    const timer = setTimeout(() => resolve4(buf), 2e3);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (d) => {
+      buf += d;
+      if (buf.length > 1e6) {
+        clearTimeout(timer);
+        resolve4(buf);
+      }
+    });
+    process.stdin.on("end", () => {
+      clearTimeout(timer);
+      resolve4(buf);
+    });
+    process.stdin.on("error", () => {
+      clearTimeout(timer);
+      resolve4(buf);
+    });
+  });
+}
+var init_host_hook = __esm({
+  "packages/peer-agent/src/cli/host-hook.ts"() {
+    "use strict";
+    init_hook_socket();
+  }
+});
+
 // packages/peer-agent/src/cli/agy.ts
 var agy_exports = {};
 __export(agy_exports, {
@@ -5333,8 +5388,8 @@ __export(agy_exports, {
   runAgyInstall: () => runAgyInstall,
   sessionRules: () => sessionRules
 });
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { copyFileSync, existsSync as existsSync8, mkdirSync as mkdirSync4, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
+import { execFileSync as execFileSync4 } from "node:child_process";
+import { copyFileSync, existsSync as existsSync9, mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { dirname as dirname4, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -5345,7 +5400,7 @@ function agyHookEntry(o) {
   const handler = (event) => ({ type: "command", command: `${shellQuote(o.node)} ${shellQuote(o.cli)} agy hook ${event}`, timeout: 5 });
   return { SessionStart: [handler("SessionStart")], PreInvocation: [handler("PreInvocation")], Stop: [handler("Stop")] };
 }
-function sessionRules(env = process.env, read = (p) => readFileSync8(p, "utf8")) {
+function sessionRules(env = process.env, read = (p) => readFileSync9(p, "utf8")) {
   try {
     const text = env.AGY_SESSION_RULES_B64 ? Buffer.from(env.AGY_SESSION_RULES_B64, "base64").toString("utf8") : env.AGY_SESSION_RULES_FILE ? read(env.AGY_SESSION_RULES_FILE) : "";
     return text.trim().slice(0, 2e4);
@@ -5392,10 +5447,10 @@ function runAgyInstall(args, io = {}) {
   log("Messages wait in an inbox read with read_messages; while the agent works, the hooks tell it when one arrives. With MESH_WAKE=herdr set before starting agy in a Herdr pane, a message to an idle session also prompts it to read.");
   if (!args.includes("--write")) return 0;
   const run = io.run ?? ((file, a) => {
-    execFileSync3(file, a, { stdio: "inherit" });
+    execFileSync4(file, a, { stdio: "inherit" });
   });
   run("agy", argv);
-  const before = existsSync8(o.hooks) ? readFileSync8(o.hooks, "utf8") : void 0;
+  const before = existsSync9(o.hooks) ? readFileSync9(o.hooks, "utf8") : void 0;
   const after = mergeHooks(before, o.name, agyHookEntry(o));
   if (before !== after) {
     mkdirSync4(dirname4(o.hooks), { recursive: true });
@@ -5425,15 +5480,6 @@ function hookRequest(event, payload) {
   }
   return void 0;
 }
-function parentOf(pid) {
-  try {
-    if (process.platform === "linux") return Number(readFileSync8(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").split(" ")[1]) || void 0;
-    if (process.platform === "win32") return void 0;
-    return Number(execFileSync3("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3 }).trim()) || void 0;
-  } catch {
-    return void 0;
-  }
-}
 async function runAgyHook(args, io = {}) {
   const write = io.write ?? ((s) => process.stdout.write(s));
   try {
@@ -5450,48 +5496,12 @@ async function runAgyHook(args, io = {}) {
     } catch {
     }
     const req = hookRequest(event, payload);
-    let reply;
-    if (req) {
-      const ppid = io.ppid ?? process.ppid;
-      for (const pid of [ppid, parentOf(ppid)]) {
-        if (!pid) continue;
-        const path = hookSocketPath(pid);
-        if (process.platform !== "win32" && !existsSync8(path)) continue;
-        reply = await askHookSocket(path, req);
-        if (reply) break;
-      }
-    }
+    const reply = req ? await askHostPeer(req, io.ppid ?? process.ppid) : void 0;
     write(JSON.stringify(agyHookOutput(event, reply)) + "\n");
   } catch {
     write("{}\n");
   }
   return 0;
-}
-function readStdin() {
-  return new Promise((resolve4) => {
-    if (process.stdin.isTTY) {
-      resolve4("");
-      return;
-    }
-    let buf = "";
-    const timer = setTimeout(() => resolve4(buf), 2e3);
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (d) => {
-      buf += d;
-      if (buf.length > 1e6) {
-        clearTimeout(timer);
-        resolve4(buf);
-      }
-    });
-    process.stdin.on("end", () => {
-      clearTimeout(timer);
-      resolve4(buf);
-    });
-    process.stdin.on("error", () => {
-      clearTimeout(timer);
-      resolve4(buf);
-    });
-  });
 }
 async function runAgy(args) {
   const [sub, ...rest] = args;
@@ -5504,10 +5514,144 @@ var AGY_USAGE, plural;
 var init_agy = __esm({
   "packages/peer-agent/src/cli/agy.ts"() {
     "use strict";
-    init_hook_socket();
     init_devin();
+    init_host_hook();
     AGY_USAGE = "usage: mesh agy install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks.json>] [--write]\n       mesh agy hook <SessionStart|PreInvocation|Stop>   (run by Antigravity CLI)";
     plural = (n, one, many) => n === 1 ? one : many;
+  }
+});
+
+// packages/peer-agent/src/cli/grok.ts
+var grok_exports = {};
+__export(grok_exports, {
+  GROK_EVENTS: () => GROK_EVENTS,
+  GROK_USAGE: () => GROK_USAGE,
+  grokAddArgs: () => grokAddArgs,
+  grokHookOutput: () => grokHookOutput,
+  grokHookRequest: () => grokHookRequest,
+  grokHooksFile: () => grokHooksFile,
+  parseGrokInstall: () => parseGrokInstall,
+  runGrok: () => runGrok,
+  runGrokHook: () => runGrokHook,
+  runGrokInstall: () => runGrokInstall
+});
+import { execFileSync as execFileSync5 } from "node:child_process";
+import { copyFileSync as copyFileSync2, existsSync as existsSync10, mkdirSync as mkdirSync5, readFileSync as readFileSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname5, join as join14 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+function grokAddArgs(o) {
+  return ["mcp", "add", "-e", "MESH_JOIN=pull", "-e", "MESH_HOST=grok", o.name, "--", o.node, o.peer];
+}
+function grokHooksFile(o) {
+  const group = (event) => [{ hooks: [{ type: "command", command: `${shellQuote(o.node)} ${shellQuote(o.cli)} grok hook ${event}`, timeout: 5 }] }];
+  return { hooks: Object.fromEntries(GROK_EVENTS.map((e) => [e, group(e)])) };
+}
+function flag3(args, name) {
+  const i = args.indexOf(name);
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
+}
+function parseGrokInstall(args, defaults) {
+  return {
+    node: flag3(args, "--node") ?? defaults.node,
+    peer: flag3(args, "--peer") ?? defaults.peer,
+    cli: flag3(args, "--cli") ?? defaults.cli,
+    hooks: flag3(args, "--hooks") ?? defaults.hooks,
+    name: flag3(args, "--name") ?? "mesh"
+  };
+}
+function stamp2(d = /* @__PURE__ */ new Date()) {
+  return d.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
+}
+function runGrokInstall(args, io = {}) {
+  const log = io.log ?? console.log;
+  const cli = fileURLToPath4(import.meta.url);
+  const grokHome = process.env.GROK_HOME || join14(homedir4(), ".grok");
+  const o = parseGrokInstall(args, {
+    node: stableNode(process.env.PATH, process.execPath),
+    peer: fileURLToPath4(new URL("./mesh-peer.mjs", import.meta.url)),
+    cli,
+    hooks: join14(grokHome, "hooks", `${flag3(args, "--name") ?? "mesh"}.json`)
+  });
+  const argv = grokAddArgs(o);
+  const text = JSON.stringify(grokHooksFile(o), null, 2) + "\n";
+  log(`grok ${argv.map(shellQuote).join(" ")}`);
+  log(`${o.hooks}: ${JSON.stringify(grokHooksFile(o))}`);
+  log("Name each session before starting it: export MESH_SESSION_NAME=<name>; grok. Unnamed sessions are grok-<Herdr tab label> or grok-<directory>.");
+  log('Standing rules for a session: grok --rules "<text>" (alias --append-system-prompt).');
+  log("Messages wait in an inbox read with read_messages; while the agent works, a tool result tells it when one arrives, and a turn that ends with mail unread runs once more. With MESH_WAKE=herdr set before starting grok in a Herdr pane, a message to an idle session also prompts it to read.");
+  log('Grok Build also loads Claude Code plugins: if `grok inspect` lists the Claude mesh plugin, add "mesh" to [plugins] disabled in ~/.grok/config.toml.');
+  if (!args.includes("--write")) return 0;
+  const run = io.run ?? ((file, a) => {
+    execFileSync5(file, a, { stdio: "inherit" });
+  });
+  run("grok", argv);
+  const before = existsSync10(o.hooks) ? readFileSync10(o.hooks, "utf8") : void 0;
+  if (before !== text) {
+    mkdirSync5(dirname5(o.hooks), { recursive: true });
+    if (before !== void 0) copyFileSync2(o.hooks, `${o.hooks}.bak-mesh-${stamp2()}`);
+    writeFileSync6(o.hooks, text);
+  }
+  log("written");
+  return 0;
+}
+function grokHookOutput(event, r) {
+  if (!r || r.unread <= 0) return {};
+  const n = r.unread;
+  const who = r.from.join(", ");
+  if ((event === "PostToolUse" || event === "PostToolUseFailure") && r.notify) {
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `[mesh] ${n} unread ${plural2(n, "message", "messages")} from ${who} ${plural2(n, "is", "are")} waiting. Call the mesh read_messages tool to read ${plural2(n, "it", "them")}.` } };
+  }
+  if (event === "Stop" && r.continue) {
+    return { decision: "block", reason: `[mesh] ${n} ${plural2(n, "message", "messages")} from ${who} arrived and ${plural2(n, "is", "are")} still unread. Call the mesh read_messages tool and deal with ${plural2(n, "it", "them")} before you finish.` };
+  }
+  return {};
+}
+function grokHookRequest(event, payload) {
+  const r = payload?.reason;
+  const reason = typeof r === "string" ? { reason: r } : {};
+  if (event === "SessionStart") return { op: "idle" };
+  if (event === "UserPromptSubmit") return { op: "turn" };
+  if (event === "PostToolUse" || event === "PostToolUseFailure") return { op: "tool" };
+  if (event === "Stop") return { op: "stop", ...reason, natural: r === "end_turn" };
+  if (event === "StopCancelled" || event === "StopFailure") return { op: "stop", ...reason, natural: false };
+  return void 0;
+}
+async function runGrokHook(args, io = {}) {
+  const write = io.write ?? ((s) => process.stdout.write(s));
+  try {
+    const event = args[0] ?? "";
+    const raw = await (io.stdin ?? readStdin)();
+    let payload = void 0;
+    try {
+      payload = raw.trim() ? JSON.parse(raw) : void 0;
+    } catch {
+    }
+    const req = grokHookRequest(event, payload);
+    const reply = req ? await askHostPeer(req, io.ppid ?? process.ppid) : void 0;
+    write(JSON.stringify(grokHookOutput(event, reply)) + "\n");
+  } catch {
+    write("{}\n");
+  }
+  return 0;
+}
+async function runGrok(args) {
+  const [sub, ...rest] = args;
+  if (sub === "install") return runGrokInstall(rest);
+  if (sub === "hook") return runGrokHook(rest);
+  console.error(GROK_USAGE);
+  return 2;
+}
+var GROK_EVENTS, GROK_USAGE, plural2;
+var init_grok = __esm({
+  "packages/peer-agent/src/cli/grok.ts"() {
+    "use strict";
+    init_devin();
+    init_host_hook();
+    GROK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "StopCancelled", "StopFailure"];
+    GROK_USAGE = `usage: mesh grok install [--name mesh] [--node <path>] [--peer <path to mesh-peer.mjs>] [--cli <path to mesh-cli.mjs>] [--hooks <path to hooks file>] [--write]
+       mesh grok hook <${GROK_EVENTS.join("|")}>   (run by Grok Build)`;
+    plural2 = (n, one, many) => n === 1 ? one : many;
   }
 });
 
@@ -5665,8 +5809,8 @@ function writeMeshMcpConfig(dir = meshDir()) {
 // packages/peer-agent/src/cli.ts
 init_relay_url();
 loadEnvFiles();
-function argValue5(args, flag3) {
-  const i = args.indexOf(flag3);
+function argValue5(args, flag4) {
+  const i = args.indexOf(flag4);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
 }
 async function main() {
@@ -5725,12 +5869,17 @@ async function main() {
     process.exitCode = await runAgy2(args);
     return;
   }
+  if (cmd === "grok") {
+    const { runGrok: runGrok2 } = await Promise.resolve().then(() => (init_grok(), grok_exports));
+    process.exitCode = await runGrok2(args);
+    return;
+  }
   if (cmd === "devin") {
     const { runDevin: runDevin2 } = await Promise.resolve().then(() => (init_devin(), devin_exports));
     process.exitCode = runDevin2(args);
     return;
   }
-  console.error("commands: pair, admin, respond, send, policy, say, devin, agy");
+  console.error("commands: pair, admin, respond, send, policy, say, devin, agy, grok");
   process.exit(2);
 }
 main().catch((err) => {
