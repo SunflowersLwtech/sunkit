@@ -97,6 +97,8 @@ export function createMeshExtension(o: MeshPiOptions): (pi: PiApi) => void {
     let ctx: Ctx | undefined
     let timer: ReturnType<typeof setInterval> | undefined
     let waking = false
+    // A wake answered after a run started may have used up the nudge an arrival is owed at the end of that run.
+    let owed = false
 
     // The peer opens its socket a moment after pi connects to it: report idle once it answers.
     const reportIdle = async () => {
@@ -110,7 +112,14 @@ export function createMeshExtension(o: MeshPiOptions): (pi: PiApi) => void {
       waking = true
       try {
         const r = await ask({ op: 'wake' })
-        if (r?.continue && r.unread > 0 && !busy && (!ctx?.isIdle || ctx.isIdle())) pi.sendUserMessage(wakeNotice(r, name))
+        if (busy) {
+          // A run started while the poll was in flight: keep the nudge for the end of that run,
+          // and undo the idle the wake reported.
+          if (r?.continue) owed = true
+          void ask({ op: 'turn' })
+          return
+        }
+        if (r?.continue && r.unread > 0 && (!ctx?.isIdle || ctx.isIdle())) pi.sendUserMessage(wakeNotice(r, name))
       } finally { waking = false }
     }
 
@@ -150,13 +159,19 @@ export function createMeshExtension(o: MeshPiOptions): (pi: PiApi) => void {
     // never one the user aborted or that failed.
     pi.on('agent_before_settle', async (e: SettleEvent) => {
       if (!pull) return undefined
-      const r = await ask({ op: 'stop', natural: e.outcome === 'completed' })
-      if (!r?.continue || e.context?.canContinue === false) return undefined
+      const natural = e.outcome === 'completed'
+      const r = await ask({ op: 'stop', natural })
+      const go = !!r && natural && e.context?.canContinue !== false && (!!r.continue || (owed && r.unread > 0))
+      owed = false
+      if (!go) return undefined
+      // Kept going on an owed nudge: the stop reported idle, and the run goes on.
+      if (!r.continue) void ask({ op: 'turn' })
       return { entries: [...e.entries, { type: 'custom_message', customType: 'mesh', content: stopNotice(r, name), display: true }], continue: true }
     })
     pi.on('agent_settled', () => {
       if (!pull) return
       busy = false
+      owed = false
       void ask({ op: 'idle' })
     })
     pi.on('session_shutdown', () => {

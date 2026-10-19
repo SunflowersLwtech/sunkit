@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Inbox } from './inbox.ts'
-import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
+import { HookChannel, askHookSocket, hookSocketPath, serveHookSocket } from './hook-socket.ts'
 import { PULL_INSTRUCTIONS } from './instructions.ts'
 import { createMeshExtension, joinsMesh, piInstructions, serverConfig } from './pi-extension.ts'
 
@@ -145,6 +145,30 @@ describe('pi extension against a running peer', () => {
     const kept = await f.emit('agent_before_settle', { entries: [], outcome: 'completed', context: { canContinue: true } }, ctx)
     expect(kept?.continue).toBe(true)
     await f.emit('session_shutdown', { reason: 'quit' }, ctx)
+  })
+
+  it('a wake answered after a run started does not cost that run its nudge', async () => {
+    const { inbox } = await peer()
+    const f = fakePi('pi-race')
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    let held = 0
+    const real = (req: any) => askHookSocket(hookSocketPath(process.pid), req)
+    // Hold the first wake poll until the run has started and a message has arrived.
+    const ask = async (req: any) => { if (req.op === 'wake' && held++ === 0) await gate; return real(req) }
+    const ctx = { mode: 'tui', isIdle: () => true }
+    createMeshExtension({ node: '/n', peer: '/p', env: { MESH_WAKE: '1' }, pollMs: 10, ask })(f.pi)
+    await f.emit('session_start', {}, ctx)
+    await new Promise(r => setTimeout(r, 40))
+    expect(held).toBe(1)
+    await f.emit('agent_start', {}, ctx)
+    inbox.push(msg('lead [abc123]'))
+    release()
+    await new Promise(r => setTimeout(r, 40))
+    expect(f.sent).toEqual([])
+    const kept = await f.emit('agent_before_settle', { entries: [], outcome: 'completed', context: { canContinue: true } }, ctx)
+    expect(kept?.continue).toBe(true)
+    await f.emit('session_shutdown', {}, ctx)
   })
 
   it('a print run registers the server send-only and touches nothing else', async () => {
