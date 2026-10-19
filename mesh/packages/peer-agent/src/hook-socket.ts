@@ -8,11 +8,16 @@ import type { Inbox } from './inbox.ts'
 /**
  * A local socket through which the host's lifecycle hooks talk to its pull-mode peer.
  * Hosts such as Antigravity CLI run hook commands and MCP servers as children of the same
- * process, so both sides find the socket by that process's pid. The hooks learn whether
- * messages are waiting (and tell the agent to read them); the peer learns busy/idle.
+ * process, so both sides find the socket by that process's pid (Grok Build too). The hooks
+ * learn whether messages are waiting (and tell the agent to read them); the peer learns busy/idle.
  */
-export type HookRequest = { op: 'turn' } | { op: 'stop'; reason?: string }
-export interface HookReply { unread: number; from: string[]; continue?: boolean }
+export type HookRequest =
+  | { op: 'turn' }
+  | { op: 'tool' }
+  | { op: 'idle' }
+  /** natural: the turn ended on its own; absent, agy's NO_TOOL_CALL reason means that. */
+  | { op: 'stop'; reason?: string; natural?: boolean }
+export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean }
 
 export function hookSocketPath(hostPid: number, dir: string = meshDir()): string {
   if (process.platform === 'win32') {
@@ -25,6 +30,7 @@ export function hookSocketPath(hostPid: number, dir: string = meshDir()): string
 
 export class HookChannel {
   private nudgedSeq = 0
+  private notifiedSeq = 0
 
   constructor(private readonly inbox: Inbox, private readonly onStatus: (s: 'busy' | 'idle') => void) {}
 
@@ -35,10 +41,23 @@ export class HookChannel {
       this.onStatus('busy')
       return base
     }
+    if (req.op === 'tool') {
+      // Hosts that keep what a hook adds to a tool result (Grok Build) are told once per new
+      // arrival; a notice on every tool call would pile up in the conversation.
+      this.onStatus('busy')
+      const notify = p.size > 0 && p.seq > this.notifiedSeq
+      if (notify) this.notifiedSeq = p.seq
+      return { ...base, notify }
+    }
+    if (req.op === 'idle') {
+      this.onStatus('idle')
+      return base
+    }
     if (req.op === 'stop') {
       // Keep going once per new arrival, and only after a turn that ended on its own:
       // never against the user's Esc, an error, or an invocation limit.
-      if (p.size > 0 && p.seq > this.nudgedSeq && req.reason === 'NO_TOOL_CALL') {
+      const natural = req.natural ?? req.reason === 'NO_TOOL_CALL'
+      if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
         this.nudgedSeq = p.seq
         return { ...base, continue: true }
       }

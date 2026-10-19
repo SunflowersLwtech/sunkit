@@ -47,6 +47,44 @@ describe('HookChannel', () => {
     }
   })
 
+  it('a stop marked natural nudges whatever its reason; natural: false never does', () => {
+    const { inbox, statuses, ch } = make()
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'stop', reason: 'shutdown', natural: false }).continue).toBe(false)
+    expect(ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL', natural: false }).continue).toBe(false)
+    expect(ch.handle({ op: 'stop', reason: 'end_turn', natural: true })).toEqual({ unread: 1, from: ['lead [abc123]'], continue: true })
+    expect(ch.handle({ op: 'stop', reason: 'end_turn', natural: true }).continue).toBe(false)
+    expect(statuses).toEqual(['idle', 'idle', 'idle'])
+  })
+
+  it('a tool call marks the session busy and asks for a notice once per new arrival', () => {
+    const { inbox, statuses, ch } = make()
+    expect(ch.handle({ op: 'tool' })).toEqual({ unread: 0, from: [], notify: false })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'tool' })).toEqual({ unread: 1, from: ['lead [abc123]'], notify: true })
+    // Still unread on the next tool call: the agent was already told.
+    expect(ch.handle({ op: 'tool' })).toEqual({ unread: 1, from: ['lead [abc123]'], notify: false })
+    inbox.push(msg('ops [def456]'))
+    expect(ch.handle({ op: 'tool' }).notify).toBe(true)
+    inbox.take()
+    expect(ch.handle({ op: 'tool' }).notify).toBe(false)
+    expect(statuses).toEqual(['busy', 'busy', 'busy', 'busy', 'busy'])
+  })
+
+  it('a notice after a tool call does not use up the nudge at the stop', () => {
+    const { inbox, ch } = make()
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'tool' }).notify).toBe(true)
+    expect(ch.handle({ op: 'stop', natural: true }).continue).toBe(true)
+  })
+
+  it('idle reports the session idle and what is waiting', () => {
+    const { inbox, statuses, ch } = make()
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'idle' })).toEqual({ unread: 1, from: ['lead [abc123]'] })
+    expect(statuses).toEqual(['idle'])
+  })
+
   it('a request it does not know changes nothing', () => {
     const { inbox, statuses, ch } = make()
     inbox.push(msg('lead [abc123]'))
