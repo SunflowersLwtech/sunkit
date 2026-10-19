@@ -37455,6 +37455,7 @@ var INTERACTIVE_FLAGS = {
 function isOneShotHostRun(commandLine) {
   const argv = commandLine.trim().split(/\s+/);
   const exe = (argv[0] ?? "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+  if (exe === "grok") return isGrokSingleTurn(argv.slice(1));
   const print = PRINT_FLAGS[exe];
   if (!print) return false;
   const rest = argv.slice(1);
@@ -37474,6 +37475,42 @@ function decideJoin(opts) {
     return { join: false, reason: `managed policy would reject the channel (${opt.via}; ${source}); restart once the managed settings are in place` };
   }
   return { join: true, reason: `channel opt-in via ${opt.via}, allowed by managed policy (${source})` };
+}
+var GROK_SINGLE = ["-p", "--single", "--prompt-file", "--prompt-json"];
+var GROK_VALUE = [
+  "-m",
+  "--model",
+  "--cwd",
+  "--reasoning-effort",
+  "--effort",
+  "--sandbox",
+  "--permission-mode",
+  "--output-format",
+  "--max-turns",
+  "-s",
+  "--session-id",
+  "-r",
+  "--resume",
+  "--agent",
+  "--allow",
+  "--deny",
+  "--tools",
+  "--disallowed-tools",
+  "--worktree-ref",
+  "--ref",
+  "--leader-socket",
+  "--debug-file"
+];
+function isGrokSingleTurn(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const name = a.startsWith("--") ? a.split("=")[0] : a;
+    if (GROK_SINGLE.includes(name)) return true;
+    if (!a.startsWith("-")) return false;
+    if (GROK_VALUE.includes(a)) i++;
+    else if (!a.includes("=") && /^--(rules|append-system-prompt|system-prompt|system-prompt-override|agents|json-schema)$/.test(a)) return false;
+  }
+  return false;
 }
 
 // packages/peer-agent/src/host-lifetime.ts
@@ -37508,6 +37545,7 @@ var HookChannel = class {
   inbox;
   onStatus;
   nudgedSeq = 0;
+  notifiedSeq = 0;
   handle(req) {
     const p = this.inbox.peek();
     const base = { unread: p.size, from: p.from };
@@ -37515,8 +37553,19 @@ var HookChannel = class {
       this.onStatus("busy");
       return base;
     }
+    if (req.op === "tool") {
+      this.onStatus("busy");
+      const notify = p.size > 0 && p.seq > this.notifiedSeq;
+      if (notify) this.notifiedSeq = p.seq;
+      return { ...base, notify };
+    }
+    if (req.op === "idle") {
+      this.onStatus("idle");
+      return base;
+    }
     if (req.op === "stop") {
-      if (p.size > 0 && p.seq > this.nudgedSeq && req.reason === "NO_TOOL_CALL") {
+      const natural = req.natural ?? req.reason === "NO_TOOL_CALL";
+      if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
         this.nudgedSeq = p.seq;
         return { ...base, continue: true };
       }
