@@ -17,6 +17,8 @@ export type HookRequest =
   | { op: 'idle' }
   /** natural: the turn ended on its own; absent, agy's NO_TOOL_CALL reason means that. */
   | { op: 'stop'; reason?: string; natural?: boolean }
+  /** An idle host that can start a turn by itself (pi): woken once per new arrival, like a natural stop. */
+  | { op: 'wake' }
 export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean }
 
 export function hookSocketPath(hostPid: number, dir: string = meshDir()): string {
@@ -53,10 +55,11 @@ export class HookChannel {
       this.onStatus('idle')
       return base
     }
-    if (req.op === 'stop') {
+    if (req.op === 'stop' || req.op === 'wake') {
       // Keep going once per new arrival, and only after a turn that ended on its own:
-      // never against the user's Esc, an error, or an invocation limit.
-      const natural = req.natural ?? req.reason === 'NO_TOOL_CALL'
+      // never against the user's Esc, an error, or an invocation limit. A wake shares the
+      // count, so one arrival starts at most one extra turn however it is noticed.
+      const natural = req.op === 'wake' || (req.natural ?? req.reason === 'NO_TOOL_CALL')
       if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
         this.nudgedSeq = p.seq
         return { ...base, continue: true }
