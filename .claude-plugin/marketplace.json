@@ -60,6 +60,25 @@
       "description": "list_agents / send_message across Claude Code sessions on other accounts and machines, via a self-hosted relay and a channel. Start sessions with --channels plugin:mesh@sunkit.",
       "category": "communication",
       "keywords": ["channels", "messaging", "multi-agent", "cross-account"]
+    },
+    {
+      "name": "archify",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/tt-a1i/archify.git",
+        "path": "archify",
+        "ref": "main",
+        "sha": "b25142deac4b19b293e45b6bf6d69351d3c8f3b6"
+      },
+      "strict": false,
+      "defaultEnabled": false,
+      "skills": ["./"],
+      "description": "tt-a1i/archify v3.1 pinned to a reviewed commit: typed JSON IR rendered as interactive standalone HTML diagrams (architecture, workflow, sequence, dataflow and more), checked in headless Chrome. Installs disabled; the show-me skill reads its SKILL.md by path.",
+      "author": { "name": "tt-a1i", "url": "https://github.com/tt-a1i" },
+      "homepage": "https://github.com/tt-a1i/archify",
+      "license": "MIT",
+      "category": "visualization",
+      "keywords": ["diagram", "architecture", "interactive", "html"]
     }
   ]
 }

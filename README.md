@@ -21,6 +21,7 @@ packaged as a plugin marketplace.
 | [mcp-creator-growth](https://github.com/SunflowersLwtech/mcp_creator_growth) | MCP server | Context-aware learning sidebar for AI coding assistants (Python, runs via `uvx`; independent repo) |
 | [search-harness](plugins/search-harness) | Knowledge skill | Domain knowledge and roadmap for building a search harness for coding agents |
 | [mesh](mesh) | Channel plugin + relay | `list_agents` / `send_message` between Claude Code sessions on different accounts and machines, through a self-hosted relay |
+| [archify](https://github.com/tt-a1i/archify) | Skill (third-party, installs disabled) | tt-a1i/archify pinned to a reviewed commit: typed JSON rendered as interactive standalone HTML diagrams. Not a slash command of its own; another skill reads its `SKILL.md` from the install path |
 
 Not a plugin: [tools/session-rescue](tools/session-rescue) holds two standalone Python scripts that get stuck or archived Claude sessions back.
 
@@ -74,10 +75,12 @@ original repositories with full commit history preserved (`git subtree`):
 - `plugins/search-harness/skills/search-harness/` ← search-harness
 - `mesh/` and `tools/session-rescue/` ← claude-code-toolkit (`git merge`, original commit ids kept; that repository had itself absorbed claude-mesh, a fork of pouriamrt/claude-mesh, and claude-session-rescue)
 - `mcp-creator-growth` lives in its own repository: [mcp_creator_growth](https://github.com/SunflowersLwtech/mcp_creator_growth) (referenced by this marketplace)
+- `archify` is not copied here: the entry points at the `archify/` subdirectory of [tt-a1i/archify](https://github.com/tt-a1i/archify) (MIT) at a fixed commit (`git-subdir` source with `sha`), with `strict: false` because upstream has no `plugin.json`, and `defaultEnabled: false` so it never shows up as `/archify:archify`. To move to a newer upstream commit, read what changed, then update `sha`
 
 ## Requirements
 
 - `mcp-creator-growth` needs [uv](https://docs.astral.sh/uv/) installed (`uvx` launches the server straight from its plugin directory).
+- `archify` needs Node.js 18+ and a Chrome or Chromium binary (`ARCHIFY_CHROME`); on macOS wrap the binary so it gets `--use-mock-keychain --password-store=basic`, otherwise headless runs can prompt for the login keychain.
 - `mesh` needs Node.js 22+ on each machine, Claude Code 2.1.80+ signed in with a claude.ai account (channels are a research preview), and Docker wherever the relay runs.
 
 ## License
