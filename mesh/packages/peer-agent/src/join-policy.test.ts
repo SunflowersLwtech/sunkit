@@ -138,6 +138,9 @@ describe('isOneShotHostRun', () => {
       'grok -m grok-4.7 --always-approve',
       'grok --rules Report over the mesh; never run grok -p yourself',
       'grok --append-system-prompt use --single sparingly',
+      // Free text that itself starts like a flag (a rule list item, a quoted flag).
+      'grok --rules -p is never allowed for workers',
+      'grok -m grok-4.7 --append-system-prompt --single runs are forbidden',
       'grok explain why -p is used here',
       'grok -m grok-4.7 fix the -p flag parsing',
       'grok --resume abc -c',
