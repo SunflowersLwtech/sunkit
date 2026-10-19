@@ -167,6 +167,12 @@ async function main(): Promise<void> {
     sinceCursor: () => cursor,
     sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...(login ? { login } : {}), ...(pull ? { mode: 'pull' } : {}) }),
     onEnvelope: e => dispatcher.handle(e),
+    // A host that reported busy/idle before the relay attached this session lost that update
+    // (404): send what we have now if it differs from what the stream was opened with.
+    onOpen: sent => {
+      if (sent.status === identity.status) return
+      client.updateSelf({ status: identity.status }).catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
+    },
     onAuthError: () => { logJson('error', 'peer.auth_failed'); process.exit(2) },
   })
   stream.start().catch(err => {
