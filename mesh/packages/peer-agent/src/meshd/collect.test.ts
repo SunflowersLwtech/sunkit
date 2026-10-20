@@ -15,6 +15,7 @@ const herdrList = {
       },
       { agent: 'claude', agent_status: 'blocked', pane_id: 'w4:p2', terminal_title_stripped: 'untitled' },
       { agent: 'claude', agent_status: 'working', name: 'no-pane' },
+      { agent: 'claude', agent_status: 'idle' },
       { agent: 'claude', agent_status: 'waiting-for-something-new', name: 'odd', pane_id: 'w4:p3' },
       { agent: 'claude', agent_status: 'idle', name: 'bad pane', pane_id: 'p9; rm -rf /' },
     ],
