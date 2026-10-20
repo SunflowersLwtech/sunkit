@@ -526,6 +526,32 @@ task states, artifacts) but not its transport.
   (`probe`, `read`) over `/v1/machines/:machine/commands`; unanswered ones fail as `no_ack` after
   60 s and are never retried on their own, and only the issuing token can read the answer.
 
+From a shell, `mesh machine list|read|probe`, `mesh task list|show|create|update|artifact` and
+`mesh lease list|acquire|renew|release` call these endpoints with the device's pairing (`--session
+<id>` or `MESH_SESSION_ID` names the calling session where one is needed; `--relay` overrides the
+URL).
+
+### meshd, the per-machine executor
+
+`plugins/mesh/server/meshd.mjs` reports for one machine every 30 s (herdr's agent list with each
+agent's resume handle, installed hosts and versions, Claude seats from `~/.agents/tools/cc-quota`,
+load, which dispatch roots exist) and answers `probe` and `read` over its stream. It only calls the
+relay, never listens on a port, and runs every external program with a fixed argv. It needs its own
+`MESH_HOME` with an `executor` token bound to the machine, never the device token:
+
+```sh
+# on the admin machine: a device for the executor, then bind it
+mesh admin add-device <handle>                      # prints a pair code
+MESH_HOME=~/.claude-mesh-meshd mesh pair <code> --label meshd-<machine>
+curl -X PUT $RELAY/v1/admin/tokens/<token id>/grant -H "authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' -d '{"role":"executor","workgroup":"<wg>","machine":"<machine>"}'
+# on the machine, under its service manager
+MESH_HOME=~/.claude-mesh-meshd MESHD_MAX_ACTIVE=3 node <checkout>/mesh/plugins/mesh/server/meshd.mjs
+```
+
+Without `MESH_HOME` it refuses to start. `HERDR_BIN` overrides the herdr path; on macOS it reads
+cc-quota's cache instead of calling the usage API again.
+
 Finished tasks and released leases are dropped after 7 days. Everything above is audited
 (`task.*`, `lease.*`, `dispatch.*`, `token.grant`) with ids and names only, never content.
 

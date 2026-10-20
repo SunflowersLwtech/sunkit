@@ -175,7 +175,7 @@ var require_index_umd = __commonJS({
           return encodeTime(seedTime, TIME_LEN) + encodeRandom(RANDOM_LEN, currPrng);
         };
       }
-      function monotonicFactory2(currPrng) {
+      function monotonicFactory3(currPrng) {
         if (!currPrng) {
           currPrng = detectPrng();
         }
@@ -201,7 +201,7 @@ var require_index_umd = __commonJS({
       exports2.encodeTime = encodeTime;
       exports2.factory = factory;
       exports2.incrementBase32 = incrementBase32;
-      exports2.monotonicFactory = monotonicFactory2;
+      exports2.monotonicFactory = monotonicFactory3;
       exports2.randomChar = randomChar;
       exports2.replaceCharAt = replaceCharAt;
       exports2.ulid = ulid4;
@@ -4616,7 +4616,7 @@ async function runSend(args) {
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      "idempotency-key": (0, import_ulid2.ulid)().toLowerCase()
+      "idempotency-key": (0, import_ulid3.ulid)().toLowerCase()
     },
     body: JSON.stringify({ to, kind: "chat", content })
   });
@@ -4624,11 +4624,11 @@ async function runSend(args) {
   if (res.status !== 201) throw new Error(`send failed: ${res.status} ${text}`);
   process.stdout.write(text + "\n");
 }
-var import_ulid2;
+var import_ulid3;
 var init_send = __esm({
   "packages/peer-agent/src/cli/send.ts"() {
     "use strict";
-    import_ulid2 = __toESM(require_index_umd(), 1);
+    import_ulid3 = __toESM(require_index_umd(), 1);
     init_relay_url();
     init_token_file();
     init_paths();
@@ -5034,11 +5034,11 @@ var init_config = __esm({
 });
 
 // packages/peer-agent/src/outbound.ts
-var import_ulid3, RelayClient;
+var import_ulid4, RelayClient;
 var init_outbound = __esm({
   "packages/peer-agent/src/outbound.ts"() {
     "use strict";
-    import_ulid3 = __toESM(require_index_umd(), 1);
+    import_ulid4 = __toESM(require_index_umd(), 1);
     RelayClient = class {
       constructor(opts, inj = {}) {
         this.opts = opts;
@@ -5052,7 +5052,7 @@ var init_outbound = __esm({
           headers: {
             authorization: `Bearer ${this.opts.token}`,
             "content-type": "application/json",
-            "idempotency-key": (0, import_ulid3.ulid)().toLowerCase(),
+            "idempotency-key": (0, import_ulid4.ulid)().toLowerCase(),
             ...this.opts.sessionId ? { "x-mesh-session": this.opts.sessionId } : this.opts.senderName ? { "x-mesh-sender-name": this.opts.senderName } : {}
           },
           body: JSON.stringify(msg)
@@ -5134,11 +5134,11 @@ function sanitizeName(raw) {
   const cleaned = raw.trim().replace(/[\s[\]<>"&]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
   return cleaned.length > 0 ? cleaned : "session";
 }
-var import_ulid4;
+var import_ulid5;
 var init_session_identity = __esm({
   "packages/peer-agent/src/session-identity.ts"() {
     "use strict";
-    import_ulid4 = __toESM(require_index_umd(), 1);
+    import_ulid5 = __toESM(require_index_umd(), 1);
     init_managed_policy();
   }
 });
@@ -5927,6 +5927,483 @@ var init_pi = __esm({
   }
 });
 
+// packages/peer-agent/src/cli/ledger.ts
+var ledger_exports = {};
+__export(ledger_exports, {
+  LEASE_USAGE: () => LEASE_USAGE,
+  LedgerClient: () => LedgerClient,
+  LedgerError: () => LedgerError,
+  MACHINE_USAGE: () => MACHINE_USAGE,
+  TASK_USAGE: () => TASK_USAGE,
+  runLease: () => runLease,
+  runMachine: () => runMachine,
+  runTask: () => runTask
+});
+function parseJson(text) {
+  if (!text) return void 0;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function errorText(status, text, body) {
+  const field = body && typeof body === "object" && typeof body.error === "string" ? body.error : void 0;
+  const detail = field ?? text.trim();
+  return `${status} ${detail || "no body"}`;
+}
+function parseArgs(args) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("--")) {
+      positional.push(a);
+      continue;
+    }
+    const eq = a.indexOf("=");
+    if (eq > 0) {
+      flags[a.slice(2, eq)] = a.slice(eq + 1);
+      continue;
+    }
+    const next = args[i + 1];
+    if (next !== void 0 && !next.startsWith("--")) {
+      flags[a.slice(2)] = next;
+      i++;
+      continue;
+    }
+    flags[a.slice(2)] = true;
+  }
+  return { positional, flags };
+}
+function flagString(flags, name) {
+  const v = flags[name];
+  return typeof v === "string" ? v : void 0;
+}
+function flagNumber(flags, name) {
+  const v = flagString(flags, name);
+  if (v === void 0) return void 0;
+  const n = Number(v);
+  return Number.isInteger(n) ? n : void 0;
+}
+function splitGlobals(args) {
+  const rest = [];
+  let relay;
+  let session;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--relay" && i + 1 < args.length) {
+      relay = args[++i];
+      continue;
+    }
+    if (a === "--session" && i + 1 < args.length) {
+      session = args[++i];
+      continue;
+    }
+    rest.push(a);
+  }
+  return { rest, ...relay !== void 0 ? { relay } : {}, ...session !== void 0 ? { session } : {} };
+}
+function makeCtx(globals, deps) {
+  const { relay, session } = globals;
+  let cached;
+  return {
+    out: deps.out ?? ((s) => console.log(s)),
+    err: deps.err ?? ((s) => console.error(s)),
+    sleep: deps.sleep ?? ((ms) => new Promise((resolve4) => {
+      setTimeout(resolve4, ms);
+    })),
+    client: () => {
+      if (deps.client) return deps.client;
+      if (!cached) {
+        const cfg = loadConfig();
+        const sess = session ?? process.env.MESH_SESSION_ID;
+        cached = new LedgerClient({
+          relayUrl: relay ?? cfg.relay_url,
+          token: loadToken(cfg.token_path),
+          ...sess ? { session: sess } : {}
+        });
+      }
+      return cached;
+    }
+  };
+}
+function machineLine(m) {
+  const r = m.report;
+  const seats = r.seats.map((s) => s.five_hour_pct === void 0 ? s.email : `${s.email} ${s.five_hour_pct}%`).join(" ");
+  return [
+    m.machine,
+    m.stale ? "stale" : "ok",
+    m.connected ? "connected" : "offline",
+    `age ${m.age_s}s`,
+    `load ${r.load.load1}/${r.load.cpus}`,
+    `active ${r.active}/${r.max_active ?? "?"}`,
+    `seats ${seats || "none"}`,
+    `agents ${r.agents.length}`
+  ].join("  ");
+}
+function taskLine(t) {
+  const name = t.assignee.name ?? "-";
+  const machine = t.assignee.machine ?? "-";
+  return `${t.id}  ${t.state}${t.stale ? " stale" : ""}  ${name}@${machine}  ${t.title}`;
+}
+function leaseLine(l) {
+  const holder = l.holder ? `${l.holder.name ?? "-"}@${l.holder.machine ?? "-"}` : "(hidden)";
+  return `${l.name}  ${holder}  ${l.ttl_remaining_s}s left  ${l.id}`;
+}
+async function awaitCommand(cmd, ctx) {
+  let current = cmd;
+  for (let poll = 0; poll < MAX_POLLS; poll++) {
+    if (current.state === "done" || current.state === "failed") break;
+    await ctx.sleep(POLL_INTERVAL_MS);
+    current = await ctx.client().getCommand(current.id);
+  }
+  if (current.state === "done") {
+    ctx.out(current.result?.output ?? "");
+    return 0;
+  }
+  if (current.state === "failed") {
+    ctx.err(`failed: ${current.reason ?? current.result?.error ?? "unknown error"}`);
+    return 1;
+  }
+  ctx.err(`command ${current.id} did not finish (state ${current.state})`);
+  return 1;
+}
+async function runMachine(args, deps = {}) {
+  const globals = splitGlobals(args);
+  const ctx = makeCtx(globals, deps);
+  const { rest } = globals;
+  const [sub, ...rest2] = rest;
+  try {
+    if (sub === "list") {
+      const { positional, flags } = parseArgs(rest2);
+      if (positional.length) {
+        ctx.err(MACHINE_USAGE);
+        return 2;
+      }
+      const machines = await ctx.client().listMachines();
+      if (flags.json) {
+        ctx.out(JSON.stringify(machines));
+        return 0;
+      }
+      for (const m of machines) ctx.out(machineLine(m));
+      return 0;
+    }
+    if (sub === "read") {
+      const { positional, flags } = parseArgs(rest2);
+      const machine = positional[0];
+      const pane = positional[1];
+      const lines = flagNumber(flags, "lines");
+      if (!machine || !pane || positional.length > 2 || flags.lines !== void 0 && (lines === void 0 || lines < 1)) {
+        ctx.err(MACHINE_USAGE);
+        return 2;
+      }
+      const cmd = await ctx.client().issueCommand(machine, {
+        op: "read",
+        args: { pane, ...lines !== void 0 ? { lines } : {} }
+      });
+      return await awaitCommand(cmd, ctx);
+    }
+    if (sub === "probe") {
+      const { positional } = parseArgs(rest2);
+      const machine = positional[0];
+      if (!machine || positional.length > 1) {
+        ctx.err(MACHINE_USAGE);
+        return 2;
+      }
+      const cmd = await ctx.client().issueCommand(machine, { op: "probe" });
+      return await awaitCommand(cmd, ctx);
+    }
+    ctx.err(MACHINE_USAGE);
+    return 2;
+  } catch (err) {
+    ctx.err(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+async function runTask(args, deps = {}) {
+  const globals = splitGlobals(args);
+  const ctx = makeCtx(globals, deps);
+  const { rest } = globals;
+  const [sub, ...rest2] = rest;
+  try {
+    if (sub === "list") {
+      const { positional, flags } = parseArgs(rest2);
+      const since = flagNumber(flags, "since");
+      if (positional.length || flags.since !== void 0 && (since === void 0 || since < 0)) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const body = await ctx.client().listTasks(since ?? 0);
+      if (flags.json) {
+        ctx.out(JSON.stringify(body));
+        return 0;
+      }
+      for (const t of body.tasks) {
+        ctx.out(taskLine(t));
+        if (t.progress) ctx.out(`  ${t.progress}`);
+      }
+      return 0;
+    }
+    if (sub === "show") {
+      const { positional } = parseArgs(rest2);
+      const id = positional[0];
+      if (!id || positional.length > 1) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const t = await ctx.client().getTask(id);
+      ctx.out(JSON.stringify(t, null, 2));
+      return 0;
+    }
+    if (sub === "create") {
+      const { positional, flags } = parseArgs(rest2);
+      const title = flagString(flags, "title");
+      if (!title || !title.trim() || positional.length) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const assignee = flagString(flags, "assignee");
+      const parent = flagString(flags, "parent");
+      const t = await ctx.client().createTask({
+        title,
+        ...assignee ? { assignee } : {},
+        ...parent ? { parent_task: parent } : {}
+      });
+      ctx.out(`${t.id}  ${t.state}`);
+      return 0;
+    }
+    if (sub === "update") {
+      const { positional, flags } = parseArgs(rest2);
+      const id = positional[0];
+      const state = flagString(flags, "state");
+      const progress = flagString(flags, "progress");
+      const reason = flagString(flags, "reason");
+      const ifSeq = flagNumber(flags, "if-seq");
+      if (!id || positional.length > 1 || flags["if-seq"] !== void 0 && ifSeq === void 0) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const body = {
+        ...state ? { state } : {},
+        ...progress ? { progress } : {},
+        ...reason ? { reason } : {},
+        ...ifSeq !== void 0 ? { if_seq: ifSeq } : {}
+      };
+      if (Object.keys(body).length === 0) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const t = await ctx.client().updateTask(id, body);
+      ctx.out(`${t.id}  ${t.state}`);
+      return 0;
+    }
+    if (sub === "artifact") {
+      const { positional, flags } = parseArgs(rest2);
+      const [id, type, ref] = positional;
+      if (!id || !type || !ref || positional.length > 3) {
+        ctx.err(TASK_USAGE);
+        return 2;
+      }
+      const note = flagString(flags, "note");
+      await ctx.client().addArtifact(id, { type, ref, ...note ? { note } : {} });
+      ctx.out(`added ${type} ${ref}`);
+      return 0;
+    }
+    ctx.err(TASK_USAGE);
+    return 2;
+  } catch (err) {
+    ctx.err(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+async function runLease(args, deps = {}) {
+  const globals = splitGlobals(args);
+  const ctx = makeCtx(globals, deps);
+  const { rest } = globals;
+  const [sub, ...rest2] = rest;
+  try {
+    if (sub === "list") {
+      const { positional, flags } = parseArgs(rest2);
+      if (positional.length) {
+        ctx.err(LEASE_USAGE);
+        return 2;
+      }
+      const name = flagString(flags, "name");
+      const leases = await ctx.client().listLeases(name);
+      if (flags.json) {
+        ctx.out(JSON.stringify(leases));
+        return 0;
+      }
+      for (const l of leases) ctx.out(leaseLine(l));
+      return 0;
+    }
+    if (sub === "acquire") {
+      const { positional, flags } = parseArgs(rest2);
+      const name = positional[0];
+      const ttl = flagNumber(flags, "ttl");
+      if (!name || ttl === void 0 || ttl <= 0 || positional.length > 1) {
+        ctx.err(LEASE_USAGE);
+        return 2;
+      }
+      const note = flagString(flags, "note");
+      const task = flagString(flags, "task");
+      try {
+        const lease = await ctx.client().acquireLease({
+          name,
+          ttl_s: ttl,
+          ...note ? { note } : {},
+          ...task ? { task_id: task } : {}
+        });
+        ctx.out(`${lease.id}  expires ${lease.expires_at}`);
+        return 0;
+      } catch (err) {
+        if (err instanceof LedgerError && err.status === 409) {
+          const message = err.body && typeof err.body === "object" && typeof err.body.message === "string" ? err.body.message : void 0;
+          ctx.err(message ?? err.message);
+          return 1;
+        }
+        throw err;
+      }
+    }
+    if (sub === "renew") {
+      const { positional, flags } = parseArgs(rest2);
+      const id = positional[0];
+      const ttl = flagNumber(flags, "ttl");
+      if (!id || positional.length > 1 || flags.ttl !== void 0 && (ttl === void 0 || ttl <= 0)) {
+        ctx.err(LEASE_USAGE);
+        return 2;
+      }
+      const lease = await ctx.client().renewLease(id, ttl === void 0 ? {} : { ttl_s: ttl });
+      ctx.out(`${lease.id}  expires ${lease.expires_at}`);
+      return 0;
+    }
+    if (sub === "release") {
+      const { positional } = parseArgs(rest2);
+      const id = positional[0];
+      if (!id || positional.length > 1) {
+        ctx.err(LEASE_USAGE);
+        return 2;
+      }
+      await ctx.client().releaseLease(id);
+      ctx.out(`released ${id}`);
+      return 0;
+    }
+    ctx.err(LEASE_USAGE);
+    return 2;
+  } catch (err) {
+    ctx.err(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+var MACHINE_USAGE, TASK_USAGE, LEASE_USAGE, LedgerError, LedgerClient, POLL_INTERVAL_MS, MAX_POLLS;
+var init_ledger = __esm({
+  "packages/peer-agent/src/cli/ledger.ts"() {
+    "use strict";
+    init_config();
+    MACHINE_USAGE = "usage: mesh machine list [--json] | mesh machine read <machine> <pane> [--lines N] | mesh machine probe <machine>";
+    TASK_USAGE = "usage: mesh task list [--since N] [--json] | mesh task show <id> | mesh task create --title <text> [--assignee <session id>] [--parent <task id>] | mesh task update <id> [--state S] [--progress text] [--reason text] [--if-seq N] | mesh task artifact <id> <type> <ref> [--note text]";
+    LEASE_USAGE = "usage: mesh lease list [--name N] [--json] | mesh lease acquire <name> --ttl <seconds> [--note text] [--task <task id>] | mesh lease renew <id> [--ttl seconds] | mesh lease release <id>";
+    LedgerError = class extends Error {
+      constructor(status, body, message) {
+        super(message);
+        this.status = status;
+        this.body = body;
+        this.name = "LedgerError";
+      }
+      status;
+      body;
+    };
+    LedgerClient = class {
+      constructor(opts, inj = {}) {
+        this.opts = opts;
+        this.fetchImpl = inj.fetch ?? globalThis.fetch;
+      }
+      opts;
+      fetchImpl;
+      url(path, query) {
+        const u = new URL(path, this.opts.relayUrl);
+        if (query) {
+          for (const [k, v] of Object.entries(query)) if (v !== void 0) u.searchParams.set(k, String(v));
+        }
+        return u;
+      }
+      headers() {
+        return {
+          authorization: `Bearer ${this.opts.token}`,
+          "content-type": "application/json",
+          ...this.opts.session ? { "x-mesh-session": this.opts.session } : {}
+        };
+      }
+      async request(url, init = {}) {
+        const res = await this.fetchImpl(url, { ...init, headers: this.headers() });
+        const text = await res.text();
+        const body = parseJson(text);
+        if (res.status < 200 || res.status >= 300) {
+          throw new LedgerError(res.status, body, errorText(res.status, text, body));
+        }
+        return body;
+      }
+      // Machines
+      async listMachines() {
+        return await this.request(this.url("/v1/machines"));
+      }
+      async issueCommand(machine, body) {
+        return await this.request(
+          this.url(`/v1/machines/${encodeURIComponent(machine)}/commands`),
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      }
+      async getCommand(id, waitSeconds = 25) {
+        return await this.request(this.url(`/v1/commands/${encodeURIComponent(id)}`, { wait: waitSeconds }));
+      }
+      // Tasks
+      async listTasks(sinceSeq = 0) {
+        return await this.request(this.url("/v1/tasks", { since_seq: sinceSeq }));
+      }
+      async getTask(id) {
+        return await this.request(this.url(`/v1/tasks/${encodeURIComponent(id)}`));
+      }
+      async createTask(body) {
+        return await this.request(this.url("/v1/tasks"), { method: "POST", body: JSON.stringify(body) });
+      }
+      async updateTask(id, body) {
+        return await this.request(
+          this.url(`/v1/tasks/${encodeURIComponent(id)}`),
+          { method: "PATCH", body: JSON.stringify(body) }
+        );
+      }
+      async addArtifact(id, body) {
+        return await this.request(
+          this.url(`/v1/tasks/${encodeURIComponent(id)}/artifacts`),
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      }
+      // Leases
+      async listLeases(name) {
+        return await this.request(this.url("/v1/leases", name === void 0 ? void 0 : { name }));
+      }
+      async acquireLease(body) {
+        return await this.request(this.url("/v1/leases"), { method: "POST", body: JSON.stringify(body) });
+      }
+      async renewLease(id, body) {
+        return await this.request(
+          this.url(`/v1/leases/${encodeURIComponent(id)}/renew`),
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      }
+      async releaseLease(id) {
+        return await this.request(
+          this.url(`/v1/leases/${encodeURIComponent(id)}`),
+          { method: "DELETE" }
+        );
+      }
+    };
+    POLL_INTERVAL_MS = 250;
+    MAX_POLLS = 3;
+  }
+});
+
 // packages/shared/dist/constants.js
 var PROTOCOL_VERSION = 1;
 var MAX_CONTENT_BYTES = 65536;
@@ -6011,6 +6488,174 @@ function loadEnvFiles(cwd = process.cwd()) {
   }
   return loaded;
 }
+
+// packages/shared/dist/ledger.js
+init_zod();
+var import_ulid2 = __toESM(require_index_umd(), 1);
+var ULID = "[0-9A-HJKMNP-TV-Z]{26}";
+var monotonicUlid2 = (0, import_ulid2.monotonicFactory)();
+var TASK_ID_REGEX = new RegExp(`^task_${ULID}$`);
+var TaskIdSchema = external_exports.string().regex(TASK_ID_REGEX);
+var LeaseIdSchema = external_exports.string().regex(new RegExp(`^lease_${ULID}$`));
+var CommandIdSchema = external_exports.string().regex(new RegExp(`^cmd_${ULID}$`));
+var TASK_STATES = [
+  "submitted",
+  "working",
+  "input_required",
+  "auth_required",
+  "completed",
+  "failed",
+  "canceled",
+  "rejected"
+];
+var TaskStateSchema = external_exports.enum(TASK_STATES);
+var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+var RoleSchema = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
+var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
+var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
+var HerdrPaneIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:p[0-9A-Za-z]{1,8}$/);
+function redactUrlCredentials(value) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
+    return value;
+  try {
+    const u = new URL(value);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
+  }
+}
+var RepoSchema = external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
+var BranchSchema = external_exports.string().max(128).regex(/^[A-Za-z0-9._+-][A-Za-z0-9._/+-]{0,127}$/).refine((b) => !b.includes(".."), "branch");
+var ModelSchema = external_exports.string().regex(/^[A-Za-z0-9._:/@+\[\]-]{1,64}$/);
+var HerdrLocationSchema = external_exports.object({
+  machine: MachineNameSchema,
+  tab: HerdrTabIdSchema.optional(),
+  pane: HerdrPaneIdSchema.optional()
+}).strict();
+var CardSourceSchema = external_exports.enum(["hook", "poll", "manual"]);
+var CardPatchSchema = external_exports.object({
+  session: external_exports.string(),
+  name: SessionNameSchema.optional(),
+  cwd: external_exports.string().max(1024).optional(),
+  login: LoginSchema.optional(),
+  status: external_exports.enum(["busy", "idle", "unknown"]).optional(),
+  agent: AgentKindSchema.optional(),
+  model: ModelSchema.optional(),
+  repo: RepoSchema.optional(),
+  branch: BranchSchema.optional(),
+  herdr: HerdrLocationSchema.optional(),
+  task_id: TaskIdSchema.optional(),
+  source: CardSourceSchema.optional(),
+  workgroup: WorkgroupSchema.optional()
+}).strict();
+var ArtifactTypeSchema = external_exports.enum(["pr", "commit", "vault", "deploy", "url"]);
+function artifactRefOk(type, ref) {
+  if (/[\u0000-\u001f\u007f\s]/.test(ref))
+    return false;
+  if (type === "vault") {
+    return !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").some((seg) => seg === ".." || seg === "");
+  }
+  if (type === "deploy")
+    return /^[A-Za-z0-9._:+-]{1,64}@[0-9TZ:.+-]{4,40}$/.test(ref);
+  if (ref.startsWith("gh://"))
+    return /^gh:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\/(pull|issues|commit)\/[0-9a-f]+)?$/.test(ref);
+  let u;
+  try {
+    u = new URL(ref);
+  } catch {
+    return false;
+  }
+  return u.protocol === "https:" && u.username === "" && u.password === "";
+}
+var ArtifactSchema = external_exports.object({
+  type: ArtifactTypeSchema,
+  ref: external_exports.string().min(1).max(512),
+  note: external_exports.string().max(200).optional()
+}).strict().superRefine((a, ctx) => {
+  if (!artifactRefOk(a.type, a.ref))
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["ref"], message: "ref" });
+});
+var LeaseNameSchema = external_exports.string().regex(/^(deploy|repo|file|device|build|cred)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).refine((n) => !n.includes(".."), "lease name");
+var MAX_LEASE_TTL_S = 1800;
+var MIN_LEASE_TTL_S = 30;
+var AgentStatusSchema = external_exports.enum(["idle", "working", "blocked", "done", "unknown"]).catch("unknown");
+var MachineAgentSchema = external_exports.object({
+  name: external_exports.string().min(1).max(64),
+  agent: external_exports.string().regex(/^[a-z0-9_-]{1,32}$/),
+  status: AgentStatusSchema,
+  pane: HerdrPaneIdSchema,
+  tab: HerdrTabIdSchema.optional(),
+  workspace: HerdrWorkspaceIdSchema.optional(),
+  cwd: external_exports.string().max(1024).transform(redactUrlCredentials).optional(),
+  agent_session: external_exports.object({
+    kind: external_exports.string().regex(/^[a-z_]{1,16}$/),
+    value: external_exports.string().min(1).max(1024)
+  }).strict().optional()
+}).strict();
+var MachineReportSchema = external_exports.object({
+  version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/),
+  herdr: external_exports.object({
+    ok: external_exports.boolean(),
+    version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/).optional(),
+    error: external_exports.string().max(200).optional()
+  }).strict(),
+  load: external_exports.object({
+    load1: external_exports.number().min(0).max(1e4),
+    cpus: external_exports.number().int().min(1).max(1024),
+    mem_used_pct: external_exports.number().min(0).max(100).optional()
+  }).strict(),
+  kinds: external_exports.array(external_exports.object({
+    kind: AgentKindSchema,
+    version: external_exports.string().regex(/^[A-Za-z0-9._ ()+-]{1,64}$/).optional()
+  }).strict()).max(8),
+  seats: external_exports.array(external_exports.object({
+    email: LoginSchema,
+    org: external_exports.string().max(64).optional(),
+    plan: external_exports.string().regex(/^[a-z_-]{1,16}$/).optional(),
+    five_hour_pct: external_exports.number().min(0).max(1e3).optional(),
+    resets_at: external_exports.string().datetime().optional(),
+    blocked: external_exports.boolean().optional()
+  }).strict()).max(6),
+  active: external_exports.number().int().min(0).max(1e3),
+  blocked: external_exports.number().int().min(0).max(1e3),
+  max_active: external_exports.number().int().min(0).max(1e3).optional(),
+  agents: external_exports.array(MachineAgentSchema).max(64),
+  roots: external_exports.array(external_exports.object({ path: external_exports.string().min(1).max(256), exists: external_exports.boolean() }).strict()).max(8)
+}).strict();
+var CommandRequestSchema = external_exports.discriminatedUnion("op", [
+  external_exports.object({ op: external_exports.literal("probe"), args: external_exports.object({}).strict().optional() }).strict(),
+  external_exports.object({
+    op: external_exports.literal("read"),
+    args: external_exports.object({ pane: HerdrPaneIdSchema, lines: external_exports.number().int().min(1).max(400).optional() }).strict()
+  }).strict()
+]);
+var CommandResultSchema = external_exports.object({
+  ok: external_exports.boolean(),
+  output: external_exports.string().max(65536).optional(),
+  error: external_exports.string().max(500).optional()
+}).strict();
+var TaskCreateSchema = external_exports.object({
+  title: external_exports.string().min(1).max(120),
+  /** Omit to register a task for the calling session itself (depth 0). Another session's id needs the orchestrator role. */
+  assignee: SessionIdSchema.optional(),
+  parent_task: TaskIdSchema.optional(),
+  prompt_sha256: external_exports.string().regex(/^[0-9a-f]{64}$/).optional(),
+  deadline: external_exports.string().datetime().optional()
+}).strict();
+var TaskUpdateSchema = external_exports.object({
+  state: TaskStateSchema.optional(),
+  progress: external_exports.string().max(200).optional(),
+  reason: external_exports.string().max(200).optional(),
+  if_seq: external_exports.number().int().min(0).optional()
+}).strict();
+var LeaseAcquireSchema = external_exports.object({
+  name: LeaseNameSchema,
+  ttl_s: external_exports.number().int().min(MIN_LEASE_TTL_S).max(MAX_LEASE_TTL_S),
+  note: external_exports.string().max(200).optional(),
+  task_id: TaskIdSchema.optional()
+}).strict();
 
 // packages/peer-agent/src/cli/pair.ts
 init_paths();
@@ -6156,7 +6801,22 @@ async function main() {
     process.exitCode = await runDevin2(args);
     return;
   }
-  console.error("commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi");
+  if (cmd === "machine") {
+    const { runMachine: runMachine2 } = await Promise.resolve().then(() => (init_ledger(), ledger_exports));
+    process.exitCode = await runMachine2(args);
+    return;
+  }
+  if (cmd === "task") {
+    const { runTask: runTask2 } = await Promise.resolve().then(() => (init_ledger(), ledger_exports));
+    process.exitCode = await runTask2(args);
+    return;
+  }
+  if (cmd === "lease") {
+    const { runLease: runLease2 } = await Promise.resolve().then(() => (init_ledger(), ledger_exports));
+    process.exitCode = await runLease2(args);
+    return;
+  }
+  console.error("commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, machine, task, lease");
   process.exit(2);
 }
 main().catch((err) => {
