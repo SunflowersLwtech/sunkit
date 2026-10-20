@@ -81,5 +81,73 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_team_at ON audit_log(team_id, at);
 
+-- v4: the A2A ledger. Additive only, so an older relay image runs on this file unchanged.
+-- Role and workgroup are bound to a token, never to a session (session ids are visible to the team).
+-- No foreign key on token_id: an older relay deletes tokens without knowing this table exists.
+CREATE TABLE IF NOT EXISTS token_grant (
+  token_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL CHECK(role IN ('worker','orchestrator','observer','executor')),
+  workgroup TEXT NOT NULL,
+  visible_json TEXT NOT NULL DEFAULT '[]',
+  machine TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES team(id),
+  workgroup TEXT NOT NULL,
+  title TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('submitted','working','input_required','auth_required','completed','failed','canceled','rejected')),
+  progress TEXT,
+  reason TEXT,
+  assignee_session TEXT,
+  assignee_name TEXT,
+  assignee_machine TEXT,
+  assignee_token TEXT,
+  dispatcher_session TEXT,
+  dispatcher_name TEXT,
+  dispatcher_token TEXT NOT NULL,
+  parent_task TEXT,
+  depth INTEGER NOT NULL,
+  prompt_sha256 TEXT,
+  artifacts_json TEXT NOT NULL DEFAULT '[]',
+  seq INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deadline TEXT,
+  ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_team_seq ON task(team_id, seq);
+
+-- One counter per team: every task change takes the next value, so `since_seq` resumes a snapshot.
+CREATE TABLE IF NOT EXISTS task_seq (
+  team_id TEXT PRIMARY KEY REFERENCES team(id),
+  seq INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS lease (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES team(id),
+  workgroup TEXT NOT NULL,
+  name TEXT NOT NULL,
+  holder_session TEXT NOT NULL,
+  holder_name TEXT NOT NULL,
+  holder_machine TEXT,
+  holder_token TEXT NOT NULL,
+  task_id TEXT,
+  note TEXT,
+  ttl_s INTEGER NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  renew_count INTEGER NOT NULL DEFAULT 0,
+  renewed_s INTEGER NOT NULL DEFAULT 0,
+  released_at TEXT,
+  release_reason TEXT
+);
+-- At most one unreleased row per name; an expired one is released (reason 'expire') before a new acquire.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lease_live ON lease(team_id, name) WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lease_holder ON lease(holder_session) WHERE released_at IS NULL;
+
 INSERT OR IGNORE INTO schema_version(version) VALUES (1);
 INSERT OR IGNORE INTO schema_version(version) VALUES (2);

@@ -14,6 +14,8 @@ export interface PresenceSnapshot {
 
 interface SessionState {
   label: string
+  /** The publishing token's workgroup; readers outside it never see this entry. */
+  workgroup?: string
   summary: string
   cwd?: string
   branch?: string
@@ -49,7 +51,7 @@ export class PresenceRegistry {
 
   constructor(private now: () => Date = () => new Date()) {}
 
-  set(team: string, handle: string, label: string, s: PresenceInput): void {
+  set(team: string, handle: string, label: string, s: PresenceInput, workgroup?: string): void {
     let byHandle = this.state.get(team)
     if (!byHandle) {
       byHandle = new Map()
@@ -62,6 +64,7 @@ export class PresenceRegistry {
     }
     byLabel.set(label, {
       label,
+      ...(workgroup !== undefined ? { workgroup } : {}),
       summary: s.summary,
       ...copyOptional(s),
       last_seen: this.now().toISOString(),
@@ -75,10 +78,13 @@ export class PresenceRegistry {
     if (byLabel.size === 0) this.state.get(team)?.delete(handle)
   }
 
-  get(team: string, handle: string): PresenceSnapshot | undefined {
+  /** With `visible`, entries published from other workgroups are left out (and may leave nothing). */
+  get(team: string, handle: string, visible?: readonly string[]): PresenceSnapshot | undefined {
     const byLabel = this.state.get(team)?.get(handle)
     if (!byLabel || byLabel.size === 0) return undefined
     const sessions = Array.from(byLabel.values())
+      .filter(s => !visible || s.workgroup === undefined || visible.includes(s.workgroup))
+    if (sessions.length === 0) return undefined
     const first = sessions[0]!
     const last_seen = sessions.reduce(
       (max, s) => (s.last_seen > max ? s.last_seen : max),

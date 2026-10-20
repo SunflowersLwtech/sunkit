@@ -221,6 +221,15 @@ session registry and the signed-in account are read from that directory.
   answer acknowledgements.
 - The relay is a trust anchor: whoever controls it can forge messages. Keep it on a private
   network. Pair codes are single-use, expire after 24 h, and `/v1/auth/pair` is rate-limited.
+- Workgroups and roles are bound to **tokens**, set by an admin (`PUT /v1/admin/tokens/:id/grant`),
+  never by a session. A token with no grant is a `worker` that sees only the `team` workgroup; a
+  device paired later inherits its owner's workgroups (never a role). Sessions, tasks, leases,
+  machines, presence and `@team` broadcasts are filtered by workgroup on the relay, and a session
+  in a workgroup you cannot see can only be reached by answering a message it sent you.
+- Dispatching (tasks for other sessions, executor commands) needs the `orchestrator` role on the
+  calling token. Give it to a token of its own, in its own `MESH_HOME`: every process that can
+  read a device's token file can claim that device's sessions, so a role on a shared device token
+  is a role for everything on that machine.
 
 See [SECURITY.md](SECURITY.md) for the full threat model.
 
@@ -488,6 +497,37 @@ this version. Against an older relay, pull sessions still work but show no marke
 senders show their account handle as before; older peers on the receiving side also show the handle.
 The inbox holds the 200 most recent messages; anything older is dropped and the next
 `read_messages` says how many.
+
+## Ledger: cards, tasks, leases, machines
+
+Besides messages the relay keeps a small ledger, borrowing the vocabulary of A2A (agent card,
+task states, artifacts) but not its transport.
+
+- **Cards.** `POST /v1/sessions/self` also takes `agent`, `model`, `repo`, `branch`,
+  `herdr {machine, tab, pane}`, `task_id` and `source` (fixed fields, no free-form map;
+  rate-limited per token *and* session). `GET /v1/sessions` adds the relay-owned `workgroup`,
+  `role`, `dispatched_by`, `updated_at` and `age_s`.
+- **Tasks** (`/v1/tasks`, SQLite): A2A states `submitted, working, input_required,
+  auth_required, completed, failed, canceled, rejected`. A session may register its own task
+  (depth 0); an orchestrator may assign one to another session (depth 1, never deeper). The relay
+  assigns `seq` (one counter per team) and accepts `if_seq` as an optimistic lock; terminal states
+  are final. Changes are pushed as SSE `event: task` (never stored as a message, so older peers
+  skip them) and recovered with `GET /v1/tasks?since_seq=`. Prompts are never stored, only an
+  optional `prompt_sha256`. Artifacts are `https://`, `gh://`, vault-relative or `version@time`
+  references; receivers must not auto-fetch them.
+- **Leases** (`/v1/leases`, SQLite): one holder per name (`deploy/`, `repo/`, `file/`, `device/`,
+  `build/`, `cred/`); `409 lease_held` says who holds it and for how long (or only that it is
+  held, across workgroups). TTL ≤ 1800 s, 3 per session, 2 h of renewals per session; `deploy/`
+  and `cred/` need an active task of the holder. Expiry is judged on read, so a relay restart
+  keeps them.
+- **Machines** (`/v1/machines`, memory): an `executor` token bound to one machine reports
+  agents, seats, load and installed hosts; after 90 s without a report the machine is `stale` and
+  its sessions are hidden rather than shown idle. Orchestrators can send it read-only commands
+  (`probe`, `read`) over `/v1/machines/:machine/commands`; unanswered ones fail as `no_ack` after
+  60 s and are never retried on their own, and only the issuing token can read the answer.
+
+Finished tasks and released leases are dropped after 7 days. Everything above is audited
+(`task.*`, `lease.*`, `dispatch.*`, `token.grant`) with ids and names only, never content.
 
 ## Development
 

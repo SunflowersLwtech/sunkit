@@ -34,8 +34,9 @@ export function permissionRoute(deps: Deps) {
       SELECT id, content, from_handle, meta_json
       FROM message
       WHERE team_id=? AND kind='permission_request' AND to_handle IN (?, '@team')
+        AND (from_wg IS NULL OR from_wg IN (SELECT value FROM json_each(?)))
       ORDER BY id DESC LIMIT 50
-    `).all(team, me) as RequestRow[]
+    `).all(team, me, JSON.stringify(c.get('grant').visible)) as RequestRow[]
 
     const want = parsed.data.request_id.toLowerCase()
     const req = rows
@@ -53,14 +54,15 @@ export function permissionRoute(deps: Deps) {
     }
     if (parsed.data.reason !== undefined) meta.reason = parsed.data.reason
 
+    const route = { from_wg: c.get('grant').workgroup, scope: c.get('grant').visible }
     const verdict = deps.store.insert(team, me, {
       to: req.from_handle,
       kind: 'permission_verdict',
       content: '',
       in_reply_to: req.id as MessageId,
       meta,
-    })
-    deps.fanout.deliver(verdict)
+    }, null, route)
+    deps.fanout.deliver(verdict, route)
     const nowIso = deps.now().toISOString()
     deps.db.prepare("UPDATE message SET delivered_at=COALESCE(delivered_at,?) WHERE id=?")
       .run(nowIso, verdict.id)

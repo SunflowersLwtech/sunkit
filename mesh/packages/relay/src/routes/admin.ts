@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { ulid } from 'ulid'
-import { HANDLE_REGEX, PAIR_CODE_TTL_MS } from '@claude-mesh/shared'
+import { HANDLE_REGEX, MachineNameSchema, PAIR_CODE_TTL_MS, RoleSchema, WorkgroupSchema } from '@claude-mesh/shared'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import { generatePairCode } from '../auth/pair-code.ts'
 import { hashToken } from '../auth/hash.ts'
 import { purgeInactive } from '../purge.ts'
+import { grantFromRow, setGrant, type GrantRow } from '../grants.ts'
+import { audit } from '../audit.ts'
 import type { Deps } from '../deps.ts'
 
 const CreateUserBody = z.object({
@@ -16,6 +18,17 @@ const CreateUserBody = z.object({
   // revoked, pending paircodes invalidated, disabled_at cleared, display_name
   // updated, and a fresh paircode minted. Old paired devices stop working.
   force: z.boolean().default(false),
+})
+
+const GrantBody = z.object({
+  role: RoleSchema,
+  workgroup: WorkgroupSchema,
+  visible: z.array(WorkgroupSchema).max(16).default([]),
+  machine: MachineNameSchema.nullable().optional(),
+}).strict().superRefine((g, ctx) => {
+  // An executor reports for exactly one machine; nobody else is bound to one.
+  if (g.role === 'executor' && !g.machine) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['machine'], message: 'executor needs machine' })
+  if (g.role !== 'executor' && g.machine) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['machine'], message: 'only executors have a machine' })
 })
 
 interface AuditRow {
@@ -121,6 +134,7 @@ export function adminRoute(deps: Deps) {
         deps.db.prepare(
           "INSERT INTO audit_log(team_id,at,actor_human_id,event,detail_json) VALUES (?,?,?,?,?)"
         ).run(team, now, c.get('human').id, 'user.delete', JSON.stringify({ handle, hard: true }))
+        deps.db.prepare("DELETE FROM token_grant WHERE token_id IN (SELECT id FROM token WHERE human_id=?)").run(row.id)
         deps.db.prepare("DELETE FROM token WHERE human_id=?").run(row.id)
         deps.db.prepare("DELETE FROM pair_code WHERE human_id=?").run(row.id)
         deps.db.prepare("DELETE FROM human WHERE id=?").run(row.id)
@@ -155,11 +169,35 @@ export function adminRoute(deps: Deps) {
   app.get('/tokens', c => {
     const team = c.get('team_id')
     const rows = deps.db.prepare(`
-      SELECT t.id, t.label, t.tier, t.created_at, t.revoked_at, h.handle
+      SELECT t.id, t.label, t.tier, t.created_at, t.revoked_at, h.handle,
+             g.role, g.workgroup, g.visible_json, g.machine
       FROM token t JOIN human h ON h.id = t.human_id
+      LEFT JOIN token_grant g ON g.token_id = t.id
       WHERE h.team_id=? ORDER BY t.created_at DESC
-    `).all(team)
-    return c.json(rows)
+    `).all(team) as Array<GrantRow & { id: string; label: string; tier: string; created_at: string; revoked_at: string | null; handle: string }>
+    return c.json(rows.map(({ role, workgroup, visible_json, machine, ...t }) => {
+      const g = grantFromRow(role === null ? undefined : { role, workgroup, visible_json, machine })
+      return { ...t, role: g.role, workgroup: g.workgroup, visible: g.visible, machine: g.machine, granted: role !== null }
+    }))
+  })
+
+  app.put('/tokens/:id/grant', async c => {
+    const parsed = GrantBody.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400)
+    const team = c.get('team_id')
+    const id = c.req.param('id')
+    const tok = deps.db.prepare(`
+      SELECT t.id FROM token t JOIN human h ON h.id = t.human_id
+      WHERE t.id=? AND h.team_id=? AND t.revoked_at IS NULL
+    `).get(id, team) as { id: string } | undefined
+    if (!tok) return c.json({ error: 'not_found' }, 404)
+    const now = deps.now().toISOString()
+    const g = setGrant(deps.db, id, {
+      role: parsed.data.role, workgroup: parsed.data.workgroup, visible: parsed.data.visible, machine: parsed.data.machine ?? null,
+    }, now)
+    const live = deps.sessions?.applyGrant(id, g) ?? 0
+    audit(deps.db, team, c.get('human').id, 'token.grant', { token_id: id, role: g.role, workgroup: g.workgroup, visible: g.visible, machine: g.machine, live_sessions: live }, now)
+    return c.json({ token_id: id, ...g, live_sessions: live })
   })
 
   app.delete('/tokens/:id', c => {

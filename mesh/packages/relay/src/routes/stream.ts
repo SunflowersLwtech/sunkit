@@ -4,7 +4,11 @@ import { isValidMessageId, SessionIdSchema, SessionNameSchema, LoginSchema, type
 import { SessionOwnershipError, type SessionMode, type SessionStatus } from '../sessions/registry.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
-import type { Subscriber } from '../fanout.ts'
+import type { Subscriber, Viewer } from '../fanout.ts'
+import { readGrant } from '../grants.ts'
+
+/** How long a live stream trusts the grant it last read; a changed grant applies within this. */
+const GRANT_REFRESH_MS = 5_000
 
 const PING_INTERVAL_MS = 25_000
 
@@ -29,6 +33,7 @@ export function streamRoute(deps: Deps) {
       const status: SessionStatus | undefined =
         statusQ === 'busy' || statusQ === 'idle' ? statusQ : undefined
       const mode: SessionMode = c.req.query('mode') === 'pull' ? 'pull' : 'push'
+      const grant = c.get('grant')
       try {
         deps.sessions!.attach({
           session_id: sid.data,
@@ -41,6 +46,9 @@ export function streamRoute(deps: Deps) {
           login: LoginSchema.safeParse(c.req.query('login')).data,
           status,
           mode,
+          workgroup: grant.workgroup,
+          visible: grant.visible,
+          role: grant.role,
         })
       } catch (err) {
         if (err instanceof SessionOwnershipError) return c.json({ error: 'session_owned_elsewhere' }, 409)
@@ -52,25 +60,44 @@ export function streamRoute(deps: Deps) {
     return streamSSE(c, async stream => {
       const team_id = c.get('team_id')
       const handle = c.get('human').handle
+      const tokenId = c.get('token').id
+      let grant = c.get('grant')
+      let grantAt = deps.now().getTime()
+      const current = () => {
+        const t = deps.now().getTime()
+        if (t - grantAt > GRANT_REFRESH_MS) { grant = readGrant(deps.db, tokenId); grantAt = t }
+        return grant
+      }
+      // Read live: a session may move into another granted workgroup, and an admin may change the grant.
+      const viewer = (): Viewer => {
+        const g = current()
+        return { workgroup: (session ? deps.sessions!.get(session)?.workgroup : undefined) ?? g.workgroup, visible: g.visible }
+      }
 
       const backlog = since
-        ? deps.store.fetchSince(team_id, handle, since, session)
-        : deps.store.fetchPendingFor(team_id, handle, session)
+        ? deps.store.fetchSince(team_id, handle, since, session, viewer())
+        : deps.store.fetchPendingFor(team_id, handle, session, viewer())
       for (const e of backlog) {
         await stream.writeSSE({ event: 'message', data: JSON.stringify(e) })
         deps.store.markDelivered(e.id)
       }
 
-      const queue: string[] = []
+      // Messages are acked (marked delivered) once written; ledger events are fire-and-forget.
+      const queue: Array<{ event: string; data: string; id?: string }> = []
       let notify: (() => void) | null = null
       const sub: Subscriber = {
         handle,
         team_id,
         ...(session ? { session } : {}),
+        viewer,
         deliver: (e: Envelope) => {
-          queue.push(JSON.stringify(e))
+          queue.push({ event: 'message', data: JSON.stringify(e), id: e.id })
           notify?.()
-        }
+        },
+        deliverEvent: (event: string, data: string) => {
+          queue.push({ event, data })
+          notify?.()
+        },
       }
       deps.fanout.subscribe(sub)
 
@@ -96,10 +123,9 @@ export function streamRoute(deps: Deps) {
             })
             continue
           }
-          const payload = queue.shift()!
-          await stream.writeSSE({ event: 'message', data: payload })
-          const parsed = JSON.parse(payload) as Envelope
-          deps.store.markDelivered(parsed.id)
+          const item = queue.shift()!
+          await stream.writeSSE({ event: item.event, data: item.data })
+          if (item.id) deps.store.markDelivered(item.id)
         }
       } finally {
         cleanup()
