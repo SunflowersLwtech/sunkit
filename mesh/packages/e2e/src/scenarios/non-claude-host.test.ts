@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -329,6 +329,32 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(await new Promise<string>(res => { let o = ''; deep.stdout!.on('data', d => { o += d }); deep.on('exit', () => res(o)) })).toBe('{}\n')
     await row('busy')
     expect(readFileSync(join(meshHome, 'hooks', 'devin-deep-session.pid'), 'utf8')).toBe(String(process.pid))
+  })
+
+  it.skipIf(process.platform === 'win32')('a peer under Devin CLI\'s agent process joins for an interactive devin and only sends for devin -p', async () => {
+    // The real process tree: `devin [-p …]` starts `devin acp`, which starts the MCP server. Here
+    // `devin` is a link to node, the front end is a script that starts `devin acp`, and `acp` a
+    // script that starts the peer; ps shows the same command lines as for the real Devin CLI.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'devin-tree-')))
+    symlinkSync(process.execPath, join(dir, 'devin'))
+    writeFileSync(join(dir, 'front.js'), "require('child_process').spawn('devin', ['acp'], { cwd: __dirname, stdio: 'inherit' }).on('exit', c => process.exit(c ?? 0))\n")
+    writeFileSync(join(dir, 'acp'), "const c = require('child_process').spawn(process.execPath, [process.env.PEER], { stdio: ['pipe', 'inherit', 'inherit'] }); setTimeout(() => c.kill(), 8000); c.on('exit', () => process.exit(0))\n")
+    const startup = async (front: string[]) => {
+      const p = spawn('devin', front, {
+        cwd: dir,
+        env: { ...childEnv(join(h.humans.alice!.configDir, '.claude-mesh'), { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'devin-tree', PEER }), PATH: `${dir}:${process.env.PATH}` },
+        stdio: ['ignore', 'ignore', 'pipe'],
+        detached: true,
+      })
+      let err = ''
+      p.stderr.on('data', d => { err += d })
+      try {
+        const line = await until(async () => err.split('\n').find(l => l.includes('"peer.startup"')), 'peer.startup')
+        return JSON.parse(line) as { mode: string; reason: string }
+      } finally { try { process.kill(-p.pid!, 'SIGTERM') } catch { /* gone */ } }
+    }
+    expect((await startup(['front.js', '-p', 'Reply', 'with', 'OK'])).mode).toBe('send')
+    expect((await startup(['front.js', '--permission-mode', 'dangerous'])).mode).toBe('pull')
   })
 
   it('mesh say --as sends one message under that name, with --reply-to', async () => {
