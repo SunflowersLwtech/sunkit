@@ -2022,9 +2022,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve3, reject) => {
+          return new Promise((resolve2, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve3(data);
+              return err ? reject(err) : resolve2(data);
             });
           });
         }
@@ -2062,12 +2062,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve3, reject) => {
+          return new Promise((resolve2, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve3(data);
+              ) : resolve2(data);
             });
           });
         }
@@ -4334,8 +4334,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve3, reject) => {
-        res = resolve3;
+      const promise = new Promise((resolve2, reject) => {
+        res = resolve2;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -6476,12 +6476,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve3, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve3;
+          callback = resolve2;
         }
       });
       socket.on("close", onDrain).on("drain", onDrain);
@@ -7118,12 +7118,12 @@ var require_client_h2 = __commonJS({
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve3, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve3;
+          callback = resolve2;
         }
       });
       h2stream.on("close", onDrain).on("drain", onDrain);
@@ -7601,16 +7601,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve3) => {
+        return new Promise((resolve2) => {
           if (this[kSize]) {
-            this[kClosedResolve] = resolve3;
+            this[kClosedResolve] = resolve2;
           } else {
-            resolve3(null);
+            resolve2(null);
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve3) => {
+        return new Promise((resolve2) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -7621,7 +7621,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve3(null);
+            resolve2(null);
           };
           if (this[kHTTPContext]) {
             this[kHTTPContext].destroy(err, callback);
@@ -7672,7 +7672,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve3, reject) => {
+        const socket = await new Promise((resolve2, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -7684,7 +7684,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve3(socket2);
+              resolve2(socket2);
             }
           });
         });
@@ -8020,8 +8020,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           await Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          await new Promise((resolve3) => {
-            this[kClosedResolve] = resolve3;
+          await new Promise((resolve2) => {
+            this[kClosedResolve] = resolve2;
           });
         }
       }
@@ -9236,7 +9236,7 @@ var require_readable = __commonJS({
         if (this._readableState.closeEmitted) {
           return null;
         }
-        return await new Promise((resolve3, reject) => {
+        return await new Promise((resolve2, reject) => {
           if (this[kContentLength] > limit) {
             this.destroy(new AbortError());
           }
@@ -9249,7 +9249,7 @@ var require_readable = __commonJS({
             if (signal?.aborted) {
               reject(signal.reason ?? new AbortError());
             } else {
-              resolve3(null);
+              resolve2(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -9268,7 +9268,7 @@ var require_readable = __commonJS({
     }
     async function consume(stream, type) {
       assert(!stream[kConsume]);
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve2, reject) => {
         if (isUnusable(stream)) {
           const rState = stream._readableState;
           if (rState.destroyed && rState.closeEmitted === false) {
@@ -9285,7 +9285,7 @@ var require_readable = __commonJS({
             stream[kConsume] = {
               type,
               stream,
-              resolve: resolve3,
+              resolve: resolve2,
               reject,
               length: 0,
               body: []
@@ -9355,18 +9355,18 @@ var require_readable = __commonJS({
       return buffer;
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve3, stream, length } = consume2;
+      const { type, body, resolve: resolve2, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve3(chunksDecode(body, length));
+          resolve2(chunksDecode(body, length));
         } else if (type === "json") {
-          resolve3(JSON.parse(chunksDecode(body, length)));
+          resolve2(JSON.parse(chunksDecode(body, length)));
         } else if (type === "arrayBuffer") {
-          resolve3(chunksConcat(body, length).buffer);
+          resolve2(chunksConcat(body, length).buffer);
         } else if (type === "blob") {
-          resolve3(new Blob(body, { type: stream[kContentType] }));
+          resolve2(new Blob(body, { type: stream[kContentType] }));
         } else if (type === "bytes") {
-          resolve3(chunksConcat(body, length));
+          resolve2(chunksConcat(body, length));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -9623,9 +9623,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve2, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve3(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -9848,9 +9848,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve2, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve3(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10135,9 +10135,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve2, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve3(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10229,9 +10229,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve2, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve3(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -14093,7 +14093,7 @@ var require_fetch = __commonJS({
       function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve3, reject) => agent.dispatch(
+        return new Promise((resolve2, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -14169,7 +14169,7 @@ var require_fetch = __commonJS({
                 }
               }
               const onError = this.onError.bind(this);
-              resolve3({
+              resolve2({
                 status,
                 statusText,
                 headersList,
@@ -14215,7 +14215,7 @@ var require_fetch = __commonJS({
               for (let i = 0; i < rawHeaders.length; i += 2) {
                 headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString("latin1"), true);
               }
-              resolve3({
+              resolve2({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList,
@@ -17891,8 +17891,8 @@ var require_util8 = __commonJS({
       return true;
     }
     function delay(ms) {
-      return new Promise((resolve3) => {
-        setTimeout(resolve3, ms).unref();
+      return new Promise((resolve2) => {
+        setTimeout(resolve2, ms).unref();
       });
     }
     module.exports = {
@@ -18574,25 +18574,14 @@ var require_undici = __commonJS({
 
 // packages/peer-agent/src/meshd/main.ts
 import { execFile } from "node:child_process";
-import { existsSync as existsSync3, realpathSync } from "node:fs";
+import { existsSync as existsSync2, realpathSync } from "node:fs";
 import { cpus, freemem, homedir as homedir2, loadavg, platform, totalmem } from "node:os";
-import { delimiter, join as join3 } from "node:path";
+import { delimiter, dirname as dirname2, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// packages/shared/dist/constants.js
-var PROTOCOL_VERSION = 1;
-var MAX_CONTENT_BYTES = 65536;
-var MAX_META_KEY_LENGTH = 64;
-var MAX_META_VALUE_LENGTH = 2048;
-var PERMISSION_REQUEST_TTL_MS = 5 * 60 * 1e3;
-var PAIR_CODE_TTL_MS = 24 * 60 * 60 * 1e3;
-var TEAM_BROADCAST_HANDLE = "@team";
-var HANDLE_REGEX = /^[a-z][a-z0-9_-]{0,31}$/;
-var META_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-// packages/shared/dist/ulid.js
-var import_ulid = __toESM(require_index_umd(), 1);
-var monotonicUlid = (0, import_ulid.monotonicFactory)();
+// packages/peer-agent/src/config.ts
+import { readFileSync as readFileSync2, existsSync, statSync } from "node:fs";
+import { dirname, join as join2, resolve } from "node:path";
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -22635,6 +22624,106 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// packages/peer-agent/src/cli/token-file.ts
+import { readFileSync } from "node:fs";
+function readTokenFile(path) {
+  const buf = readFileSync(path);
+  let text;
+  if (buf.length >= 2 && buf[0] === 255 && buf[1] === 254) {
+    text = buf.subarray(2).toString("utf16le");
+  } else if (buf.length >= 2 && buf[0] === 254 && buf[1] === 255) {
+    text = buf.subarray(2).swap16().toString("utf16le");
+  } else if (buf.length >= 3 && buf[0] === 239 && buf[1] === 187 && buf[2] === 191) {
+    text = buf.subarray(3).toString("utf8");
+  } else {
+    text = buf.toString("utf8");
+  }
+  const trimmed = text.trim();
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
+    throw new Error(
+      `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
+    );
+  }
+  return trimmed;
+}
+
+// packages/peer-agent/src/paths.ts
+import { join } from "node:path";
+import { homedir } from "node:os";
+function meshDir() {
+  return process.env.MESH_HOME ?? join(homedir(), ".claude-mesh");
+}
+
+// packages/peer-agent/src/config.ts
+var ConfigSchema = external_exports.object({
+  relay_url: external_exports.string().url(),
+  token_path: external_exports.string(),
+  self_handle: external_exports.string().optional(),
+  admin_token_path: external_exports.string().optional(),
+  permission_relay: external_exports.object({
+    enabled: external_exports.boolean().default(false),
+    routing: external_exports.enum(["never_relay", "ask_thread_participants", "ask_team"]).or(external_exports.string().startsWith("ask_specific_peer:")).default("never_relay")
+  }).default({ enabled: false, routing: "never_relay" }),
+  presence: external_exports.object({
+    auto_publish_cwd: external_exports.boolean().default(true),
+    auto_publish_branch: external_exports.boolean().default(true),
+    auto_publish_repo: external_exports.boolean().default(true)
+  }).default({ auto_publish_cwd: true, auto_publish_branch: true, auto_publish_repo: true }),
+  audit_log: external_exports.string().default(() => join2(meshDir(), "audit"))
+});
+function defaultConfigPath() {
+  return join2(meshDir(), "config.json");
+}
+function loadConfig(path = defaultConfigPath()) {
+  if (!existsSync(path)) throw new Error(`config file not found: ${path}`);
+  const raw = JSON.parse(readFileSync2(path, "utf8"));
+  return ConfigSchema.parse(raw);
+}
+function loadToken(path) {
+  if (!existsSync(path)) throw new Error(`token file not found: ${path}`);
+  return readTokenFile(path);
+}
+function isInsideGitRepoWithRemote(start) {
+  let dir = resolve(start);
+  while (true) {
+    const gitDir = join2(dir, ".git");
+    if (existsSync(gitDir) && statSync(gitDir).isDirectory()) {
+      const cfg = join2(gitDir, "config");
+      if (existsSync(cfg)) {
+        const text = readFileSync2(cfg, "utf8");
+        if (/\[remote\s+"[^"]+"\][^\[]*\burl\s*=\s*\S+/s.test(text)) return true;
+      }
+      return false;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+function assertTokenNotInRepo(tokenPath) {
+  const dir = dirname(resolve(tokenPath));
+  if (isInsideGitRepoWithRemote(dir)) {
+    throw new Error(
+      `refusing to start: token file "${tokenPath}" is inside a git worktree with a remote. Move it out of the tree or remove the remote.`
+    );
+  }
+}
+
+// packages/shared/dist/constants.js
+var PROTOCOL_VERSION = 1;
+var MAX_CONTENT_BYTES = 65536;
+var MAX_META_KEY_LENGTH = 64;
+var MAX_META_VALUE_LENGTH = 2048;
+var PERMISSION_REQUEST_TTL_MS = 5 * 60 * 1e3;
+var PAIR_CODE_TTL_MS = 24 * 60 * 60 * 1e3;
+var TEAM_BROADCAST_HANDLE = "@team";
+var HANDLE_REGEX = /^[a-z][a-z0-9_-]{0,31}$/;
+var META_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+// packages/shared/dist/ulid.js
+var import_ulid = __toESM(require_index_umd(), 1);
+var monotonicUlid = (0, import_ulid.monotonicFactory)();
+
 // packages/shared/dist/envelope.js
 var AddressSchema = external_exports.union([
   external_exports.string().regex(HANDLE_REGEX, "handle"),
@@ -22688,21 +22777,6 @@ var OutboundMessageSchema = external_exports.object({
   in_reply_to: MessageIdSchema.nullable().optional(),
   to_session: SessionIdSchema.optional()
 }).strict();
-
-// packages/shared/dist/env-loader.js
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-function loadEnvFiles(cwd = process.cwd()) {
-  const loaded = [];
-  for (const name of [".env.local", ".env"]) {
-    const path = resolve(cwd, name);
-    if (existsSync(path)) {
-      process.loadEnvFile(path);
-      loaded.push(path);
-    }
-  }
-  return loaded;
-}
 
 // packages/shared/dist/ledger.js
 var import_ulid2 = __toESM(require_index_umd(), 1);
@@ -22871,95 +22945,6 @@ var LeaseAcquireSchema = external_exports.object({
   task_id: TaskIdSchema.optional()
 }).strict();
 
-// packages/peer-agent/src/config.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2, statSync } from "node:fs";
-import { dirname, join as join2, resolve as resolve2 } from "node:path";
-
-// packages/peer-agent/src/cli/token-file.ts
-import { readFileSync } from "node:fs";
-function readTokenFile(path) {
-  const buf = readFileSync(path);
-  let text;
-  if (buf.length >= 2 && buf[0] === 255 && buf[1] === 254) {
-    text = buf.subarray(2).toString("utf16le");
-  } else if (buf.length >= 2 && buf[0] === 254 && buf[1] === 255) {
-    text = buf.subarray(2).swap16().toString("utf16le");
-  } else if (buf.length >= 3 && buf[0] === 239 && buf[1] === 187 && buf[2] === 191) {
-    text = buf.subarray(3).toString("utf8");
-  } else {
-    text = buf.toString("utf8");
-  }
-  const trimmed = text.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
-    throw new Error(
-      `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
-    );
-  }
-  return trimmed;
-}
-
-// packages/peer-agent/src/paths.ts
-import { join } from "node:path";
-import { homedir } from "node:os";
-function meshDir() {
-  return process.env.MESH_HOME ?? join(homedir(), ".claude-mesh");
-}
-
-// packages/peer-agent/src/config.ts
-var ConfigSchema = external_exports.object({
-  relay_url: external_exports.string().url(),
-  token_path: external_exports.string(),
-  self_handle: external_exports.string().optional(),
-  admin_token_path: external_exports.string().optional(),
-  permission_relay: external_exports.object({
-    enabled: external_exports.boolean().default(false),
-    routing: external_exports.enum(["never_relay", "ask_thread_participants", "ask_team"]).or(external_exports.string().startsWith("ask_specific_peer:")).default("never_relay")
-  }).default({ enabled: false, routing: "never_relay" }),
-  presence: external_exports.object({
-    auto_publish_cwd: external_exports.boolean().default(true),
-    auto_publish_branch: external_exports.boolean().default(true),
-    auto_publish_repo: external_exports.boolean().default(true)
-  }).default({ auto_publish_cwd: true, auto_publish_branch: true, auto_publish_repo: true }),
-  audit_log: external_exports.string().default(() => join2(meshDir(), "audit"))
-});
-function defaultConfigPath() {
-  return join2(meshDir(), "config.json");
-}
-function loadConfig(path = defaultConfigPath()) {
-  if (!existsSync2(path)) throw new Error(`config file not found: ${path}`);
-  const raw = JSON.parse(readFileSync2(path, "utf8"));
-  return ConfigSchema.parse(raw);
-}
-function loadToken(path) {
-  if (!existsSync2(path)) throw new Error(`token file not found: ${path}`);
-  return readTokenFile(path);
-}
-function isInsideGitRepoWithRemote(start) {
-  let dir = resolve2(start);
-  while (true) {
-    const gitDir = join2(dir, ".git");
-    if (existsSync2(gitDir) && statSync(gitDir).isDirectory()) {
-      const cfg = join2(gitDir, "config");
-      if (existsSync2(cfg)) {
-        const text = readFileSync2(cfg, "utf8");
-        if (/\[remote\s+"[^"]+"\][^\[]*\burl\s*=\s*\S+/s.test(text)) return true;
-      }
-      return false;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return false;
-    dir = parent;
-  }
-}
-function assertTokenNotInRepo(tokenPath) {
-  const dir = dirname(resolve2(tokenPath));
-  if (isInsideGitRepoWithRemote(dir)) {
-    throw new Error(
-      `refusing to start: token file "${tokenPath}" is inside a git worktree with a remote. Move it out of the tree or remove the remote.`
-    );
-  }
-}
-
 // packages/peer-agent/src/stream.ts
 var import_undici = __toESM(require_undici(), 1);
 function parseSseEvent(block) {
@@ -23048,6 +23033,34 @@ function buildReport(i) {
     roots: i.roots.slice(0, 8)
   };
 }
+var LISTS = ["agents", "seats", "kinds", "roots"];
+var OPTIONAL = ["max_active"];
+function fitReport(report) {
+  let r = { ...report };
+  const dropped = [];
+  for (let round = 0; round < 5; round++) {
+    const parsed = MachineReportSchema.safeParse(r);
+    if (parsed.success) return { report: parsed.data, dropped };
+    const remove = /* @__PURE__ */ new Map();
+    for (const issue of parsed.error.issues) {
+      const [top, idx] = issue.path;
+      if (typeof top === "string" && LISTS.includes(top) && typeof idx === "number") {
+        if (!remove.has(top)) remove.set(top, /* @__PURE__ */ new Set());
+        remove.get(top).add(idx);
+      } else if (typeof top === "string" && OPTIONAL.includes(top)) {
+        delete r[top];
+        dropped.push(top);
+      } else {
+        return null;
+      }
+    }
+    for (const [top, idxs] of remove) {
+      r = { ...r, [top]: r[top].filter((_, i) => !idxs.has(i)) };
+      dropped.push(`${top}[${[...idxs].join(",")}]`);
+    }
+  }
+  return null;
+}
 
 // packages/peer-agent/src/meshd/daemon.ts
 var MESHD_VERSION = "0.1.0";
@@ -23075,13 +23088,14 @@ var Meshd = class {
   }
   async detectKinds() {
     if (this.kinds && this.now() - this.kinds.at < KINDS_EVERY_MS) return this.kinds.value;
+    const runs = await Promise.all(KINDS.map((kind) => this.o.run(kind, ["--version"], 1e4)));
     const value = [];
-    for (const kind of KINDS) {
-      const r = await this.o.run(kind, ["--version"], 1e4);
-      if (!r.ok) continue;
+    KINDS.forEach((kind, i) => {
+      const r = runs[i];
+      if (!r.ok) return;
       const version = cleanVersion(r.stdout);
       value.push(version ? { kind, version } : { kind });
-    }
+    });
     this.kinds = { at: this.now(), value };
     return value;
   }
@@ -23100,9 +23114,11 @@ var Meshd = class {
     return value;
   }
   async collect() {
-    const [list, ver] = await Promise.all([
+    const [list, ver, kinds, seats] = await Promise.all([
       this.o.run(this.o.herdrBin, ["agent", "list"], 15e3),
-      this.o.run(this.o.herdrBin, ["--version"], 1e4)
+      this.o.run(this.o.herdrBin, ["--version"], 1e4),
+      this.detectKinds(),
+      this.readSeats()
     ]);
     let agents = [];
     let herdr = { ok: list.ok };
@@ -23122,8 +23138,8 @@ var Meshd = class {
       version: MESHD_VERSION,
       herdr,
       agents,
-      kinds: await this.detectKinds(),
-      seats: await this.readSeats(),
+      kinds,
+      seats,
       load1: load.load1,
       cpus: load.cpus,
       ...load.memUsedPct !== void 0 ? { memUsedPct: load.memUsedPct } : {},
@@ -23142,9 +23158,21 @@ var Meshd = class {
     }
     return this.post(body);
   }
-  async post(body) {
+  async post(body, retryOn429 = false) {
+    const fit = fitReport(body);
+    if (!fit) {
+      this.o.log("error", "meshd.report_unfit");
+      return 0;
+    }
+    if (fit.dropped.length) this.o.log("warn", "meshd.report_trimmed", { dropped: fit.dropped.join(" ") });
     try {
-      const res = await this.o.fetch(new URL("/v1/machines/self", this.o.relayUrl), { method: "POST", headers: this.headers(true), body: JSON.stringify(body) });
+      const res = await this.o.fetch(new URL("/v1/machines/self", this.o.relayUrl), { method: "POST", headers: this.headers(true), body: JSON.stringify(fit.report) });
+      if (res.status === 429 && retryOn429) {
+        const wait = Math.min(10, Number(res.headers.get("retry-after")) || 3);
+        await res.text().catch(() => "");
+        await this.sleep(wait * 1e3);
+        return this.post(body, false);
+      }
       if (res.status !== 200) this.o.log("warn", "meshd.report_rejected", { status: res.status, body: (await res.text()).slice(0, 200) });
       return res.status;
     } catch (err) {
@@ -23160,7 +23188,7 @@ var Meshd = class {
     if (cmd.op === "probe") {
       const r2 = await this.collect().catch(() => null);
       if (!r2) return { ok: false, error: "collect failed" };
-      const status = await this.post(r2);
+      const status = await this.post(r2, true);
       return status === 200 ? { ok: true, output: JSON.stringify({ herdr: r2.herdr.ok, agents: r2.agents.length, active: r2.active, blocked: r2.blocked }) } : { ok: false, error: `report ${status}` };
     }
     const pane = HerdrPaneIdSchema.parse(cmd.args.pane);
@@ -23211,7 +23239,7 @@ var Meshd = class {
           continue;
         }
         if (res.status !== 200 || !res.body) throw new Error(`stream http ${res.status}`);
-        attempt = 0;
+        const openedAt = this.now();
         this.o.log("info", "meshd.stream.open");
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -23224,9 +23252,11 @@ var Meshd = class {
           buf = parts.pop() ?? "";
           for (const block of parts) {
             const ev = parseSseEvent(block);
+            if (ev) attempt = 0;
             if (ev?.event === "command") void this.onCommand(ev.data);
           }
         }
+        if (this.now() - openedAt >= 1e4) attempt = 0;
       } catch (err) {
         if (this.stopped) break;
         this.o.log("warn", "meshd.stream.disconnect", { err: String(err instanceof Error ? err.message : err) });
@@ -23257,16 +23287,15 @@ var log = (level, event, fields = {}) => {
 function searchPath() {
   const home = homedir2();
   const extra = [join3(home, ".local/bin"), join3(home, ".bun/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-  return [...(process.env.PATH ?? "").split(delimiter).filter(Boolean), ...extra].join(delimiter);
+  return [dirname2(process.execPath), ...(process.env.PATH ?? "").split(delimiter).filter(Boolean), ...extra].join(delimiter);
 }
-var run = (file, args, timeoutMs) => new Promise((resolve3) => {
+var run = (file, args, timeoutMs) => new Promise((resolve2) => {
   execFile(file, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, PATH: searchPath() } }, (err, stdout, stderr) => {
-    if (err) resolve3({ ok: false, stdout: String(stdout ?? ""), error: (String(stderr ?? "").trim() || err.message).slice(0, 500) });
-    else resolve3({ ok: true, stdout: String(stdout) });
+    if (err) resolve2({ ok: false, stdout: String(stdout ?? ""), error: (String(stderr ?? "").trim() || err.message).slice(0, 500) });
+    else resolve2({ ok: true, stdout: String(stdout) });
   });
 });
 async function main() {
-  loadEnvFiles();
   if (!process.env.MESH_HOME) {
     log("error", "meshd.no_mesh_home", { hint: "set MESH_HOME to the directory holding this machine's executor token (not ~/.claude-mesh)" });
     process.exit(2);
@@ -23282,11 +23311,11 @@ async function main() {
     relayUrl: cfg.relay_url,
     token,
     herdrBin: process.env.HERDR_BIN ?? "herdr",
-    ccQuota: existsSync3(ccQuota) ? ccQuota : null,
+    ccQuota: existsSync2(ccQuota) ? ccQuota : null,
     // On a Mac a LaunchAgent already refreshes cc-quota's cache every 5 minutes; read that instead of calling again.
     ccQuotaArgs: platform() === "darwin" ? ["--json", "--cache-only"] : ["--json"],
-    ...Number.isInteger(maxActive) && maxActive > 0 ? { maxActive } : {},
-    roots: roots.map((p) => ({ path: p, exists: () => existsSync3(join3(home, p.slice(2))) })),
+    ...Number.isInteger(maxActive) && maxActive > 0 && maxActive <= 1e3 ? { maxActive } : {},
+    roots: roots.map((p) => ({ path: p, exists: () => existsSync2(join3(home, p.slice(2))) })),
     load: () => ({ load1: loadavg()[0] ?? 0, cpus: cpus().length || 1, memUsedPct: (1 - freemem() / totalmem()) * 100 }),
     run,
     fetch: globalThis.fetch,

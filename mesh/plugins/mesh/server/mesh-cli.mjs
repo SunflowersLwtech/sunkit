@@ -5935,10 +5935,14 @@ __export(ledger_exports, {
   LedgerError: () => LedgerError,
   MACHINE_USAGE: () => MACHINE_USAGE,
   TASK_USAGE: () => TASK_USAGE,
+  clean: () => clean,
   runLease: () => runLease,
   runMachine: () => runMachine,
   runTask: () => runTask
 });
+function clean(text, block = false) {
+  return block ? text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "?") : text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+}
 function parseJson(text) {
   if (!text) return void 0;
   try {
@@ -6000,6 +6004,14 @@ function splitGlobals(args) {
       session = args[++i];
       continue;
     }
+    if (a.startsWith("--relay=")) {
+      relay = a.slice("--relay=".length);
+      continue;
+    }
+    if (a.startsWith("--session=")) {
+      session = a.slice("--session=".length);
+      continue;
+    }
     rest.push(a);
   }
   return { rest, ...relay !== void 0 ? { relay } : {}, ...session !== void 0 ? { session } : {} };
@@ -6031,7 +6043,7 @@ function makeCtx(globals, deps) {
 function machineLine(m) {
   const r = m.report;
   const seats = r.seats.map((s) => s.five_hour_pct === void 0 ? s.email : `${s.email} ${s.five_hour_pct}%`).join(" ");
-  return [
+  return clean([
     m.machine,
     m.stale ? "stale" : "ok",
     m.connected ? "connected" : "offline",
@@ -6040,16 +6052,16 @@ function machineLine(m) {
     `active ${r.active}/${r.max_active ?? "?"}`,
     `seats ${seats || "none"}`,
     `agents ${r.agents.length}`
-  ].join("  ");
+  ].join("  "));
 }
 function taskLine(t) {
   const name = t.assignee.name ?? "-";
   const machine = t.assignee.machine ?? "-";
-  return `${t.id}  ${t.state}${t.stale ? " stale" : ""}  ${name}@${machine}  ${t.title}`;
+  return clean(`${t.id}  ${t.state}${t.stale ? " stale" : ""}  ${name}@${machine}  ${t.title}`);
 }
 function leaseLine(l) {
   const holder = l.holder ? `${l.holder.name ?? "-"}@${l.holder.machine ?? "-"}` : "(hidden)";
-  return `${l.name}  ${holder}  ${l.ttl_remaining_s}s left  ${l.id}`;
+  return clean(`${l.name}  ${holder}  ${l.ttl_remaining_s}s left  ${l.id}`);
 }
 async function awaitCommand(cmd, ctx) {
   let current = cmd;
@@ -6059,11 +6071,11 @@ async function awaitCommand(cmd, ctx) {
     current = await ctx.client().getCommand(current.id);
   }
   if (current.state === "done") {
-    ctx.out(current.result?.output ?? "");
+    ctx.out(clean(current.result?.output ?? "", true));
     return 0;
   }
   if (current.state === "failed") {
-    ctx.err(`failed: ${current.reason ?? current.result?.error ?? "unknown error"}`);
+    ctx.err(clean(`failed: ${current.reason ?? current.result?.error ?? "unknown error"}`));
     return 1;
   }
   ctx.err(`command ${current.id} did not finish (state ${current.state})`);
@@ -6141,7 +6153,7 @@ async function runTask(args, deps = {}) {
       }
       for (const t of body.tasks) {
         ctx.out(taskLine(t));
-        if (t.progress) ctx.out(`  ${t.progress}`);
+        if (t.progress) ctx.out(`  ${clean(t.progress)}`);
       }
       return 0;
     }
@@ -6260,7 +6272,7 @@ async function runLease(args, deps = {}) {
       } catch (err) {
         if (err instanceof LedgerError && err.status === 409) {
           const message = err.body && typeof err.body === "object" && typeof err.body.message === "string" ? err.body.message : void 0;
-          ctx.err(message ?? err.message);
+          ctx.err(clean(message ?? err.message));
           return 1;
         }
         throw err;
@@ -6296,11 +6308,12 @@ async function runLease(args, deps = {}) {
     return 1;
   }
 }
-var MACHINE_USAGE, TASK_USAGE, LEASE_USAGE, LedgerError, LedgerClient, POLL_INTERVAL_MS, MAX_POLLS;
+var MACHINE_USAGE, TASK_USAGE, LEASE_USAGE, LedgerError, SESSION_ID, LedgerClient, POLL_INTERVAL_MS, MAX_POLLS;
 var init_ledger = __esm({
   "packages/peer-agent/src/cli/ledger.ts"() {
     "use strict";
     init_config();
+    init_resolve_target();
     MACHINE_USAGE = "usage: mesh machine list [--json] | mesh machine read <machine> <pane> [--lines N] | mesh machine probe <machine>";
     TASK_USAGE = "usage: mesh task list [--since N] [--json] | mesh task show <id> | mesh task create --title <text> [--assignee <session id>] [--parent <task id>] | mesh task update <id> [--state S] [--progress text] [--reason text] [--if-seq N] | mesh task artifact <id> <type> <ref> [--note text]";
     LEASE_USAGE = "usage: mesh lease list [--name N] [--json] | mesh lease acquire <name> --ttl <seconds> [--note text] [--task <task id>] | mesh lease renew <id> [--ttl seconds] | mesh lease release <id>";
@@ -6314,6 +6327,7 @@ var init_ledger = __esm({
       status;
       body;
     };
+    SESSION_ID = /^s_[0-9a-z]+$/;
     LedgerClient = class {
       constructor(opts, inj = {}) {
         this.opts = opts;
@@ -6321,6 +6335,22 @@ var init_ledger = __esm({
       }
       opts;
       fetchImpl;
+      sessionId;
+      /** `session` may be an id, or a name / `name [ref]` as list_agents shows it, resolved once. */
+      session() {
+        const s = this.opts.session;
+        if (!s || SESSION_ID.test(s)) return Promise.resolve(s);
+        this.sessionId ??= (async () => {
+          const res = await this.fetchImpl(this.url("/v1/sessions"), { headers: { authorization: `Bearer ${this.opts.token}` } });
+          const text = await res.text();
+          const body = parseJson(text);
+          if (res.status !== 200 || !Array.isArray(body)) throw new LedgerError(res.status, body, errorText(res.status, text, body));
+          const r = resolveTarget(s, body, "");
+          if (!r.ok) throw new LedgerError(404, null, `session ${r.error}`);
+          return r.target.session_id;
+        })();
+        return this.sessionId;
+      }
       url(path, query) {
         const u = new URL(path, this.opts.relayUrl);
         if (query) {
@@ -6328,15 +6358,16 @@ var init_ledger = __esm({
         }
         return u;
       }
-      headers() {
+      async headers() {
+        const session = await this.session();
         return {
           authorization: `Bearer ${this.opts.token}`,
           "content-type": "application/json",
-          ...this.opts.session ? { "x-mesh-session": this.opts.session } : {}
+          ...session ? { "x-mesh-session": session } : {}
         };
       }
       async request(url, init = {}) {
-        const res = await this.fetchImpl(url, { ...init, headers: this.headers() });
+        const res = await this.fetchImpl(url, { ...init, headers: await this.headers() });
         const text = await res.text();
         const body = parseJson(text);
         if (res.status < 200 || res.status >= 300) {
