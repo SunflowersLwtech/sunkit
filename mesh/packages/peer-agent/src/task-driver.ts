@@ -32,7 +32,10 @@ const WANT: Partial<Record<HostEvent, (cur: string | undefined) => string | unde
 export class TaskDriver {
   private state: string | undefined
   private final = false
-  private queue: Promise<void> = Promise.resolve()
+  private started!: () => void
+  // Events wait for start(): before it the state is unknown and the task may still be the
+  // previous session's, which the relay would refuse (and a refusal stops the driver for good).
+  private queue: Promise<void> = new Promise(r => { this.started = r })
 
   constructor(private readonly api: TaskApi, private readonly id: string, private readonly session: string,
     private readonly log: (event: string, fields: Record<string, unknown>) => void = () => {}) {}
@@ -52,10 +55,12 @@ export class TaskDriver {
       }
     } catch (err) {
       this.log('peer.task.start_error', { task: this.id, err: String(err instanceof Error ? err.message : err) })
+    } finally {
+      this.started()
     }
   }
 
-  /** Serialized: events arrive faster than the relay answers, and each must see the state the last one left. */
+  /** Serialized, after start(): events arrive faster than the relay answers, and each must see the state the last one left. */
   on(event: HostEvent): Promise<void> {
     this.queue = this.queue.then(() => this.apply(event)).catch(() => {})
     return this.queue

@@ -195,6 +195,15 @@ describe('HookChannel: card, task and identity events', () => {
     expect(events).toEqual([])
   })
 
+  it('a wake (pi polling while idle) is never a turn ending', () => {
+    const { inbox, events, ch } = make()
+    ch.handle({ op: 'wake' })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'wake' }).continue).toBe(true)
+    ch.handle({ op: 'wake' })
+    expect(events).toEqual([])
+  })
+
   it('answers whoami with this session, so commands run inside the host can name it', () => {
     const { ch } = make()
     expect(ch.handle({ op: 'whoami' })).toMatchObject({ session: 's_01hrk7y0000000000000aaaaa1', name: 'fr-inkrec' })
