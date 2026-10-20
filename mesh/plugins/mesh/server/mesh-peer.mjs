@@ -37023,7 +37023,12 @@ var TaskDriver = class {
   log;
   state;
   final = false;
-  queue = Promise.resolve();
+  started;
+  // Events wait for start(): before it the state is unknown and the task may still be the
+  // previous session's, which the relay would refuse (and a refusal stops the driver for good).
+  queue = new Promise((r) => {
+    this.started = r;
+  });
   /** Learns the task's state and, after a restart or --resume, takes it over from the previous session. */
   async start() {
     try {
@@ -37044,9 +37049,11 @@ var TaskDriver = class {
       }
     } catch (err) {
       this.log("peer.task.start_error", { task: this.id, err: String(err instanceof Error ? err.message : err) });
+    } finally {
+      this.started();
     }
   }
-  /** Serialized: events arrive faster than the relay answers, and each must see the state the last one left. */
+  /** Serialized, after start(): events arrive faster than the relay answers, and each must see the state the last one left. */
   on(event) {
     this.queue = this.queue.then(() => this.apply(event)).catch(() => {
     });
