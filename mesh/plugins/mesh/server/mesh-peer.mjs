@@ -36531,6 +36531,8 @@ var ConfigSchema = external_exports.object({
   relay_url: external_exports.string().url(),
   token_path: external_exports.string(),
   self_handle: external_exports.string().optional(),
+  /** This machine's name as Herdr and meshd know it, for the session card (e.g. m4, aws-sin-8c32g-261016). */
+  machine: external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
   admin_token_path: external_exports.string().optional(),
   permission_relay: external_exports.object({
     enabled: external_exports.boolean().default(false),
@@ -36582,10 +36584,476 @@ function assertTokenNotInRepo(tokenPath) {
 }
 
 // packages/peer-agent/src/index.ts
-import { existsSync as existsSync3, realpathSync, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync4, realpathSync, rmSync as rmSync3 } from "node:fs";
+import { execFileSync as execFileSync4 } from "node:child_process";
+
+// packages/shared/dist/constants.js
+var PROTOCOL_VERSION = 1;
+var MAX_CONTENT_BYTES = 65536;
+var MAX_META_KEY_LENGTH = 64;
+var MAX_META_VALUE_LENGTH = 2048;
+var PERMISSION_REQUEST_TTL_MS = 5 * 60 * 1e3;
+var PAIR_CODE_TTL_MS = 24 * 60 * 60 * 1e3;
+var TEAM_BROADCAST_HANDLE = "@team";
+var HANDLE_REGEX = /^[a-z][a-z0-9_-]{0,31}$/;
+var META_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+var CHANNEL_SOURCE_PEERS = "peers";
+
+// packages/shared/dist/ulid.js
+var import_ulid = __toESM(require_index_umd(), 1);
+var monotonicUlid = (0, import_ulid.monotonicFactory)();
+
+// packages/shared/dist/envelope.js
+var AddressSchema = external_exports.union([
+  external_exports.string().regex(HANDLE_REGEX, "handle"),
+  external_exports.literal(TEAM_BROADCAST_HANDLE)
+]);
+var KindSchema = external_exports.enum([
+  "chat",
+  "presence_update",
+  "permission_request",
+  "permission_verdict"
+]);
+var MetaSchema = external_exports.record(external_exports.string().regex(META_KEY_REGEX).max(MAX_META_KEY_LENGTH), external_exports.string().max(MAX_META_VALUE_LENGTH)).default({});
+var ContentSchema = external_exports.string().refine((s) => Buffer.byteLength(s, "utf8") <= MAX_CONTENT_BYTES, { message: `content exceeds ${MAX_CONTENT_BYTES} bytes` });
+var MessageIdSchema = external_exports.string().regex(/^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
+var SESSION_ID_REGEX = /^s_[0-9a-z]{16,32}$/;
+var SessionIdSchema = external_exports.string().regex(SESSION_ID_REGEX);
+function sessionRef(sessionId) {
+  return sessionId.slice(-6);
+}
+var LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
+var SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
+var EnvelopeSchema = external_exports.object({
+  id: MessageIdSchema,
+  v: external_exports.literal(PROTOCOL_VERSION),
+  team: external_exports.string().min(1).max(64),
+  from: external_exports.string().regex(HANDLE_REGEX),
+  to: AddressSchema,
+  in_reply_to: MessageIdSchema.nullable(),
+  thread_root: MessageIdSchema.nullable(),
+  kind: KindSchema,
+  content: ContentSchema,
+  meta: MetaSchema,
+  sent_at: external_exports.string().datetime(),
+  delivered_at: external_exports.string().datetime().nullable(),
+  // Session addressing. All three are set by the relay, never trusted from clients.
+  from_session: SessionIdSchema.nullable().default(null),
+  from_name: SessionNameSchema.nullable().default(null),
+  to_session: SessionIdSchema.nullable().default(null),
+  from_login: LoginSchema.nullable().default(null)
+}).superRefine((e, ctx) => {
+  if (e.kind === "permission_verdict" && e.in_reply_to === null) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["in_reply_to"],
+      message: "permission_verdict requires in_reply_to referencing the permission_request"
+    });
+  }
+});
+var OutboundMessageSchema = external_exports.object({
+  to: AddressSchema,
+  kind: KindSchema,
+  content: ContentSchema,
+  meta: MetaSchema.optional(),
+  in_reply_to: MessageIdSchema.nullable().optional(),
+  to_session: SessionIdSchema.optional()
+}).strict();
+
+// packages/shared/dist/channel.js
+function envelopeToChannelNotification(e) {
+  const safeMeta = sanitizeMeta(e.meta);
+  if (e.kind === "permission_request") {
+    return {
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        content: e.content,
+        meta: safeMeta,
+        request_id: safeMeta.request_id ?? "",
+        tool_name: safeMeta.tool_name ?? "",
+        description: e.content,
+        input_preview: safeMeta.input_preview ?? ""
+      }
+    };
+  }
+  if (e.kind === "permission_verdict") {
+    return {
+      method: "notifications/claude/channel/permission",
+      params: {
+        content: "",
+        meta: safeMeta,
+        request_id: safeMeta.request_id ?? "",
+        behavior: safeMeta.behavior === "deny" ? "deny" : "allow"
+      }
+    };
+  }
+  return {
+    method: "notifications/claude/channel",
+    params: {
+      content: escapeChannelBody(e.content),
+      // Sender-controlled meta goes first so relay-set identity fields always win.
+      meta: {
+        ...withoutReserved(safeMeta),
+        // `from` is the reply address: the sender's session when it has one, else the name a
+        // send-only sender gave (marked by `sender`), else its handle.
+        from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from_name ?? e.from,
+        ...!e.from_session && e.from_name ? { sender: "send-only" } : {},
+        account: e.from,
+        ...e.from_login ? { login: e.from_login } : {},
+        msg_id: e.id,
+        ...e.in_reply_to ? { in_reply_to: e.in_reply_to } : {},
+        ...e.thread_root ? { thread_root: e.thread_root } : {},
+        source: CHANNEL_SOURCE_PEERS
+      }
+    }
+  };
+}
+var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
+function withoutReserved(meta) {
+  return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)));
+}
+function sanitizeMeta(meta) {
+  const out = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (META_KEY_REGEX.test(k))
+      out[k] = escapeChannelAttr(v);
+  }
+  return out;
+}
+function escapeChannelAttr(s) {
+  return s.replace(/[<>&"]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : "&quot;");
+}
+function escapeChannelBody(s) {
+  return s.replace(/[<>&]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;");
+}
+
+// packages/shared/dist/ledger.js
+var import_ulid2 = __toESM(require_index_umd(), 1);
+var ULID = "[0-9A-HJKMNP-TV-Z]{26}";
+var monotonicUlid2 = (0, import_ulid2.monotonicFactory)();
+var TASK_ID_REGEX = new RegExp(`^task_${ULID}$`);
+var TaskIdSchema = external_exports.string().regex(TASK_ID_REGEX);
+var LeaseIdSchema = external_exports.string().regex(new RegExp(`^lease_${ULID}$`));
+var CommandIdSchema = external_exports.string().regex(new RegExp(`^cmd_${ULID}$`));
+var TASK_STATES = [
+  "submitted",
+  "working",
+  "input_required",
+  "auth_required",
+  "completed",
+  "failed",
+  "canceled",
+  "rejected"
+];
+var TaskStateSchema = external_exports.enum(TASK_STATES);
+var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+var RoleSchema2 = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
+var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
+var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
+var HerdrPaneIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:p[0-9A-Za-z]{1,8}$/);
+function redactUrlCredentials(value) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
+    return value;
+  try {
+    const u = new URL(value);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
+  }
+}
+var RepoSchema = external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
+var BranchSchema = external_exports.string().max(128).regex(/^[A-Za-z0-9._+-][A-Za-z0-9._/+-]{0,127}$/).refine((b) => !b.includes(".."), "branch");
+var ModelSchema = external_exports.string().regex(/^[A-Za-z0-9._:/@+\[\]-]{1,64}$/);
+var HerdrLocationSchema = external_exports.object({
+  machine: MachineNameSchema,
+  tab: HerdrTabIdSchema.optional(),
+  pane: HerdrPaneIdSchema.optional()
+}).strict();
+var CardSourceSchema = external_exports.enum(["hook", "poll", "manual"]);
+var CardPatchSchema = external_exports.object({
+  session: external_exports.string(),
+  name: SessionNameSchema.optional(),
+  cwd: external_exports.string().max(1024).optional(),
+  login: LoginSchema.optional(),
+  status: external_exports.enum(["busy", "idle", "unknown"]).optional(),
+  agent: AgentKindSchema.optional(),
+  model: ModelSchema.optional(),
+  repo: RepoSchema.optional(),
+  branch: BranchSchema.optional(),
+  herdr: HerdrLocationSchema.optional(),
+  task_id: TaskIdSchema.optional(),
+  source: CardSourceSchema.optional(),
+  workgroup: WorkgroupSchema.optional()
+}).strict();
+var ArtifactTypeSchema = external_exports.enum(["pr", "commit", "vault", "deploy", "url"]);
+function artifactRefOk(type, ref) {
+  if (/[\u0000-\u001f\u007f\s]/.test(ref))
+    return false;
+  if (type === "vault") {
+    return !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").some((seg) => seg === ".." || seg === "");
+  }
+  if (type === "deploy")
+    return /^[A-Za-z0-9._:+-]{1,64}@[0-9TZ:.+-]{4,40}$/.test(ref);
+  if (ref.startsWith("gh://"))
+    return /^gh:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\/(pull|issues|commit)\/[0-9a-f]+)?$/.test(ref);
+  let u;
+  try {
+    u = new URL(ref);
+  } catch {
+    return false;
+  }
+  return u.protocol === "https:" && u.username === "" && u.password === "";
+}
+var ArtifactSchema = external_exports.object({
+  type: ArtifactTypeSchema,
+  ref: external_exports.string().min(1).max(512),
+  note: external_exports.string().max(200).optional()
+}).strict().superRefine((a, ctx) => {
+  if (!artifactRefOk(a.type, a.ref))
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["ref"], message: "ref" });
+});
+var LeaseNameSchema = external_exports.string().regex(/^(deploy|repo|file|device|build|cred)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).refine((n) => !n.includes(".."), "lease name");
+var MAX_LEASE_TTL_S = 1800;
+var MIN_LEASE_TTL_S = 30;
+var AgentStatusSchema = external_exports.enum(["idle", "working", "blocked", "done", "unknown"]).catch("unknown");
+var MachineAgentSchema = external_exports.object({
+  name: external_exports.string().min(1).max(64),
+  agent: external_exports.string().regex(/^[a-z0-9_-]{1,32}$/),
+  status: AgentStatusSchema,
+  pane: HerdrPaneIdSchema,
+  tab: HerdrTabIdSchema.optional(),
+  workspace: HerdrWorkspaceIdSchema.optional(),
+  cwd: external_exports.string().max(1024).transform(redactUrlCredentials).optional(),
+  agent_session: external_exports.object({
+    kind: external_exports.string().regex(/^[a-z_]{1,16}$/),
+    value: external_exports.string().min(1).max(1024)
+  }).strict().optional()
+}).strict();
+var MachineReportSchema = external_exports.object({
+  version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/),
+  herdr: external_exports.object({
+    ok: external_exports.boolean(),
+    version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/).optional(),
+    error: external_exports.string().max(200).optional()
+  }).strict(),
+  load: external_exports.object({
+    load1: external_exports.number().min(0).max(1e4),
+    cpus: external_exports.number().int().min(1).max(1024),
+    mem_used_pct: external_exports.number().min(0).max(100).optional()
+  }).strict(),
+  kinds: external_exports.array(external_exports.object({
+    kind: AgentKindSchema,
+    version: external_exports.string().regex(/^[A-Za-z0-9._ ()+-]{1,64}$/).optional()
+  }).strict()).max(8),
+  seats: external_exports.array(external_exports.object({
+    email: LoginSchema,
+    org: external_exports.string().max(64).optional(),
+    plan: external_exports.string().regex(/^[a-z_-]{1,16}$/).optional(),
+    five_hour_pct: external_exports.number().min(0).max(1e3).optional(),
+    resets_at: external_exports.string().datetime().optional(),
+    blocked: external_exports.boolean().optional()
+  }).strict()).max(6),
+  active: external_exports.number().int().min(0).max(1e3),
+  blocked: external_exports.number().int().min(0).max(1e3),
+  max_active: external_exports.number().int().min(0).max(1e3).optional(),
+  agents: external_exports.array(MachineAgentSchema).max(64),
+  roots: external_exports.array(external_exports.object({ path: external_exports.string().min(1).max(256), exists: external_exports.boolean() }).strict()).max(8)
+}).strict();
+var CommandRequestSchema = external_exports.discriminatedUnion("op", [
+  external_exports.object({ op: external_exports.literal("probe"), args: external_exports.object({}).strict().optional() }).strict(),
+  external_exports.object({
+    op: external_exports.literal("read"),
+    args: external_exports.object({ pane: HerdrPaneIdSchema, lines: external_exports.number().int().min(1).max(400).optional() }).strict()
+  }).strict()
+]);
+var CommandResultSchema = external_exports.object({
+  ok: external_exports.boolean(),
+  output: external_exports.string().max(65536).optional(),
+  error: external_exports.string().max(500).optional()
+}).strict();
+var TaskCreateSchema = external_exports.object({
+  title: external_exports.string().min(1).max(120),
+  /** Omit to register a task for the calling session itself (depth 0). Another session's id needs the orchestrator role. */
+  assignee: SessionIdSchema.optional(),
+  parent_task: TaskIdSchema.optional(),
+  prompt_sha256: external_exports.string().regex(/^[0-9a-f]{64}$/).optional(),
+  deadline: external_exports.string().datetime().optional()
+}).strict();
+var TaskUpdateSchema = external_exports.object({
+  state: TaskStateSchema.optional(),
+  progress: external_exports.string().max(200).optional(),
+  reason: external_exports.string().max(200).optional(),
+  if_seq: external_exports.number().int().min(0).optional()
+}).strict();
+var LeaseAcquireSchema = external_exports.object({
+  name: LeaseNameSchema,
+  ttl_s: external_exports.number().int().min(MIN_LEASE_TTL_S).max(MAX_LEASE_TTL_S),
+  note: external_exports.string().max(200).optional(),
+  task_id: TaskIdSchema.optional()
+}).strict();
+
+// packages/peer-agent/src/card.ts
+import { basename } from "node:path";
+var FIELD = CardPatchSchema.shape;
+function fit(key, value) {
+  const r = FIELD[key].safeParse(value);
+  return r.success ? r.data : void 0;
+}
+function initialCard(i) {
+  const card = {};
+  const agent = AgentKindSchema.safeParse(i.host ?? "claude");
+  if (agent.success) card.agent = agent.data;
+  const model = fit("model", i.env.MESH_MODEL?.trim());
+  if (model) card.model = model;
+  const top = i.git(["rev-parse", "--show-toplevel"])?.trim();
+  const repo = top ? fit("repo", basename(top)) : void 0;
+  if (repo) card.repo = repo;
+  const branch = i.git(["rev-parse", "--abbrev-ref", "HEAD"])?.trim();
+  const b = branch && branch !== "HEAD" ? fit("branch", branch) : void 0;
+  if (b) card.branch = b;
+  if (i.env.HERDR_ENV === "1" && i.machine) {
+    const herdr = HerdrLocationSchema.safeParse({
+      machine: i.machine,
+      ...i.env.HERDR_TAB_ID ? { tab: i.env.HERDR_TAB_ID } : {},
+      ...i.env.HERDR_PANE_ID ? { pane: i.env.HERDR_PANE_ID } : {}
+    });
+    if (herdr.success) card.herdr = herdr.data;
+  }
+  const task = TaskIdSchema.safeParse(i.env.MESH_TASK_ID);
+  if (task.success) card.task_id = task.data;
+  return card;
+}
+var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var CardWriter = class {
+  constructor(write, opts = {}) {
+    this.write = write;
+    this.delayMs = opts.delayMs ?? 2e3;
+    this.enabled = opts.enabled ?? true;
+    this.schedule = opts.schedule ?? ((fn, ms) => {
+      const t = setTimeout(fn, ms);
+      t.unref?.();
+      return () => clearTimeout(t);
+    });
+  }
+  write;
+  card = {};
+  sent = {};
+  cancel = null;
+  delayMs;
+  enabled;
+  schedule;
+  get current() {
+    return { ...this.card };
+  }
+  set(patch) {
+    if (!this.enabled) return;
+    this.card = { ...this.card, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== void 0)) };
+    this.arm();
+  }
+  /** The relay lost the card (it restarted, the stream reattached): send all of it again. */
+  resend() {
+    if (!this.enabled) return;
+    this.sent = {};
+    this.arm();
+  }
+  pending() {
+    const out = {};
+    for (const [k, v] of Object.entries(this.card)) if (!same(v, this.sent[k])) out[k] = v;
+    return out;
+  }
+  arm() {
+    if (this.cancel || Object.keys(this.pending()).length === 0) return;
+    this.cancel = this.schedule(() => {
+      this.cancel = null;
+      void this.flush();
+    }, this.delayMs);
+  }
+  async flush() {
+    if (!this.enabled) return;
+    const patch = this.pending();
+    if (Object.keys(patch).length === 0) return;
+    try {
+      await this.write(patch);
+      this.sent = { ...this.sent, ...patch };
+    } catch {
+    }
+    this.arm();
+  }
+};
+
+// packages/peer-agent/src/task-driver.ts
+var TERMINAL = /* @__PURE__ */ new Set(["completed", "failed", "canceled", "rejected"]);
+var WANT = {
+  turn: () => "working",
+  tool: () => "working",
+  blocked: () => "input_required",
+  // The turn ended: whatever blocked it is over. Nothing else changes on a stop.
+  stop: (cur) => cur === "input_required" ? "working" : void 0,
+  idle: (cur) => cur === "input_required" ? "working" : void 0
+};
+var TaskDriver = class {
+  constructor(api, id, session, log = () => {
+  }) {
+    this.api = api;
+    this.id = id;
+    this.session = session;
+    this.log = log;
+  }
+  api;
+  id;
+  session;
+  log;
+  state;
+  final = false;
+  queue = Promise.resolve();
+  /** Learns the task's state and, after a restart or --resume, takes it over from the previous session. */
+  async start() {
+    try {
+      const r = await this.api.get(this.id);
+      if (r.status !== 200 || !r.task) {
+        this.log("peer.task.unknown", { task: this.id, status: r.status });
+        return;
+      }
+      this.state = r.task.state;
+      if (TERMINAL.has(this.state)) {
+        this.final = true;
+        return;
+      }
+      if (r.task.assignee.session && r.task.assignee.session !== this.session) {
+        const rb = await this.api.rebind(this.id);
+        this.log("peer.task.rebind", { task: this.id, status: rb.status });
+      }
+    } catch (err) {
+      this.log("peer.task.start_error", { task: this.id, err: String(err instanceof Error ? err.message : err) });
+    }
+  }
+  /** Serialized: events arrive faster than the relay answers, and each must see the state the last one left. */
+  on(event) {
+    this.queue = this.queue.then(() => this.apply(event)).catch(() => {
+    });
+    return this.queue;
+  }
+  async apply(event) {
+    if (this.final) return;
+    const want = WANT[event]?.(this.state);
+    if (!want || want === this.state) return;
+    const r = await this.api.patch(this.id, { state: want });
+    if (r.status === 200) {
+      this.state = want;
+      return;
+    }
+    if (r.status === 409 && r.error === "task_terminal") {
+      this.final = true;
+      return;
+    }
+    this.log("peer.task.update_refused", { task: this.id, want, status: r.status, error: r.error ?? "" });
+  }
+};
 
 // packages/peer-agent/src/outbound.ts
-var import_ulid = __toESM(require_index_umd(), 1);
+var import_ulid3 = __toESM(require_index_umd(), 1);
 var RelayClient = class {
   constructor(opts, inj = {}) {
     this.opts = opts;
@@ -36599,7 +37067,7 @@ var RelayClient = class {
       headers: {
         authorization: `Bearer ${this.opts.token}`,
         "content-type": "application/json",
-        "idempotency-key": (0, import_ulid.ulid)().toLowerCase(),
+        "idempotency-key": (0, import_ulid3.ulid)().toLowerCase(),
         ...this.opts.sessionId ? { "x-mesh-session": this.opts.sessionId } : this.opts.senderName ? { "x-mesh-sender-name": this.opts.senderName } : {}
       },
       body: JSON.stringify(msg)
@@ -36630,6 +37098,47 @@ var RelayClient = class {
       body: JSON.stringify({ session: this.opts.sessionId, ...patch })
     });
     if (res.status !== 200 && res.status !== 404) throw new Error(`updateSelf failed: ${res.status}`);
+  }
+  /** Card fields for this session. Throws while the relay has not attached the session yet, so the writer tries again. */
+  async writeCard(card) {
+    if (!this.opts.sessionId) return;
+    const res = await this.fetchImpl(new URL("/v1/sessions/self", this.opts.relayUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.opts.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ session: this.opts.sessionId, ...card })
+    });
+    if (res.status === 404) throw new Error("session not attached yet");
+    if (res.status !== 200) throw new Error(`card update failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  }
+  sessionHeaders() {
+    return {
+      authorization: `Bearer ${this.opts.token}`,
+      "content-type": "application/json",
+      ...this.opts.sessionId ? { "x-mesh-session": this.opts.sessionId } : {}
+    };
+  }
+  async getTask(id) {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}`, this.opts.relayUrl), { headers: this.sessionHeaders() });
+    const body = await res.json().catch(() => null);
+    return res.status === 200 && body ? { status: 200, task: { state: body.state, assignee: { session: body.assignee?.session ?? null } } } : { status: res.status };
+  }
+  async patchTask(id, body) {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}`, this.opts.relayUrl), {
+      method: "PATCH",
+      headers: this.sessionHeaders(),
+      body: JSON.stringify(body)
+    });
+    const j = await res.json().catch(() => null);
+    return { status: res.status, ...j?.error ? { error: j.error } : {} };
+  }
+  async rebindTask(id) {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}/rebind`, this.opts.relayUrl), {
+      method: "POST",
+      headers: this.sessionHeaders(),
+      body: "{}"
+    });
+    await res.text().catch(() => "");
+    return { status: res.status };
   }
   async setPresence(body) {
     const res = await this.fetchImpl(new URL("/v1/presence", this.opts.relayUrl), {
@@ -36827,313 +37336,6 @@ var SenderGate = class {
   }
 };
 
-// packages/shared/dist/constants.js
-var PROTOCOL_VERSION = 1;
-var MAX_CONTENT_BYTES = 65536;
-var MAX_META_KEY_LENGTH = 64;
-var MAX_META_VALUE_LENGTH = 2048;
-var PERMISSION_REQUEST_TTL_MS = 5 * 60 * 1e3;
-var PAIR_CODE_TTL_MS = 24 * 60 * 60 * 1e3;
-var TEAM_BROADCAST_HANDLE = "@team";
-var HANDLE_REGEX = /^[a-z][a-z0-9_-]{0,31}$/;
-var META_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-var CHANNEL_SOURCE_PEERS = "peers";
-
-// packages/shared/dist/ulid.js
-var import_ulid2 = __toESM(require_index_umd(), 1);
-var monotonicUlid = (0, import_ulid2.monotonicFactory)();
-
-// packages/shared/dist/envelope.js
-var AddressSchema = external_exports.union([
-  external_exports.string().regex(HANDLE_REGEX, "handle"),
-  external_exports.literal(TEAM_BROADCAST_HANDLE)
-]);
-var KindSchema = external_exports.enum([
-  "chat",
-  "presence_update",
-  "permission_request",
-  "permission_verdict"
-]);
-var MetaSchema = external_exports.record(external_exports.string().regex(META_KEY_REGEX).max(MAX_META_KEY_LENGTH), external_exports.string().max(MAX_META_VALUE_LENGTH)).default({});
-var ContentSchema = external_exports.string().refine((s) => Buffer.byteLength(s, "utf8") <= MAX_CONTENT_BYTES, { message: `content exceeds ${MAX_CONTENT_BYTES} bytes` });
-var MessageIdSchema = external_exports.string().regex(/^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
-var SESSION_ID_REGEX = /^s_[0-9a-z]{16,32}$/;
-var SessionIdSchema = external_exports.string().regex(SESSION_ID_REGEX);
-function sessionRef(sessionId) {
-  return sessionId.slice(-6);
-}
-var LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
-var SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
-var EnvelopeSchema = external_exports.object({
-  id: MessageIdSchema,
-  v: external_exports.literal(PROTOCOL_VERSION),
-  team: external_exports.string().min(1).max(64),
-  from: external_exports.string().regex(HANDLE_REGEX),
-  to: AddressSchema,
-  in_reply_to: MessageIdSchema.nullable(),
-  thread_root: MessageIdSchema.nullable(),
-  kind: KindSchema,
-  content: ContentSchema,
-  meta: MetaSchema,
-  sent_at: external_exports.string().datetime(),
-  delivered_at: external_exports.string().datetime().nullable(),
-  // Session addressing. All three are set by the relay, never trusted from clients.
-  from_session: SessionIdSchema.nullable().default(null),
-  from_name: SessionNameSchema.nullable().default(null),
-  to_session: SessionIdSchema.nullable().default(null),
-  from_login: LoginSchema.nullable().default(null)
-}).superRefine((e, ctx) => {
-  if (e.kind === "permission_verdict" && e.in_reply_to === null) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["in_reply_to"],
-      message: "permission_verdict requires in_reply_to referencing the permission_request"
-    });
-  }
-});
-var OutboundMessageSchema = external_exports.object({
-  to: AddressSchema,
-  kind: KindSchema,
-  content: ContentSchema,
-  meta: MetaSchema.optional(),
-  in_reply_to: MessageIdSchema.nullable().optional(),
-  to_session: SessionIdSchema.optional()
-}).strict();
-
-// packages/shared/dist/channel.js
-function envelopeToChannelNotification(e) {
-  const safeMeta = sanitizeMeta(e.meta);
-  if (e.kind === "permission_request") {
-    return {
-      method: "notifications/claude/channel/permission_request",
-      params: {
-        content: e.content,
-        meta: safeMeta,
-        request_id: safeMeta.request_id ?? "",
-        tool_name: safeMeta.tool_name ?? "",
-        description: e.content,
-        input_preview: safeMeta.input_preview ?? ""
-      }
-    };
-  }
-  if (e.kind === "permission_verdict") {
-    return {
-      method: "notifications/claude/channel/permission",
-      params: {
-        content: "",
-        meta: safeMeta,
-        request_id: safeMeta.request_id ?? "",
-        behavior: safeMeta.behavior === "deny" ? "deny" : "allow"
-      }
-    };
-  }
-  return {
-    method: "notifications/claude/channel",
-    params: {
-      content: escapeChannelBody(e.content),
-      // Sender-controlled meta goes first so relay-set identity fields always win.
-      meta: {
-        ...withoutReserved(safeMeta),
-        // `from` is the reply address: the sender's session when it has one, else the name a
-        // send-only sender gave (marked by `sender`), else its handle.
-        from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from_name ?? e.from,
-        ...!e.from_session && e.from_name ? { sender: "send-only" } : {},
-        account: e.from,
-        ...e.from_login ? { login: e.from_login } : {},
-        msg_id: e.id,
-        ...e.in_reply_to ? { in_reply_to: e.in_reply_to } : {},
-        ...e.thread_root ? { thread_root: e.thread_root } : {},
-        source: CHANNEL_SOURCE_PEERS
-      }
-    }
-  };
-}
-var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
-function withoutReserved(meta) {
-  return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)));
-}
-function sanitizeMeta(meta) {
-  const out = {};
-  for (const [k, v] of Object.entries(meta)) {
-    if (META_KEY_REGEX.test(k))
-      out[k] = escapeChannelAttr(v);
-  }
-  return out;
-}
-function escapeChannelAttr(s) {
-  return s.replace(/[<>&"]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : "&quot;");
-}
-function escapeChannelBody(s) {
-  return s.replace(/[<>&]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;");
-}
-
-// packages/shared/dist/ledger.js
-var import_ulid3 = __toESM(require_index_umd(), 1);
-var ULID = "[0-9A-HJKMNP-TV-Z]{26}";
-var monotonicUlid2 = (0, import_ulid3.monotonicFactory)();
-var TASK_ID_REGEX = new RegExp(`^task_${ULID}$`);
-var TaskIdSchema = external_exports.string().regex(TASK_ID_REGEX);
-var LeaseIdSchema = external_exports.string().regex(new RegExp(`^lease_${ULID}$`));
-var CommandIdSchema = external_exports.string().regex(new RegExp(`^cmd_${ULID}$`));
-var TASK_STATES = [
-  "submitted",
-  "working",
-  "input_required",
-  "auth_required",
-  "completed",
-  "failed",
-  "canceled",
-  "rejected"
-];
-var TaskStateSchema = external_exports.enum(TASK_STATES);
-var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
-var RoleSchema2 = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
-var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
-var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
-var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
-var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
-var HerdrPaneIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:p[0-9A-Za-z]{1,8}$/);
-function redactUrlCredentials(value) {
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-    return value;
-  try {
-    const u = new URL(value);
-    return `${u.protocol}//${u.host}${u.pathname}`;
-  } catch {
-    return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
-  }
-}
-var RepoSchema = external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
-var BranchSchema = external_exports.string().max(128).regex(/^[A-Za-z0-9._+-][A-Za-z0-9._/+-]{0,127}$/).refine((b) => !b.includes(".."), "branch");
-var ModelSchema = external_exports.string().regex(/^[A-Za-z0-9._:/@+\[\]-]{1,64}$/);
-var HerdrLocationSchema = external_exports.object({
-  machine: MachineNameSchema,
-  tab: HerdrTabIdSchema.optional(),
-  pane: HerdrPaneIdSchema.optional()
-}).strict();
-var CardSourceSchema = external_exports.enum(["hook", "poll", "manual"]);
-var CardPatchSchema = external_exports.object({
-  session: external_exports.string(),
-  name: SessionNameSchema.optional(),
-  cwd: external_exports.string().max(1024).optional(),
-  login: LoginSchema.optional(),
-  status: external_exports.enum(["busy", "idle", "unknown"]).optional(),
-  agent: AgentKindSchema.optional(),
-  model: ModelSchema.optional(),
-  repo: RepoSchema.optional(),
-  branch: BranchSchema.optional(),
-  herdr: HerdrLocationSchema.optional(),
-  task_id: TaskIdSchema.optional(),
-  source: CardSourceSchema.optional(),
-  workgroup: WorkgroupSchema.optional()
-}).strict();
-var ArtifactTypeSchema = external_exports.enum(["pr", "commit", "vault", "deploy", "url"]);
-function artifactRefOk(type, ref) {
-  if (/[\u0000-\u001f\u007f\s]/.test(ref))
-    return false;
-  if (type === "vault") {
-    return !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").some((seg) => seg === ".." || seg === "");
-  }
-  if (type === "deploy")
-    return /^[A-Za-z0-9._:+-]{1,64}@[0-9TZ:.+-]{4,40}$/.test(ref);
-  if (ref.startsWith("gh://"))
-    return /^gh:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\/(pull|issues|commit)\/[0-9a-f]+)?$/.test(ref);
-  let u;
-  try {
-    u = new URL(ref);
-  } catch {
-    return false;
-  }
-  return u.protocol === "https:" && u.username === "" && u.password === "";
-}
-var ArtifactSchema = external_exports.object({
-  type: ArtifactTypeSchema,
-  ref: external_exports.string().min(1).max(512),
-  note: external_exports.string().max(200).optional()
-}).strict().superRefine((a, ctx) => {
-  if (!artifactRefOk(a.type, a.ref))
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["ref"], message: "ref" });
-});
-var LeaseNameSchema = external_exports.string().regex(/^(deploy|repo|file|device|build|cred)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).refine((n) => !n.includes(".."), "lease name");
-var MAX_LEASE_TTL_S = 1800;
-var MIN_LEASE_TTL_S = 30;
-var AgentStatusSchema = external_exports.enum(["idle", "working", "blocked", "done", "unknown"]).catch("unknown");
-var MachineAgentSchema = external_exports.object({
-  name: external_exports.string().min(1).max(64),
-  agent: external_exports.string().regex(/^[a-z0-9_-]{1,32}$/),
-  status: AgentStatusSchema,
-  pane: HerdrPaneIdSchema,
-  tab: HerdrTabIdSchema.optional(),
-  workspace: HerdrWorkspaceIdSchema.optional(),
-  cwd: external_exports.string().max(1024).transform(redactUrlCredentials).optional(),
-  agent_session: external_exports.object({
-    kind: external_exports.string().regex(/^[a-z_]{1,16}$/),
-    value: external_exports.string().min(1).max(1024)
-  }).strict().optional()
-}).strict();
-var MachineReportSchema = external_exports.object({
-  version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/),
-  herdr: external_exports.object({
-    ok: external_exports.boolean(),
-    version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/).optional(),
-    error: external_exports.string().max(200).optional()
-  }).strict(),
-  load: external_exports.object({
-    load1: external_exports.number().min(0).max(1e4),
-    cpus: external_exports.number().int().min(1).max(1024),
-    mem_used_pct: external_exports.number().min(0).max(100).optional()
-  }).strict(),
-  kinds: external_exports.array(external_exports.object({
-    kind: AgentKindSchema,
-    version: external_exports.string().regex(/^[A-Za-z0-9._ ()+-]{1,64}$/).optional()
-  }).strict()).max(8),
-  seats: external_exports.array(external_exports.object({
-    email: LoginSchema,
-    org: external_exports.string().max(64).optional(),
-    plan: external_exports.string().regex(/^[a-z_-]{1,16}$/).optional(),
-    five_hour_pct: external_exports.number().min(0).max(1e3).optional(),
-    resets_at: external_exports.string().datetime().optional(),
-    blocked: external_exports.boolean().optional()
-  }).strict()).max(6),
-  active: external_exports.number().int().min(0).max(1e3),
-  blocked: external_exports.number().int().min(0).max(1e3),
-  max_active: external_exports.number().int().min(0).max(1e3).optional(),
-  agents: external_exports.array(MachineAgentSchema).max(64),
-  roots: external_exports.array(external_exports.object({ path: external_exports.string().min(1).max(256), exists: external_exports.boolean() }).strict()).max(8)
-}).strict();
-var CommandRequestSchema = external_exports.discriminatedUnion("op", [
-  external_exports.object({ op: external_exports.literal("probe"), args: external_exports.object({}).strict().optional() }).strict(),
-  external_exports.object({
-    op: external_exports.literal("read"),
-    args: external_exports.object({ pane: HerdrPaneIdSchema, lines: external_exports.number().int().min(1).max(400).optional() }).strict()
-  }).strict()
-]);
-var CommandResultSchema = external_exports.object({
-  ok: external_exports.boolean(),
-  output: external_exports.string().max(65536).optional(),
-  error: external_exports.string().max(500).optional()
-}).strict();
-var TaskCreateSchema = external_exports.object({
-  title: external_exports.string().min(1).max(120),
-  /** Omit to register a task for the calling session itself (depth 0). Another session's id needs the orchestrator role. */
-  assignee: SessionIdSchema.optional(),
-  parent_task: TaskIdSchema.optional(),
-  prompt_sha256: external_exports.string().regex(/^[0-9a-f]{64}$/).optional(),
-  deadline: external_exports.string().datetime().optional()
-}).strict();
-var TaskUpdateSchema = external_exports.object({
-  state: TaskStateSchema.optional(),
-  progress: external_exports.string().max(200).optional(),
-  reason: external_exports.string().max(200).optional(),
-  if_seq: external_exports.number().int().min(0).optional()
-}).strict();
-var LeaseAcquireSchema = external_exports.object({
-  name: LeaseNameSchema,
-  ttl_s: external_exports.number().int().min(MIN_LEASE_TTL_S).max(MAX_LEASE_TTL_S),
-  note: external_exports.string().max(200).optional(),
-  task_id: TaskIdSchema.optional()
-}).strict();
-
 // packages/peer-agent/src/logger.ts
 function logJson(level, event, fields = {}) {
   const safe = {};
@@ -37313,7 +37515,7 @@ var ReplyLimiter = class {
 var import_ulid4 = __toESM(require_index_umd(), 1);
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync4, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
-import { join as join4, basename } from "node:path";
+import { join as join4, basename as basename2 } from "node:path";
 
 // packages/peer-agent/src/managed-policy.ts
 import { execFileSync } from "node:child_process";
@@ -37519,7 +37721,7 @@ function probeClaudeSession(opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const isAlive = opts.isAlive ?? defaultIsAlive;
   const envName = (opts.envName ?? process.env.MESH_SESSION_NAME)?.trim() || void 0;
-  const fallback = { name: sanitizeName(envName ?? basename(cwd)), status: "unknown" };
+  const fallback = { name: sanitizeName(envName ?? basename2(cwd)), status: "unknown" };
   const ppid = opts.ppid ?? process.ppid;
   let file = readSessionFile(join4(dir, `${ppid}.json`));
   if (!file && !envName) {
@@ -37541,7 +37743,7 @@ function probeHostSession(opts = {}) {
   const envName = (opts.envName ?? process.env.MESH_SESSION_NAME)?.trim();
   if (envName) return { name: sanitizeName(envName), status: "unknown" };
   const host = (opts.host ?? process.env.MESH_HOST)?.trim().replace(/[^A-Za-z0-9_-]+/g, "") ?? "";
-  const base = (opts.tabLabel ?? (() => herdrTabLabel()))()?.trim() || basename(opts.cwd ?? process.cwd());
+  const base = (opts.tabLabel ?? (() => herdrTabLabel()))()?.trim() || basename2(opts.cwd ?? process.cwd());
   const name = host && !base.toLowerCase().startsWith(host.toLowerCase()) ? `${host}-${base}` : base;
   return { name: sanitizeName(name), status: "unknown" };
 }
@@ -37730,39 +37932,64 @@ function hookSocketPath(hostPid, dir = meshDir()) {
   return join6(dir, "hooks", `${hostPid}.sock`);
 }
 var HookChannel = class {
-  constructor(inbox, onStatus) {
+  /** Push-mode hosts (Claude Code) pass an inbox that stays empty: they get messages through the channel. */
+  constructor(inbox, onStatus, extras = {}) {
     this.inbox = inbox;
     this.onStatus = onStatus;
+    this.extras = extras;
   }
   inbox;
   onStatus;
+  extras;
   nudgedSeq = 0;
   notifiedSeq = 0;
   handle(req) {
     const p = this.inbox.peek();
     const base = { unread: p.size, from: p.from };
+    const event = (e) => this.extras.onEvent?.(e);
     if (req.op === "turn") {
       this.onStatus("busy");
+      event("turn");
       return base;
     }
     if (req.op === "tool") {
       this.onStatus("busy");
+      event("tool");
       const notify = p.size > 0 && p.seq > this.notifiedSeq;
       if (notify) this.notifiedSeq = p.seq;
       return { ...base, notify };
     }
     if (req.op === "idle") {
       this.onStatus("idle");
+      event("idle");
       return base;
     }
     if (req.op === "stop" || req.op === "wake") {
       const natural = req.op === "wake" || (req.natural ?? req.reason === "NO_TOOL_CALL");
-      if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
+      if (p.size > 0 && p.seq > this.nudgedSeq && natural && (req.op !== "wake" || (this.extras.wakeAllowed?.() ?? true))) {
         this.nudgedSeq = p.seq;
         return { ...base, continue: true };
       }
       this.onStatus("idle");
+      if (req.op === "stop") event("stop");
       return { ...base, continue: false };
+    }
+    if (req.op === "blocked") {
+      event("blocked");
+      return base;
+    }
+    if (req.op === "end") {
+      this.onStatus("idle");
+      event("end");
+      return base;
+    }
+    if (req.op === "whoami") {
+      const me = this.extras.whoami?.();
+      return me ? { ...base, ...me } : base;
+    }
+    if (req.op === "card" && req.card && typeof req.card === "object") {
+      this.extras.onCard?.(req.card);
+      return base;
     }
     return base;
   }
@@ -37811,6 +38038,95 @@ async function serveHookSocket(path, channel) {
 
 // packages/peer-agent/src/wake.ts
 import { spawn } from "node:child_process";
+import { join as join7 } from "node:path";
+
+// packages/peer-agent/src/wake-budget.ts
+import { chmodSync as chmodSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync6, renameSync, rmSync as rmSync2, writeFileSync } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+var WakeBudget = class {
+  perSession;
+  perMachine;
+  windowMs;
+  file;
+  now;
+  /** Wake timestamps of this process (this session). */
+  session = [];
+  constructor(opts) {
+    this.perSession = opts.perSession ?? 6;
+    this.perMachine = opts.perMachine ?? 60;
+    this.windowMs = opts.windowMs ?? 36e5;
+    this.file = opts.file;
+    this.now = opts.now ?? Date.now;
+  }
+  /** True (and records the wake) when both limits allow it; false otherwise. Never throws. */
+  take() {
+    const now = this.now();
+    const session = this.session.filter((t) => now - t < this.windowMs);
+    if (session.length >= this.perSession) {
+      this.session = session;
+      return false;
+    }
+    const entries = this.readLedger(now);
+    if (entries !== null && entries.length >= this.perMachine) {
+      this.session = session;
+      return false;
+    }
+    this.session = [...session, now];
+    if (entries !== null) this.writeLedger([...entries, now]);
+    return true;
+  }
+  /** Wakes counted in the current window, for logs. */
+  used() {
+    const now = this.now();
+    const session = this.session.filter((t) => now - t < this.windowMs).length;
+    const entries = this.readLedger(now);
+    const machine = entries === null ? 0 : entries.filter((t) => now - t < this.windowMs).length;
+    return { session, machine };
+  }
+  /**
+   * The ledger entries inside the window, or null when the file cannot be read at all.
+   * A missing, empty or corrupt file counts as an empty ledger.
+   */
+  readLedger(now) {
+    let raw;
+    try {
+      raw = readFileSync6(this.file, "utf8");
+    } catch (err) {
+      const code = err.code;
+      if (code === "ENOENT") return [];
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v) => typeof v === "number" && Number.isFinite(v)).filter((t) => now - t < this.windowMs);
+  }
+  /** Append-and-truncate to the ledger, atomically. Returns false when it could not be written. */
+  writeLedger(entries) {
+    const dir = dirname2(this.file);
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    const kept = entries.slice(-Math.max(1, this.perMachine));
+    try {
+      if (!existsSync3(dir)) mkdirSync2(dir, { recursive: true, mode: 448 });
+      writeFileSync(tmp, JSON.stringify(kept), { mode: 384 });
+      chmodSync2(tmp, 384);
+      renameSync(tmp, this.file);
+      return true;
+    } catch {
+      try {
+        rmSync2(tmp, { force: true });
+      } catch {
+      }
+      return false;
+    }
+  }
+};
+
+// packages/peer-agent/src/wake.ts
 var IdleWaker = class {
   constructor(opts) {
     this.opts = opts;
@@ -37821,17 +38137,19 @@ var IdleWaker = class {
     if (status !== "idle" || waiting.size <= 0) return false;
     const now = (this.opts.now ?? Date.now)();
     if (now - this.last < (this.opts.minIntervalMs ?? 2e4)) return false;
+    if (this.opts.budget && !this.opts.budget.take()) return false;
     this.last = now;
     const n = waiting.size;
     this.opts.send(`[mesh] ${n} new ${n === 1 ? "message" : "messages"} from ${waiting.from.join(", ")}. Call the mesh read_messages tool to read ${n === 1 ? "it" : "them"}.`);
     return true;
   }
 };
-function herdrWaker(env = process.env, start = startDetached) {
+function herdrWaker(env = process.env, start = startDetached, budget) {
   if (env.MESH_WAKE !== "herdr" || env.HERDR_ENV !== "1" || !env.HERDR_PANE_ID) return void 0;
   const bin = env.HERDR_BIN_PATH || "herdr";
   const pane = env.HERDR_PANE_ID;
-  return new IdleWaker({ send: (text) => start(bin, ["agent", "prompt", pane, text]) });
+  const b = budget ?? new WakeBudget({ file: join7(meshDir(), "wakes.json") });
+  return new IdleWaker({ send: (text) => start(bin, ["agent", "prompt", pane, text]), budget: b });
 }
 function startDetached(file, args) {
   try {
@@ -37844,6 +38162,7 @@ function startDetached(file, args) {
 }
 
 // packages/peer-agent/src/index.ts
+import { join as join8 } from "node:path";
 import { fileURLToPath } from "node:url";
 var IDENTITY_POLL_MS = 3e3;
 async function main() {
@@ -37851,7 +38170,7 @@ async function main() {
     logJson("info", "peer.host_closed", { reason });
     process.exit(0);
   });
-  if (!existsSync3(defaultConfigPath())) {
+  if (!existsSync4(defaultConfigPath())) {
     const { server: server2 } = createMcpServer({ permissionRelay: false });
     server2.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
     logJson("info", "peer.unpaired", { config: defaultConfigPath() });
@@ -37919,27 +38238,61 @@ async function main() {
   };
   void refreshRoster();
   setInterval(refreshRoster, 6e4).unref();
+  const cardOn = process.env.MESH_CARD_WRITE !== "0";
+  const machine = cfg.machine ?? (process.env.MESH_MACHINE?.trim() || void 0);
+  const git = (args) => {
+    try {
+      return execFileSync4("git", args, { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return void 0;
+    }
+  };
+  const card0 = initialCard({ env: process.env, host: pullHost ? process.env.MESH_HOST ?? "" : void 0, machine, git });
+  const cards = new CardWriter((card) => client.writeCard(card), { enabled: cardOn });
+  cards.set({ ...card0, source: pullHost ? "hook" : "poll" });
+  const tasks = cardOn && card0.task_id ? new TaskDriver(
+    { get: (id) => client.getTask(id), patch: (id, b) => client.patchTask(id, b), rebind: (id) => client.rebindTask(id) },
+    card0.task_id,
+    sessionId,
+    (event, fields) => logJson("info", event, fields)
+  ) : void 0;
+  let hooksActive = false;
   if (!pull) setInterval(() => {
     const next = probeClaudeSession({ cwd });
     const nextLogin = readLogin();
-    if (next.name === identity.name && next.status === identity.status && nextLogin === login) return;
-    identity = next;
+    const status = hooksActive ? identity.status : next.status;
+    if (next.name === identity.name && status === identity.status && nextLogin === login) return;
+    const statusChanged = status !== identity.status;
+    identity = { ...next, status };
     login = nextLogin;
-    client.updateSelf({ name: next.name, status: next.status, ...nextLogin ? { login: nextLogin } : {} }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
+    client.updateSelf({ name: next.name, ...statusChanged ? { status } : {}, ...nextLogin ? { login: nextLogin } : {} }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
   }, IDENTITY_POLL_MS).unref();
-  const waker = inbox ? herdrWaker() : void 0;
-  if (inbox) {
+  const wakeBudget = new WakeBudget({ file: join8(meshDir(), "wakes.json") });
+  const waker = inbox ? herdrWaker(process.env, void 0, wakeBudget) : void 0;
+  {
     const setStatus = (status) => {
       if (identity.status === status) return;
       identity = { ...identity, status };
       client.updateSelf({ status }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
     };
     const hookPath = hookSocketPath(process.ppid);
-    serveHookSocket(hookPath, new HookChannel(inbox, setStatus)).then((server2) => {
+    const channel = new HookChannel(inbox ?? new Inbox(), setStatus, {
+      onEvent: (e) => {
+        if (!hooksActive && !pull) {
+          hooksActive = true;
+          cards.set({ source: "hook" });
+        }
+        void tasks?.on(e);
+      },
+      onCard: (c) => cards.set(cardFromHook(c)),
+      whoami: () => ({ session: sessionId, name: identity.name }),
+      wakeAllowed: () => wakeBudget.take()
+    });
+    serveHookSocket(hookPath, channel).then((server2) => {
       server2.unref();
       if (process.platform !== "win32") process.on("exit", () => {
         try {
-          rmSync2(hookPath, { force: true });
+          rmSync3(hookPath, { force: true });
         } catch {
         }
       });
@@ -37947,6 +38300,7 @@ async function main() {
     }).catch((err) => logJson("warn", "peer.hooks.listen_error", describeError(err)));
   }
   let cursor;
+  let taskStarted = false;
   const dispatcher = new InboundDispatcher({
     gate,
     sessionId,
@@ -37972,8 +38326,14 @@ async function main() {
     sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...login ? { login } : {}, ...pull ? { mode: "pull" } : {} }),
     onEnvelope: (e) => dispatcher.handle(e),
     // A host that reported busy/idle before the relay attached this session lost that update
-    // (404): send what we have now if it differs from what the stream was opened with.
+    // (404): send what we have now if it differs from what the stream was opened with. The card
+    // goes again in full (a restarted relay forgot it), and the first open starts the task driver.
     onOpen: (sent) => {
+      cards.resend();
+      if (!taskStarted) {
+        taskStarted = true;
+        void tasks?.start();
+      }
       if (sent.status === identity.status) return;
       client.updateSelf({ status: identity.status }).catch((err) => logJson("warn", "peer.session.update_error", describeError(err)));
     },
@@ -37988,6 +38348,15 @@ async function main() {
     });
     process.exit(1);
   });
+}
+function cardFromHook(c) {
+  const out = {};
+  for (const key of ["model", "repo", "branch"]) {
+    if (c[key] === void 0) continue;
+    const r = CardPatchSchema.shape[key].safeParse(c[key]);
+    if (r.success) out[key] = r.data;
+  }
+  return out;
 }
 function describeError(err) {
   if (!(err instanceof Error)) return { err: String(err) };
@@ -38020,3 +38389,6 @@ if (invokedAsScript()) {
     process.exit(1);
   });
 }
+export {
+  cardFromHook
+};
