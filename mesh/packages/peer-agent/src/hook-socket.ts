@@ -98,7 +98,7 @@ export class HookChannel {
         return { ...base, continue: true }
       }
       this.onStatus('idle')
-      if (req.op === 'stop') event('stop')
+      if (req.op === 'stop') event(natural ? 'done' : 'stop')
       return { ...base, continue: false }
     }
     if (req.op === 'blocked') {

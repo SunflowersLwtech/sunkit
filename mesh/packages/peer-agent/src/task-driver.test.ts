@@ -40,6 +40,29 @@ describe('TaskDriver', () => {
     expect(r.calls.filter(c => c.startsWith('patch'))).toEqual(['patch:working', 'patch:input_required', 'patch:working'])
   })
 
+  it('a turn that ended on its own starts a dispatched task even when the start of that turn was missed', async () => {
+    // A host that starts its MCP servers with the first prompt (Grok Build 1.0.62) runs that
+    // prompt's hook before the peer listens: the first thing the peer hears is the turn ending.
+    const r = api({ state: 'submitted', session: ME })
+    const d = new TaskDriver(r.a, ID, ME)
+    await d.start()
+    await d.on('done')
+    expect(r.state).toBe('working')
+    await d.on('blocked')
+    await d.on('done')
+    expect(r.state).toBe('working')
+    expect(r.calls.filter(c => c.startsWith('patch'))).toEqual(['patch:working', 'patch:input_required', 'patch:working'])
+  })
+
+  it('a session that starts, is interrupted or closes before any turn ended leaves a dispatched task submitted', async () => {
+    const r = api({ state: 'submitted', session: ME })
+    const d = new TaskDriver(r.a, ID, ME)
+    await d.start()
+    await d.on('idle'); await d.on('stop'); await d.on('end')
+    expect(r.state).toBe('submitted')
+    expect(r.calls.filter(c => c.startsWith('patch'))).toEqual([])
+  })
+
   it('takes the task over from the session it had before a restart', async () => {
     const r = api({ state: 'working', session: 's_01hrk7y0000000000000old000' })
     const d = new TaskDriver(r.a, ID, ME)
