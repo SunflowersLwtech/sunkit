@@ -37,3 +37,31 @@ describe('RelayClient', () => {
     expect(list[0]!.handle).toBe('alice')
   })
 })
+
+describe('RelayClient ledger calls', () => {
+  const rig = (status: number, body: unknown = {}) => {
+    const calls: { url: string; init: RequestInit }[] = []
+    const f = vi.fn(async (url: string | URL, init: RequestInit) => { calls.push({ url: String(url), init }); return new Response(JSON.stringify(body), { status }) })
+    return { calls, c: new RelayClient({ relayUrl: 'https://x', token: 'tok', sessionId: 's_01hrk7y0000000000000aaaaa1' }, { fetch: f as any }) }
+  }
+
+  it('writes card fields with the session, and says when the relay has not attached the session yet', async () => {
+    const ok = rig(200)
+    await ok.c.writeCard({ agent: 'claude', repo: 'sunkit' })
+    expect(JSON.parse(String(ok.calls[0]!.init.body))).toEqual({ session: 's_01hrk7y0000000000000aaaaa1', agent: 'claude', repo: 'sunkit' })
+    await expect(rig(404).c.writeCard({ agent: 'claude' })).rejects.toThrow(/not attached/)
+  })
+
+  it('reads, moves and rebinds a task as this session', async () => {
+    const g = rig(200, { state: 'submitted', assignee: { session: null } })
+    expect(await g.c.getTask('task_01HRK7Y0000000000000000000')).toEqual({ status: 200, task: { state: 'submitted', assignee: { session: null } } })
+    const p = rig(409, { error: 'task_terminal' })
+    expect(await p.c.patchTask('task_01HRK7Y0000000000000000000', { state: 'working' })).toEqual({ status: 409, error: 'task_terminal' })
+    const h = p.calls[0]!.init.headers as Record<string, string>
+    expect(h['x-mesh-session']).toBe('s_01hrk7y0000000000000aaaaa1')
+    expect(p.calls[0]!.init.method).toBe('PATCH')
+    const r = rig(200, {})
+    expect((await r.c.rebindTask('task_01HRK7Y0000000000000000000')).status).toBe(200)
+    expect(r.calls[0]!.url).toBe('https://x/v1/tasks/task_01HRK7Y0000000000000000000/rebind')
+  })
+})

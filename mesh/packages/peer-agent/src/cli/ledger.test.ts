@@ -537,3 +537,23 @@ describe('ledger CLI after review', () => {
     expect(calls[1]!.headers['x-mesh-session']).toBe('s_zzzzzzzzzzzzzzzz1')
   })
 })
+
+describe('ledger CLI inside a host', () => {
+  it('asks the host\'s peer which session it is when none is given', async () => {
+    const { impl, calls } = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const c = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', discoverSession: async () => 's_discoveredfromhook' }, { fetch: impl })
+    expect(await runTask(['create', '--title', 'x'], { client: c, ...io().deps })).toBe(0)
+    expect(calls[0]!.headers['x-mesh-session']).toBe('s_discoveredfromhook')
+  })
+
+  it('a given session wins over the host\'s, and no peer means no header', async () => {
+    const a = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const given = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', session: 's_givenonthecommand', discoverSession: async () => 's_discoveredfromhook' }, { fetch: a.impl })
+    await runTask(['create', '--title', 'x'], { client: given, ...io().deps })
+    expect(a.calls[0]!.headers['x-mesh-session']).toBe('s_givenonthecommand')
+    const b = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const none = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', discoverSession: async () => undefined }, { fetch: b.impl })
+    await runTask(['create', '--title', 'x'], { client: none, ...io().deps })
+    expect(b.calls[0]!.headers['x-mesh-session']).toBeUndefined()
+  })
+})

@@ -1,0 +1,20 @@
+{
+  "description": "mesh: tells this session's mesh peer when a turn starts, when Claude Code waits for a person, when the turn ends and when the session ends, so the relay's session card and task stay current. Silent and non-blocking.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-cli.mjs", "claude", "hook", "session-start"], "timeout": 10 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-cli.mjs", "claude", "hook", "turn"], "async": true } ] }
+    ],
+    "Notification": [
+      { "matcher": "permission_prompt|elicitation_dialog|agent_needs_input", "hooks": [ { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-cli.mjs", "claude", "hook", "blocked"], "async": true } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-cli.mjs", "claude", "hook", "stop"], "async": true } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server/mesh-cli.mjs", "claude", "hook", "end"], "timeout": 2 } ] }
+    ]
+  }
+}

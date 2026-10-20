@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { meshDir } from './paths.ts'
 import type { Inbox } from './inbox.ts'
+import type { HostEvent } from './task-driver.ts'
 
 /**
  * A local socket through which the host's lifecycle hooks talk to its pull-mode peer.
@@ -19,7 +20,24 @@ export type HookRequest =
   | { op: 'stop'; reason?: string; natural?: boolean }
   /** An idle host that can start a turn by itself (pi): woken once per new arrival, like a natural stop. */
   | { op: 'wake' }
-export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean }
+  /** The host waits for a person (a permission prompt). */
+  | { op: 'blocked' }
+  /** The session is ending. */
+  | { op: 'end' }
+  /** Which mesh session this host is (for commands run inside it). */
+  | { op: 'whoami' }
+  /** Card fields a hook knows and the peer does not (e.g. Claude Code's model); validated by the peer. */
+  | { op: 'card'; card: Record<string, unknown> }
+export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean; session?: string; name?: string }
+
+export interface HookExtras {
+  /** The host's lifecycle, for the task driver. */
+  onEvent?: (e: HostEvent) => void
+  onCard?: (card: Record<string, unknown>) => void
+  whoami?: () => { session: string; name: string } | undefined
+  /** The wake budget: false means a wake would go over it, so no turn is started. */
+  wakeAllowed?: () => boolean
+}
 
 export function hookSocketPath(hostPid: number, dir: string = meshDir()): string {
   if (process.platform === 'win32') {
@@ -34,38 +52,62 @@ export class HookChannel {
   private nudgedSeq = 0
   private notifiedSeq = 0
 
-  constructor(private readonly inbox: Inbox, private readonly onStatus: (s: 'busy' | 'idle') => void) {}
+  /** Push-mode hosts (Claude Code) pass an inbox that stays empty: they get messages through the channel. */
+  constructor(private readonly inbox: Inbox, private readonly onStatus: (s: 'busy' | 'idle') => void, private readonly extras: HookExtras = {}) {}
 
   handle(req: HookRequest): HookReply {
     const p = this.inbox.peek()
     const base = { unread: p.size, from: p.from }
+    const event = (e: HostEvent) => this.extras.onEvent?.(e)
     if (req.op === 'turn') {
       this.onStatus('busy')
+      event('turn')
       return base
     }
     if (req.op === 'tool') {
       // Hosts that keep what a hook adds to a tool result (Grok Build) are told once per new
       // arrival; a notice on every tool call would pile up in the conversation.
       this.onStatus('busy')
+      event('tool')
       const notify = p.size > 0 && p.seq > this.notifiedSeq
       if (notify) this.notifiedSeq = p.seq
       return { ...base, notify }
     }
     if (req.op === 'idle') {
       this.onStatus('idle')
+      event('idle')
       return base
     }
     if (req.op === 'stop' || req.op === 'wake') {
       // Keep going once per new arrival, and only after a turn that ended on its own:
       // never against the user's Esc, an error, or an invocation limit. A wake shares the
-      // count, so one arrival starts at most one extra turn however it is noticed.
+      // count, so one arrival starts at most one extra turn however it is noticed; a wake
+      // (the host starting a turn by itself) also has to fit the wake budget.
       const natural = req.op === 'wake' || (req.natural ?? req.reason === 'NO_TOOL_CALL')
-      if (p.size > 0 && p.seq > this.nudgedSeq && natural) {
+      if (p.size > 0 && p.seq > this.nudgedSeq && natural && (req.op !== 'wake' || (this.extras.wakeAllowed?.() ?? true))) {
         this.nudgedSeq = p.seq
         return { ...base, continue: true }
       }
       this.onStatus('idle')
+      if (req.op === 'stop') event('stop')
       return { ...base, continue: false }
+    }
+    if (req.op === 'blocked') {
+      event('blocked')
+      return base
+    }
+    if (req.op === 'end') {
+      this.onStatus('idle')
+      event('end')
+      return base
+    }
+    if (req.op === 'whoami') {
+      const me = this.extras.whoami?.()
+      return me ? { ...base, ...me } : base
+    }
+    if (req.op === 'card' && req.card && typeof req.card === 'object') {
+      this.extras.onCard?.(req.card)
+      return base
     }
     return base
   }

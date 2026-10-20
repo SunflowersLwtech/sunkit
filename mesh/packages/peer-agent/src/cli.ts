@@ -84,6 +84,14 @@ async function main(): Promise<void> {
     process.exitCode = await runDevin(args)
     return
   }
+  if (cmd === 'claude') {
+    // Run by the mesh plugin's hooks: never prints, always exits 0.
+    if (args[0] === 'hook') {
+      const { runClaudeHook } = await import('./cli/claude.ts')
+      process.exitCode = await runClaudeHook(args.slice(1))
+    }
+    return
+  }
   if (cmd === 'machine') {
     const { runMachine } = await import('./cli/ledger.ts')
     process.exitCode = await runMachine(args)
@@ -99,7 +107,7 @@ async function main(): Promise<void> {
     process.exitCode = await runLease(args)
     return
   }
-  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, machine, task, lease')
+  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, claude hook, machine, task, lease')
   process.exit(2)
 }
 

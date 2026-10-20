@@ -1,6 +1,7 @@
 import type { CommandRequest, LeaseView, MachineView, TaskView } from '@claude-mesh/shared'
 import { loadConfig, loadToken } from '../config.ts'
 import { resolveTarget, type SessionRow } from '../resolve-target.ts'
+import { askHostPeer } from './host-hook.ts'
 
 /**
  * The relay's ledger, from the command line: machines (what each machine last reported),
@@ -35,6 +36,8 @@ export interface LedgerClientOpts {
   token: string
   /** This session's id; sent as x-mesh-session so the relay can bind the request to it. */
   session?: string
+  /** When no session is given: ask the peer of the host this command runs in (its hook socket). */
+  discoverSession?: () => Promise<string | undefined>
 }
 
 interface Injected { fetch?: typeof globalThis.fetch }
@@ -84,6 +87,10 @@ export class LedgerClient {
   /** `session` may be an id, or a name / `name [ref]` as list_agents shows it, resolved once. */
   private session(): Promise<string | undefined> {
     const s = this.opts.session
+    if (!s && this.opts.discoverSession) {
+      this.sessionId ??= this.opts.discoverSession().catch(() => undefined)
+      return this.sessionId
+    }
     if (!s || SESSION_ID.test(s)) return Promise.resolve(s)
     this.sessionId ??= (async () => {
       const res = await this.fetchImpl(this.url('/v1/sessions'), { headers: { authorization: `Bearer ${this.opts.token}` } })
@@ -280,6 +287,8 @@ function makeCtx(globals: { relay?: string; session?: string }, deps: LedgerDeps
           relayUrl: relay ?? cfg.relay_url,
           token: loadToken(cfg.token_path),
           ...(sess ? { session: sess } : {}),
+          // Run inside a host (a Bash tool of Claude Code, pi, agy …): its peer knows the session.
+          discoverSession: async () => (await askHostPeer({ op: 'whoami' }))?.session,
         })
       }
       return cached

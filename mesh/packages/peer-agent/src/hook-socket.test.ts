@@ -158,3 +158,48 @@ describe('hook socket', () => {
     expect(existsSync(path)).toBe(true)
   })
 })
+
+describe('HookChannel: card, task and identity events', () => {
+  const make = (extra: ConstructorParameters<typeof HookChannel>[2] = {}) => {
+    const inbox = new Inbox()
+    const statuses: string[] = []
+    const events: string[] = []
+    const cards: unknown[] = []
+    const ch = new HookChannel(inbox, s => statuses.push(s), {
+      onEvent: e => events.push(e), onCard: c => cards.push(c), whoami: () => ({ session: 's_01hrk7y0000000000000aaaaa1', name: 'fr-inkrec' }), ...extra,
+    })
+    return { inbox, statuses, events, cards, ch }
+  }
+
+  it('forwards the host\'s lifecycle to the task driver', () => {
+    const { statuses, events, ch } = make()
+    ch.handle({ op: 'turn' }); ch.handle({ op: 'tool' }); ch.handle({ op: 'blocked' }); ch.handle({ op: 'stop', natural: true }); ch.handle({ op: 'end' })
+    expect(events).toEqual(['turn', 'tool', 'blocked', 'stop', 'end'])
+    expect(statuses).toEqual(['busy', 'busy', 'idle', 'idle'])
+  })
+
+  it('a stop that keeps the turn going is not an end of turn', () => {
+    const { inbox, events, ch } = make()
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'stop', natural: true }).continue).toBe(true)
+    expect(events).toEqual([])
+  })
+
+  it('answers whoami with this session, so commands run inside the host can name it', () => {
+    const { ch } = make()
+    expect(ch.handle({ op: 'whoami' })).toMatchObject({ session: 's_01hrk7y0000000000000aaaaa1', name: 'fr-inkrec' })
+  })
+
+  it('passes card fields from a hook to the card writer', () => {
+    const { cards, ch } = make()
+    ch.handle({ op: 'card', card: { model: 'claude-opus-5-5' } })
+    expect(cards).toEqual([{ model: 'claude-opus-5-5' }])
+  })
+
+  it('a wake the budget refuses starts no turn', () => {
+    const { inbox, statuses, ch } = make({ wakeAllowed: () => false })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'wake' }).continue).toBe(false)
+    expect(statuses).toEqual(['idle'])
+  })
+})
