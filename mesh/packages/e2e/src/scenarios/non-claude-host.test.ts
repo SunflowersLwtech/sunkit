@@ -273,6 +273,64 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect((await nextMessage(grok)).body).toBe('second')
   })
 
+  it('devin hooks: idle from the start so a fresh pane can be woken, one notice on a tool result, a stop kept going once, the session forgotten at its end', async () => {
+    const meshHome = join(h.humans.alice!.configDir, '.claude-mesh')
+    const work = mkdtempSync(join(tmpdir(), 'devin-wake-'))
+    const wakeLog = join(work, 'herdr-calls')
+    const fakeHerdr = join(work, 'herdr')
+    writeFileSync(fakeHerdr, `#!/bin/sh\nprintf '%s|' "$@" >> '${wakeLog}'\necho >> '${wakeLog}'\n`, { mode: 0o755 })
+    const devin = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'devin', MESH_SESSION_NAME: 'devin-e2e', MESH_WAKE: 'herdr', HERDR_ENV: '1', HERDR_PANE_ID: 'w9:p7', HERDR_BIN_PATH: fakeHerdr })
+    const bob = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-inbox' })
+    // Devin CLI runs hooks and MCP servers as children of its agent process (`devin acp`); here that is this test.
+    const sid = 'spiny-keyboard'
+    const hook = async (event: string, payload: object = {}) => {
+      const child = execFile(process.execPath, [CLI, 'devin', 'hook', event], { env: childEnv(meshHome, {}) })
+      child.stdin!.end(JSON.stringify({ hook_event_name: event, session_id: sid, ...payload }))
+      const out = await new Promise<string>((res, rej) => { let o = ''; child.stdout!.on('data', d => { o += d }); child.on('exit', c => (c === 0 ? res(o) : rej(new Error(`hook exit ${c}`)))) })
+      return JSON.parse(out) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string }; decision?: string; reason?: string }
+    }
+    const row = async (state: string) => until(async () => { const t = await bob.call('list_agents'); return new RegExp(`^devin-e2e \\[[0-9a-z]{6}\\] — alice@e2e · ${state} · pull`, 'm').test(t) ? t : undefined }, `devin-e2e ${state}`)
+    await row('unknown')
+    expect(await hook('SessionStart', { source: 'startup' })).toEqual({})
+    await row('idle')
+    expect(existsSync(join(meshHome, 'hooks', `devin-${sid}.pid`))).toBe(true)
+
+    await bob.call('send_message', { to: 'devin-e2e', message: 'first' })
+    const calls = await until(async () => (existsSync(wakeLog) ? readFileSync(wakeLog, 'utf8') : undefined), 'a herdr prompt')
+    expect(calls).toMatch(/^agent\|prompt\|w9:p7\|\[mesh\] 1 new message from bob-inbox \[[0-9a-z]{6}\]\. Call the mesh read_messages tool to read it\.\|\n$/)
+    expect(calls).not.toContain('first')
+
+    expect(await hook('UserPromptSubmit', { prompt: '[mesh] 1 new message' })).toEqual({})
+    await row('busy')
+    expect((await nextMessage(devin)).body).toBe('first')
+    expect(await hook('PostToolUse', { tool_name: 'mcp__mesh__read_messages', tool_response: { success: true } })).toEqual({})
+
+    await bob.call('send_message', { to: 'devin-e2e', message: 'second' })
+    const tool = await until(async () => { const o = await hook('PostToolUse', { tool_name: 'exec' }); return o.hookSpecificOutput ? o : undefined }, 'a notice on a tool result')
+    expect(tool.hookSpecificOutput).toEqual({ hookEventName: 'PostToolUse', additionalContext: expect.stringMatching(/^\[mesh\] 1 unread message from bob-inbox \[[0-9a-z]{6}\] is waiting\. Call the mesh read_messages tool/) })
+    expect(JSON.stringify(tool)).not.toContain('second')
+    expect(await hook('PostToolUse', { tool_name: 'exec' })).toEqual({})
+    const stop = await hook('Stop', { stop_hook_active: false, last_assistant_message: 'done' })
+    expect(stop.decision).toBe('block')
+    expect(stop.reason).not.toContain('second')
+    expect(await hook('Stop', { stop_hook_active: true })).toEqual({})
+    await row('idle')
+    expect((await nextMessage(devin)).body).toBe('second')
+
+    expect(await hook('SessionEnd', { reason: 'exit' })).toEqual({})
+    expect(existsSync(join(meshHome, 'hooks', `devin-${sid}.pid`))).toBe(false)
+
+    // Devin on Windows runs hooks through Git Bash: two shells between the hook and the agent. Same
+    // depth here (neither shell execs into the next), under a session id with nothing remembered.
+    await bob.call('send_message', { to: 'devin-e2e', message: 'third' })
+    await until(async () => ((await bob.call('list_agents')).match(/^devin-e2e .* · idle · pull/m) ? true : undefined), 'devin-e2e idle')
+    const deep = execFile('sh', ['-c', `sh -c '"$0" "$1" devin hook UserPromptSubmit; true' "$0" "$1"; true`, process.execPath, CLI], { env: childEnv(meshHome, {}) })
+    deep.stdin!.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'deep-session', prompt: 'x' }))
+    expect(await new Promise<string>(res => { let o = ''; deep.stdout!.on('data', d => { o += d }); deep.on('exit', () => res(o)) })).toBe('{}\n')
+    await row('busy')
+    expect(readFileSync(join(meshHome, 'hooks', 'devin-deep-session.pid'), 'utf8')).toBe(String(process.pid))
+  })
+
   it('mesh say --as sends one message under that name, with --reply-to', async () => {
     const inbox = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'bob-inbox' })
     const lister = await peer('alice', { MESH_JOIN: 'never' })
