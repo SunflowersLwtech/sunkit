@@ -37002,7 +37002,10 @@ var WANT = {
   turn: () => "working",
   tool: () => "working",
   blocked: () => "input_required",
-  // The turn ended: whatever blocked it is over. Nothing else changes on a stop.
+  // A turn ran to its end, so work on the task has started even if the peer missed the turn
+  // starting (hosts that start it with the first prompt), and whatever blocked it is over.
+  done: (cur) => cur === "submitted" || cur === "input_required" ? "working" : void 0,
+  // Cut short: whatever blocked it is over. Nothing else changes.
   stop: (cur) => cur === "input_required" ? "working" : void 0,
   idle: (cur) => cur === "input_required" ? "working" : void 0
 };
@@ -37999,7 +38002,7 @@ var HookChannel = class {
         return { ...base, continue: true };
       }
       this.onStatus("idle");
-      if (req.op === "stop") event("stop");
+      if (req.op === "stop") event(natural ? "done" : "stop");
       return { ...base, continue: false };
     }
     if (req.op === "blocked") {

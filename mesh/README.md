@@ -557,7 +557,10 @@ socket every joined peer now serves.
   following the name and the login). Claude Code has no event for a prompt being answered, so
   `input_required` clears at the end of that turn, not the moment the prompt is answered.
 - **agy, Grok Build, Devin CLI, pi** report through the hooks they already have; nothing changes
-  in their configuration.
+  in their configuration. Grok Build 1.0.62 starts its MCP servers with the first prompt, so the
+  peer joins (and writes the card) then, and misses that prompt's own hook: a turn that ends on
+  its own also moves a dispatched task to `working`. A turn cut short (Esc, an error, the session
+  closing) and a session that only started leave it `submitted`.
 - **Commands run inside a host** (`mesh task …`, `mesh lease …` from a Bash tool) find their
   session by asking the host's peer unless `--session` is given; `MESH_SESSION_ID` is the last
   resort (it may be inherited from an outer session).
