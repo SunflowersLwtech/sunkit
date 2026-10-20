@@ -1,6 +1,6 @@
 import { CommandRequestSchema, HerdrPaneIdSchema, type AgentKind, type CommandResult, type MachineReport } from '@claude-mesh/shared'
 import { parseSseEvent } from '../stream.ts'
-import { buildReport, cleanVersion, parseCcQuota, parseHerdrAgents } from './collect.ts'
+import { buildReport, cleanVersion, fitReport, parseCcQuota, parseHerdrAgents } from './collect.ts'
 
 // meshd: one per machine, holding an `executor` token bound to that machine. It reports what
 // the machine can run and what is running there, and answers the relay's read-only commands
@@ -56,13 +56,15 @@ export class Meshd {
 
   private async detectKinds(): Promise<MachineReport['kinds']> {
     if (this.kinds && this.now() - this.kinds.at < KINDS_EVERY_MS) return this.kinds.value
+    // In parallel: five sequential 10 s timeouts would outlast the relay's stale window.
+    const runs = await Promise.all(KINDS.map(kind => this.o.run(kind, ['--version'], 10_000)))
     const value: MachineReport['kinds'] = []
-    for (const kind of KINDS) {
-      const r = await this.o.run(kind, ['--version'], 10_000)
-      if (!r.ok) continue
+    KINDS.forEach((kind, i) => {
+      const r = runs[i]!
+      if (!r.ok) return
       const version = cleanVersion(r.stdout)
       value.push(version ? { kind, version } : { kind })
-    }
+    })
     this.kinds = { at: this.now(), value }
     return value
   }
@@ -80,9 +82,11 @@ export class Meshd {
   }
 
   async collect(): Promise<MachineReport> {
-    const [list, ver] = await Promise.all([
+    const [list, ver, kinds, seats] = await Promise.all([
       this.o.run(this.o.herdrBin, ['agent', 'list'], 15_000),
       this.o.run(this.o.herdrBin, ['--version'], 10_000),
+      this.detectKinds(),
+      this.readSeats(),
     ])
     let agents: MachineReport['agents'] = []
     let herdr: { ok: boolean; version?: string; error?: string } = { ok: list.ok }
@@ -96,7 +100,7 @@ export class Meshd {
     const load = this.o.load()
     return buildReport({
       version: MESHD_VERSION, herdr, agents,
-      kinds: await this.detectKinds(), seats: await this.readSeats(),
+      kinds, seats,
       load1: load.load1, cpus: load.cpus, ...(load.memUsedPct !== undefined ? { memUsedPct: load.memUsedPct } : {}),
       ...(this.o.maxActive !== undefined ? { maxActive: this.o.maxActive } : {}),
       roots: this.o.roots.map(r => ({ path: r.path, exists: r.exists() })),
@@ -113,9 +117,18 @@ export class Meshd {
     return this.post(body)
   }
 
-  private async post(body: MachineReport): Promise<number> {
+  private async post(body: MachineReport, retryOn429 = false): Promise<number> {
+    const fit = fitReport(body)
+    if (!fit) { this.o.log('error', 'meshd.report_unfit'); return 0 }
+    if (fit.dropped.length) this.o.log('warn', 'meshd.report_trimmed', { dropped: fit.dropped.join(' ') })
     try {
-      const res = await this.o.fetch(new URL('/v1/machines/self', this.o.relayUrl), { method: 'POST', headers: this.headers(true), body: JSON.stringify(body) })
+      const res = await this.o.fetch(new URL('/v1/machines/self', this.o.relayUrl), { method: 'POST', headers: this.headers(true), body: JSON.stringify(fit.report) })
+      if (res.status === 429 && retryOn429) {
+        const wait = Math.min(10, Number(res.headers.get('retry-after')) || 3)
+        await res.text().catch(() => '')
+        await this.sleep(wait * 1000)
+        return this.post(body, false)
+      }
       if (res.status !== 200) this.o.log('warn', 'meshd.report_rejected', { status: res.status, body: (await res.text()).slice(0, 200) })
       return res.status
     } catch (err) {
@@ -134,7 +147,8 @@ export class Meshd {
       // A fresh report right now, so the caller's next machine list is current.
       const r = await this.collect().catch(() => null)
       if (!r) return { ok: false, error: 'collect failed' }
-      const status = await this.post(r)
+      // A probe right after a scheduled report can meet the relay's 2-per-5s limit: wait and send once more.
+      const status = await this.post(r, true)
       return status === 200
         ? { ok: true, output: JSON.stringify({ herdr: r.herdr.ok, agents: r.agents.length, active: r.active, blocked: r.blocked }) }
         : { ok: false, error: `report ${status}` }
@@ -184,7 +198,7 @@ export class Meshd {
           continue
         }
         if (res.status !== 200 || !res.body) throw new Error(`stream http ${res.status}`)
-        attempt = 0
+        const openedAt = this.now()
         this.o.log('info', 'meshd.stream.open')
         const reader = (res.body as ReadableStream<Uint8Array>).getReader()
         const decoder = new TextDecoder()
@@ -197,9 +211,13 @@ export class Meshd {
           buf = parts.pop() ?? ''
           for (const block of parts) {
             const ev = parseSseEvent(block)
+            if (ev) attempt = 0
             if (ev?.event === 'command') void this.onCommand(ev.data)
           }
         }
+        // Only a stream that stayed up resets the backoff: one that answers 200 and closes at once
+        // (a proxy, a captive page) must not turn this into a 2-per-second loop.
+        if (this.now() - openedAt >= 10_000) attempt = 0
       } catch (err) {
         if (this.stopped) break
         this.o.log('warn', 'meshd.stream.disconnect', { err: String(err instanceof Error ? err.message : err) })

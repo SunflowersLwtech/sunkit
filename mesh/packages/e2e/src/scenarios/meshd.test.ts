@@ -23,6 +23,11 @@ beforeAll(async () => {
 })
 afterAll(() => { rmSync(outDir, { recursive: true, force: true }) })
 
+// An agent CLI the way npm installs one: a node script found through `env`.
+const PI_STUB = `#!/usr/bin/env node
+console.log('1.3.0')
+`
+
 const HERDR_STUB = `#!/usr/bin/env node
 const a = process.argv.slice(2)
 if (a[0] === '--version') { console.log('herdr 0.9.5'); process.exit(0) }
@@ -78,10 +83,12 @@ describe('L3: meshd against the relay', () => {
     const home = join(dir, 'home'); const bin = join(dir, 'bin'); const meshHome = join(dir, 'meshd-home')
     for (const d of [home, bin, meshHome]) mkdirSync(d, { recursive: true })
     writeFileSync(join(bin, 'herdr'), HERDR_STUB); chmodSync(join(bin, 'herdr'), 0o755)
+    writeFileSync(join(bin, 'pi'), PI_STUB); chmodSync(join(bin, 'pi'), 0o755)
     writeFileSync(join(meshHome, 'token'), token, { mode: 0o600 })
     writeFileSync(join(meshHome, 'config.json'), JSON.stringify({ relay_url: h.relayUrl, token_path: join(meshHome, 'token') }))
+    // No node on PATH, as under systemd on a machine whose node comes from a version manager.
     proc = spawn(process.execPath, [MESHD], {
-      env: { PATH: `${bin}:${dirname(process.execPath)}`, HOME: home, MESH_HOME: meshHome, MESHD_MAX_ACTIVE: '3', ...extraEnv },
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home, MESH_HOME: meshHome, MESHD_MAX_ACTIVE: '3', ...extraEnv },
       stdio: ['ignore', 'ignore', 'pipe'],
     })
     proc.stderr!.on('data', d => { stderr += d })
@@ -98,6 +105,7 @@ describe('L3: meshd against the relay', () => {
       return m && m.connected ? m : undefined
     }, 'e2e-box reported and connected')
     expect(machine.report).toMatchObject({ herdr: { ok: true, version: '0.9.5' }, active: 1, max_active: 3, agents: [{ name: 'stub-worker', pane: 'w9:p1' }] })
+    expect((machine.report as unknown as { kinds: unknown[] }).kinds).toContainEqual({ kind: 'pi', version: '1.3.0' })
 
     const issued = await api(h, orch, 'POST', '/v1/machines/e2e-box/commands', { op: 'read', args: { pane: 'w9:p1', lines: 12 } })
     expect(issued.status).toBe(202)

@@ -1,5 +1,6 @@
 import type { CommandRequest, LeaseView, MachineView, TaskView } from '@claude-mesh/shared'
 import { loadConfig, loadToken } from '../config.ts'
+import { resolveTarget, type SessionRow } from '../resolve-target.ts'
 
 /**
  * The relay's ledger, from the command line: machines (what each machine last reported),
@@ -46,6 +47,18 @@ export class LedgerError extends Error {
   }
 }
 
+/**
+ * Text another session wrote (titles, progress, names, a screen) printed into this terminal: escape
+ * sequences in it would drive the terminal, so control characters become '?'. `block` keeps lines.
+ */
+export function clean(text: string, block = false): string {
+  return block
+    ? text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '?')
+    : text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
+}
+
+const SESSION_ID = /^s_[0-9a-z]+$/
+
 function parseJson(text: string): unknown {
   if (!text) return undefined
   try { return JSON.parse(text) as unknown } catch { return undefined }
@@ -62,9 +75,26 @@ function errorText(status: number, text: string, body: unknown): string {
 
 export class LedgerClient {
   private fetchImpl: typeof globalThis.fetch
+  private sessionId: Promise<string | undefined> | undefined
 
   constructor(private opts: LedgerClientOpts, inj: Injected = {}) {
     this.fetchImpl = inj.fetch ?? globalThis.fetch
+  }
+
+  /** `session` may be an id, or a name / `name [ref]` as list_agents shows it, resolved once. */
+  private session(): Promise<string | undefined> {
+    const s = this.opts.session
+    if (!s || SESSION_ID.test(s)) return Promise.resolve(s)
+    this.sessionId ??= (async () => {
+      const res = await this.fetchImpl(this.url('/v1/sessions'), { headers: { authorization: `Bearer ${this.opts.token}` } })
+      const text = await res.text()
+      const body = parseJson(text)
+      if (res.status !== 200 || !Array.isArray(body)) throw new LedgerError(res.status, body, errorText(res.status, text, body))
+      const r = resolveTarget(s, body as SessionRow[], '')
+      if (!r.ok) throw new LedgerError(404, null, `session ${r.error}`)
+      return r.target.session_id
+    })()
+    return this.sessionId
   }
 
   private url(path: string, query?: Record<string, string | number | undefined>): URL {
@@ -73,16 +103,17 @@ export class LedgerClient {
     return u
   }
 
-  private headers(): Record<string, string> {
+  private async headers(): Promise<Record<string, string>> {
+    const session = await this.session()
     return {
       authorization: `Bearer ${this.opts.token}`,
       'content-type': 'application/json',
-      ...(this.opts.session ? { 'x-mesh-session': this.opts.session } : {}),
+      ...(session ? { 'x-mesh-session': session } : {}),
     }
   }
 
   private async request<T>(url: URL, init: RequestInit = {}): Promise<T> {
-    const res = await this.fetchImpl(url, { ...init, headers: this.headers() })
+    const res = await this.fetchImpl(url, { ...init, headers: await this.headers() })
     const text = await res.text()
     const body = parseJson(text)
     if (res.status < 200 || res.status >= 300) {
@@ -226,6 +257,8 @@ function splitGlobals(args: string[]): { rest: string[]; relay?: string; session
     const a = args[i]!
     if (a === '--relay' && i + 1 < args.length) { relay = args[++i]; continue }
     if (a === '--session' && i + 1 < args.length) { session = args[++i]; continue }
+    if (a.startsWith('--relay=')) { relay = a.slice('--relay='.length); continue }
+    if (a.startsWith('--session=')) { session = a.slice('--session='.length); continue }
     rest.push(a)
   }
   return { rest, ...(relay !== undefined ? { relay } : {}), ...(session !== undefined ? { session } : {}) }
@@ -259,7 +292,7 @@ function machineLine(m: MachineView): string {
   const seats = r.seats
     .map(s => (s.five_hour_pct === undefined ? s.email : `${s.email} ${s.five_hour_pct}%`))
     .join(' ')
-  return [
+  return clean([
     m.machine,
     m.stale ? 'stale' : 'ok',
     m.connected ? 'connected' : 'offline',
@@ -268,18 +301,18 @@ function machineLine(m: MachineView): string {
     `active ${r.active}/${r.max_active ?? '?'}`,
     `seats ${seats || 'none'}`,
     `agents ${r.agents.length}`,
-  ].join('  ')
+  ].join('  '))
 }
 
 function taskLine(t: TaskView): string {
   const name = t.assignee.name ?? '-'
   const machine = t.assignee.machine ?? '-'
-  return `${t.id}  ${t.state}${t.stale ? ' stale' : ''}  ${name}@${machine}  ${t.title}`
+  return clean(`${t.id}  ${t.state}${t.stale ? ' stale' : ''}  ${name}@${machine}  ${t.title}`)
 }
 
 function leaseLine(l: LeaseView): string {
   const holder = l.holder ? `${l.holder.name ?? '-'}@${l.holder.machine ?? '-'}` : '(hidden)'
-  return `${l.name}  ${holder}  ${l.ttl_remaining_s}s left  ${l.id}`
+  return clean(`${l.name}  ${holder}  ${l.ttl_remaining_s}s left  ${l.id}`)
 }
 
 /** Wait for a command to finish; the relay answers with whatever the machine reported. */
@@ -291,11 +324,11 @@ async function awaitCommand(cmd: CommandView, ctx: Ctx): Promise<number> {
     current = await ctx.client().getCommand(current.id)
   }
   if (current.state === 'done') {
-    ctx.out(current.result?.output ?? '')
+    ctx.out(clean(current.result?.output ?? '', true))
     return 0
   }
   if (current.state === 'failed') {
-    ctx.err(`failed: ${current.reason ?? current.result?.error ?? 'unknown error'}`)
+    ctx.err(clean(`failed: ${current.reason ?? current.result?.error ?? 'unknown error'}`))
     return 1
   }
   ctx.err(`command ${current.id} did not finish (state ${current.state})`)
@@ -364,7 +397,7 @@ export async function runTask(args: string[], deps: LedgerDeps = {}): Promise<nu
       if (flags.json) { ctx.out(JSON.stringify(body)); return 0 }
       for (const t of body.tasks) {
         ctx.out(taskLine(t))
-        if (t.progress) ctx.out(`  ${t.progress}`)
+        if (t.progress) ctx.out(`  ${clean(t.progress)}`)
       }
       return 0
     }
@@ -466,7 +499,7 @@ export async function runLease(args: string[], deps: LedgerDeps = {}): Promise<n
           const message = err.body && typeof err.body === 'object' && typeof (err.body as { message?: unknown }).message === 'string'
             ? (err.body as { message: string }).message
             : undefined
-          ctx.err(message ?? err.message)
+          ctx.err(clean(message ?? err.message))
           return 1
         }
         throw err

@@ -121,3 +121,41 @@ describe('meshd commands', () => {
     expect(h.calls.filter(c => c.url.endsWith('/stream'))).toHaveLength(3)
   })
 })
+
+describe('meshd after review', () => {
+  it('does not hammer a relay whose stream answers 200 and closes at once: the backoff keeps growing', async () => {
+    const sleeps: number[] = []
+    const h = harness({ streams: [[], [], [], [], []] })
+    ;(h.meshd as unknown as { sleep: (ms: number) => Promise<void> }).sleep = async ms => { sleeps.push(ms) }
+    await h.meshd.streamLoop()
+    expect(sleeps.slice(0, 4)).toEqual([500, 1000, 2000, 4000])
+  })
+
+  it('drops the field or entry the relay would refuse instead of losing the whole report', async () => {
+    const h = harness({
+      run: (file, args) => {
+        if (args[0] === 'agent' && args[1] === 'list') return { ok: true, stdout: JSON.stringify({ result: { agents: [{ agent: 'claude', agent_status: 'idle', name: 'ok', pane_id: 'w4:p1' }] } }) }
+        return { ok: false, stdout: '' }
+      },
+    })
+    ;(h.meshd as unknown as { o: { maxActive: number } }).o.maxActive = 5000
+    expect(await h.meshd.report()).toBe(200)
+    const post = h.calls.find(c => c.url.endsWith('/v1/machines/self'))!
+    expect(MachineReportSchema.safeParse(post.body).success).toBe(true)
+    expect(post.body).not.toHaveProperty('max_active')
+    expect(post.body).toMatchObject({ agents: [{ name: 'ok' }] })
+  })
+
+  it('a probe that meets the relay\'s report limit waits and tries once more', async () => {
+    let n = 0
+    const h = harness()
+    const orig = (h.meshd as unknown as { o: { fetch: typeof fetch } }).o.fetch
+    ;(h.meshd as unknown as { o: { fetch: typeof fetch } }).o.fetch = (async (u: URL | string, init?: RequestInit) => {
+      if (String(u).endsWith('/v1/machines/self') && n++ === 0) return new Response('{"error":"rate_limited"}', { status: 429, headers: { 'retry-after': '1' } })
+      return orig(u, init)
+    }) as typeof fetch
+    const r = await h.meshd.execute({ op: 'probe' })
+    expect(r.ok).toBe(true)
+    expect(n).toBe(2)
+  })
+})

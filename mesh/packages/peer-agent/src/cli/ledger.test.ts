@@ -500,3 +500,40 @@ describe('the ledger client without an injected one', () => {
     expect(calls[0]!.headers['x-mesh-session']).toBe('s_flagged')
   })
 })
+
+describe('ledger CLI after review', () => {
+  it('prints titles and progress without control characters', async () => {
+    const { impl } = fakeRelay([{ body: { tasks: [{ ...TASK, title: 'evil\u001b]0;pwned\u0007title', progress: 'p\u001b[2Jx' }], seq: 1 } }])
+    const o = io()
+    expect(await runTask(['list'], { client: client(impl), ...o.deps })).toBe(0)
+    expect(o.out.join('\n')).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+    expect(o.out.join('\n')).toContain('evil')
+  })
+
+  it('accepts --session=<id> and --relay=<url> as well as the spaced forms', async () => {
+    const seen: Array<{ origin: string; session: string | undefined }> = []
+    vi.stubGlobal('fetch', async (url: string | URL, init: RequestInit = {}) => {
+      seen.push({ origin: new URL(String(url)).origin, session: (init.headers as Record<string, string>)['x-mesh-session'] })
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const home = mkdtempSync(join(tmpdir(), 'mesh-ledger-'))
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ relay_url: 'https://relay.local', token_path: join(home, 'token') }))
+    writeFileSync(join(home, 'token'), 'file-token\n')
+    process.env.MESH_HOME = home
+    delete process.env.MESH_SESSION_ID
+    expect(await runMachine(['list', '--relay=https://other.relay', '--session=s_equalsform'], io().deps)).toBe(0)
+    expect(seen[0]).toEqual({ origin: 'https://other.relay', session: 's_equalsform' })
+  })
+
+  it('resolves --session given as a session name to its id', async () => {
+    const { impl, calls } = fakeRelay([
+      { body: [{ session_id: 's_zzzzzzzzzzzzzzzz1', ref: 'zzzzz1', name: 'fr-inkrec', account: 'a', device: 'd', status: 'idle', last_seen: '' }] },
+      { status: 201, body: { ...TASK } },
+    ])
+    const o = io()
+    const c = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', session: 'fr-inkrec' }, { fetch: impl })
+    expect(await runTask(['create', '--title', 'x'], { client: c, ...o.deps })).toBe(0)
+    expect(calls[0]!.path).toBe('/v1/sessions')
+    expect(calls[1]!.headers['x-mesh-session']).toBe('s_zzzzzzzzzzzzzzzz1')
+  })
+})

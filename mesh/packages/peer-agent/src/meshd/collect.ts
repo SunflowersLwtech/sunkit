@@ -1,4 +1,4 @@
-import { MachineAgentSchema, type MachineAgent, type MachineReport } from '@claude-mesh/shared'
+import { MachineAgentSchema, MachineReportSchema, type MachineAgent, type MachineReport } from '@claude-mesh/shared'
 
 // Pure parsing for meshd: turns what herdr, cc-quota and `<agent> --version` print into the
 // relay's closed MachineReport shape. Anything that does not fit is dropped, never forwarded raw.
@@ -54,7 +54,7 @@ interface QuotaAccount {
   blocked?: unknown
 }
 
-/** `cc-quota --json` → seats. Only the default config dir is a seat this machine dispatches on. */
+/** `cc-quota --json` → seats: every config dir cc-quota reads (dispatch picks the default one). */
 export function parseCcQuota(raw: unknown): MachineReport['seats'] {
   const accounts = (raw as { accounts?: unknown } | null)?.accounts
   if (!Array.isArray(accounts)) return []
@@ -111,4 +111,39 @@ export function buildReport(i: CollectInput): MachineReport {
     agents: i.agents,
     roots: i.roots.slice(0, 8),
   }
+}
+
+const LISTS = ['agents', 'seats', 'kinds', 'roots'] as const
+const OPTIONAL = ['max_active'] as const
+
+/**
+ * Makes a report fit the relay's schema by dropping what does not: an offending list entry or an
+ * optional field. One bad value must not cost the whole report (the relay refuses it all).
+ * Returns null when the problem is in a field that cannot be dropped.
+ */
+export function fitReport(report: MachineReport): { report: MachineReport; dropped: string[] } | null {
+  let r: Record<string, unknown> = { ...report }
+  const dropped: string[] = []
+  for (let round = 0; round < 5; round++) {
+    const parsed = MachineReportSchema.safeParse(r)
+    if (parsed.success) return { report: parsed.data, dropped }
+    const remove = new Map<string, Set<number>>()
+    for (const issue of parsed.error.issues) {
+      const [top, idx] = issue.path
+      if (typeof top === 'string' && (LISTS as readonly string[]).includes(top) && typeof idx === 'number') {
+        if (!remove.has(top)) remove.set(top, new Set())
+        remove.get(top)!.add(idx)
+      } else if (typeof top === 'string' && (OPTIONAL as readonly string[]).includes(top)) {
+        delete r[top]
+        dropped.push(top)
+      } else {
+        return null
+      }
+    }
+    for (const [top, idxs] of remove) {
+      r = { ...r, [top]: (r[top] as unknown[]).filter((_, i) => !idxs.has(i)) }
+      dropped.push(`${top}[${[...idxs].join(',')}]`)
+    }
+  }
+  return null
 }

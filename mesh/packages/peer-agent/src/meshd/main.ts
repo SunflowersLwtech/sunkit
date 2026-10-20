@@ -2,9 +2,8 @@
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { cpus, freemem, homedir, loadavg, platform, totalmem } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadEnvFiles } from '@claude-mesh/shared'
 import { assertTokenNotInRepo, loadConfig, loadToken } from '../config.ts'
 import { Meshd, type Log, type Runner } from './daemon.ts'
 
@@ -16,11 +15,15 @@ const log: Log = (level, event, fields = {}) => {
   process.stderr.write(JSON.stringify({ level, event, at: new Date().toISOString(), ...fields }) + '\n')
 }
 
-/** Service managers start with a bare PATH; add the usual places agents and herdr live. */
+/**
+ * Service managers start with a bare PATH. The node running meshd goes first: agent CLIs such as
+ * pi start with `#!/usr/bin/env node`, and on a machine whose node comes from a version manager
+ * there is no node on the default PATH. Then the usual places agents and herdr live.
+ */
 function searchPath(): string {
   const home = homedir()
   const extra = [join(home, '.local/bin'), join(home, '.bun/bin'), '/opt/homebrew/bin', '/usr/local/bin']
-  return [...(process.env.PATH ?? '').split(delimiter).filter(Boolean), ...extra].join(delimiter)
+  return [dirname(process.execPath), ...(process.env.PATH ?? '').split(delimiter).filter(Boolean), ...extra].join(delimiter)
 }
 
 const run: Runner = (file, args, timeoutMs) => new Promise(resolve => {
@@ -31,7 +34,8 @@ const run: Runner = (file, args, timeoutMs) => new Promise(resolve => {
 })
 
 export async function main(): Promise<void> {
-  loadEnvFiles()
+  // No .env loading: under a service manager the working directory is arbitrary, and whatever a
+  // stray .env holds would be handed to every child process.
   if (!process.env.MESH_HOME) {
     log('error', 'meshd.no_mesh_home', { hint: 'set MESH_HOME to the directory holding this machine\'s executor token (not ~/.claude-mesh)' })
     process.exit(2)
@@ -51,7 +55,7 @@ export async function main(): Promise<void> {
     ccQuota: existsSync(ccQuota) ? ccQuota : null,
     // On a Mac a LaunchAgent already refreshes cc-quota's cache every 5 minutes; read that instead of calling again.
     ccQuotaArgs: platform() === 'darwin' ? ['--json', '--cache-only'] : ['--json'],
-    ...(Number.isInteger(maxActive) && maxActive > 0 ? { maxActive } : {}),
+    ...(Number.isInteger(maxActive) && maxActive > 0 && maxActive <= 1000 ? { maxActive } : {}),
     roots: roots.map(p => ({ path: p, exists: () => existsSync(join(home, p.slice(2))) })),
     load: () => ({ load1: loadavg()[0] ?? 0, cpus: cpus().length || 1, memUsedPct: (1 - freemem() / totalmem()) * 100 }),
     run,
