@@ -22,20 +22,22 @@ export function presenceRoute(deps: Deps) {
     const team = c.get('team_id')
     const handle = c.get('human').handle
     const label = c.get('token').label
-    deps.presence.set(team, handle, label, parsed.data)
+    const grant = c.get('grant')
+    deps.presence.set(team, handle, label, parsed.data, grant.workgroup)
 
     const meta: Record<string, string> = { label }
     if (parsed.data.cwd !== undefined) meta.cwd = parsed.data.cwd
     if (parsed.data.branch !== undefined) meta.branch = parsed.data.branch
     if (parsed.data.repo !== undefined) meta.repo = parsed.data.repo
 
+    const route = { from_wg: grant.workgroup, scope: grant.visible }
     const envelope = deps.store.insert(team, handle, {
       to: TEAM_BROADCAST_HANDLE,
       kind: 'presence_update',
       content: parsed.data.summary,
       meta,
-    })
-    deps.fanout.deliver(envelope)
+    }, null, route)
+    deps.fanout.deliver(envelope, route)
     return c.json({ ok: true })
   })
   return app

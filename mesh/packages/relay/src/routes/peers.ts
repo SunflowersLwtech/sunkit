@@ -14,11 +14,15 @@ export function peersRoute(deps: Deps) {
   const app = new Hono<{ Variables: AuthContext }>()
   app.use('*', bearerAuth(deps.db, { requireTier: 'human' }))
 
-  let cached: { at: number; team_id: string; body: string } | null = null
+  let cached: { at: number; key: string; body: string } | null = null
 
   app.get('/', c => {
     const team = c.get('team_id')
-    if (cached && cached.team_id === team && Date.now() - cached.at < TTL_MS) {
+    // Handles stay listed for everyone (the sender roster needs them); presence detail is
+    // filtered by workgroup, so the cache is per (team, visible set).
+    const visible = c.get('grant').visible
+    const key = `${team}|${[...visible].sort().join(',')}`
+    if (cached && cached.key === key && Date.now() - cached.at < TTL_MS) {
       return c.body(cached.body, 200, { 'content-type': 'application/json' })
     }
     const humans = deps.db.prepare(
@@ -26,7 +30,7 @@ export function peersRoute(deps: Deps) {
     ).all(team) as HumanRow[]
 
     const list = humans.map(h => {
-      const snap = deps.presence.get(team, h.handle)
+      const snap = deps.presence.get(team, h.handle, visible)
       return {
         handle: h.handle,
         display_name: h.display_name,
@@ -37,7 +41,7 @@ export function peersRoute(deps: Deps) {
       }
     })
     const body = JSON.stringify(list)
-    cached = { at: Date.now(), team_id: team, body }
+    cached = { at: Date.now(), key, body }
     return c.body(body, 200, { 'content-type': 'application/json' })
   })
   return app

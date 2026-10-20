@@ -4,7 +4,7 @@ import { isValidMessageId, SessionIdSchema, SessionNameSchema, LoginSchema, type
 import { SessionOwnershipError, type SessionMode, type SessionStatus } from '../sessions/registry.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
-import type { Subscriber } from '../fanout.ts'
+import type { Subscriber, Viewer } from '../fanout.ts'
 
 const PING_INTERVAL_MS = 25_000
 
@@ -29,6 +29,7 @@ export function streamRoute(deps: Deps) {
       const status: SessionStatus | undefined =
         statusQ === 'busy' || statusQ === 'idle' ? statusQ : undefined
       const mode: SessionMode = c.req.query('mode') === 'pull' ? 'pull' : 'push'
+      const grant = c.get('grant')
       try {
         deps.sessions!.attach({
           session_id: sid.data,
@@ -41,6 +42,9 @@ export function streamRoute(deps: Deps) {
           login: LoginSchema.safeParse(c.req.query('login')).data,
           status,
           mode,
+          workgroup: grant.workgroup,
+          visible: grant.visible,
+          role: grant.role,
         })
       } catch (err) {
         if (err instanceof SessionOwnershipError) return c.json({ error: 'session_owned_elsewhere' }, 409)
@@ -52,25 +56,37 @@ export function streamRoute(deps: Deps) {
     return streamSSE(c, async stream => {
       const team_id = c.get('team_id')
       const handle = c.get('human').handle
+      const grant = c.get('grant')
+      // Read live: a session may move into another granted workgroup while its stream is open.
+      const viewer = (): Viewer => ({
+        workgroup: (session ? deps.sessions!.get(session)?.workgroup : undefined) ?? grant.workgroup,
+        visible: grant.visible,
+      })
 
       const backlog = since
-        ? deps.store.fetchSince(team_id, handle, since, session)
-        : deps.store.fetchPendingFor(team_id, handle, session)
+        ? deps.store.fetchSince(team_id, handle, since, session, viewer())
+        : deps.store.fetchPendingFor(team_id, handle, session, viewer())
       for (const e of backlog) {
         await stream.writeSSE({ event: 'message', data: JSON.stringify(e) })
         deps.store.markDelivered(e.id)
       }
 
-      const queue: string[] = []
+      // Messages are acked (marked delivered) once written; ledger events are fire-and-forget.
+      const queue: Array<{ event: string; data: string; id?: string }> = []
       let notify: (() => void) | null = null
       const sub: Subscriber = {
         handle,
         team_id,
         ...(session ? { session } : {}),
+        viewer,
         deliver: (e: Envelope) => {
-          queue.push(JSON.stringify(e))
+          queue.push({ event: 'message', data: JSON.stringify(e), id: e.id })
           notify?.()
-        }
+        },
+        deliverEvent: (event: string, data: string) => {
+          queue.push({ event, data })
+          notify?.()
+        },
       }
       deps.fanout.subscribe(sub)
 
@@ -96,10 +112,9 @@ export function streamRoute(deps: Deps) {
             })
             continue
           }
-          const payload = queue.shift()!
-          await stream.writeSSE({ event: 'message', data: payload })
-          const parsed = JSON.parse(payload) as Envelope
-          deps.store.markDelivered(parsed.id)
+          const item = queue.shift()!
+          await stream.writeSSE({ event: item.event, data: item.data })
+          if (item.id) deps.store.markDelivered(item.id)
         }
       } finally {
         cleanup()

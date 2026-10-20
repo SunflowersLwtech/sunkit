@@ -1,4 +1,4 @@
-import { sessionRef } from '@claude-mesh/shared'
+import { sessionRef, type AgentKind, type HerdrLocation, type Role } from '@claude-mesh/shared'
 
 export type SessionStatus = 'busy' | 'idle' | 'unknown'
 /** push: the host shows messages as they arrive (Claude Code channels); pull: the host reads them when it checks its inbox. */
@@ -19,6 +19,24 @@ export interface SessionEntry {
   last_seen: string
   /** Epoch ms when the last stream closed; the entry stays addressable until the grace period ends. */
   detached_at?: number
+  /** Set by the relay from the token's grant (or a granted move); never taken from the client as-is. */
+  workgroup: string
+  /** The token's role at attach time; display only, every check re-reads the request token's grant. */
+  role: Role
+  card: SessionCard
+  /** Epoch ms of the last card write (attach or self-update). */
+  card_at: number
+}
+
+/** The A2A-style card a session's host writes about itself (fixed fields, validated upstream). */
+export interface SessionCard {
+  agent?: AgentKind
+  model?: string
+  repo?: string
+  branch?: string
+  herdr?: HerdrLocation
+  task_id?: string
+  source?: 'hook' | 'poll' | 'manual'
 }
 
 export interface SessionView {
@@ -33,6 +51,26 @@ export interface SessionView {
   status: SessionStatus | 'reconnecting'
   mode: SessionMode
   last_seen: string
+  workgroup: string
+  role: Role
+  agent?: AgentKind
+  model?: string
+  repo?: string
+  branch?: string
+  herdr?: HerdrLocation
+  task_id?: string
+  source?: 'hook' | 'poll' | 'manual'
+  /** Relay time of the last card write, and its age, so clients with skewed clocks agree. */
+  updated_at: string
+  age_s: number
+}
+
+export type CardPatch = { [K in keyof SessionCard]?: SessionCard[K] | undefined } & {
+  name?: string | undefined
+  cwd?: string | undefined
+  login?: string | undefined
+  status?: SessionStatus | undefined
+  workgroup?: string | undefined
 }
 
 export interface AttachInput {
@@ -46,6 +84,10 @@ export interface AttachInput {
   login?: string | undefined
   status?: SessionStatus | undefined
   mode?: SessionMode | undefined
+  workgroup?: string | undefined
+  /** The token's granted workgroups: a reconnect keeps an earlier move only while it is still granted. */
+  visible?: readonly string[] | undefined
+  role?: Role | undefined
 }
 
 export class SessionOwnershipError extends Error {}
@@ -80,6 +122,13 @@ export class SessionRegistry {
       mode: input.mode ?? existing?.mode ?? 'push',
       streams: (existing?.streams ?? 0) + 1,
       last_seen: new Date(this.now()).toISOString(),
+      // A reconnect keeps a granted move (e.g. into the shared workgroup) and the card.
+      workgroup: existing && (input.visible ?? []).includes(existing.workgroup)
+        ? existing.workgroup
+        : input.workgroup ?? 'team',
+      role: input.role ?? existing?.role ?? 'worker',
+      card: existing?.card ?? {},
+      card_at: existing?.card_at ?? this.now(),
     }
     const cwd = input.cwd ?? existing?.cwd
     if (cwd !== undefined) entry.cwd = cwd
@@ -109,22 +158,31 @@ export class SessionRegistry {
     return this.byId.get(session_id)
   }
 
-  update(session_id: string, token_id: string, patch: { name?: string | undefined; cwd?: string | undefined; login?: string | undefined; status?: SessionStatus | undefined }): boolean {
+  update(session_id: string, token_id: string, patch: CardPatch): boolean {
     const e = this.owned(session_id, token_id)
     if (!e) return false
     if (patch.name !== undefined) e.name = patch.name
     if (patch.cwd !== undefined) e.cwd = patch.cwd
     if (patch.login !== undefined) e.login = patch.login
     if (patch.status !== undefined) e.status = patch.status
+    if (patch.workgroup !== undefined) e.workgroup = patch.workgroup
+    const card: SessionCard = { ...e.card }
+    for (const k of ['agent', 'model', 'repo', 'branch', 'herdr', 'task_id', 'source'] as const) {
+      if (patch[k] !== undefined) (card as Record<string, unknown>)[k] = patch[k]
+    }
+    e.card = card
+    e.card_at = this.now()
     e.last_seen = new Date(this.now()).toISOString()
     return true
   }
 
-  listTeam(team_id: string): SessionView[] {
+  /** Sessions of the team whose workgroup is in `visible` (all of them when `visible` is omitted). */
+  listTeam(team_id: string, visible?: readonly string[]): SessionView[] {
     this.sweep()
     const out: SessionView[] = []
     for (const e of this.byId.values()) {
       if (e.team_id !== team_id) continue
+      if (visible && !visible.includes(e.workgroup)) continue
       const view: SessionView = {
         session_id: e.session_id,
         ref: sessionRef(e.session_id),
@@ -134,6 +192,11 @@ export class SessionRegistry {
         status: e.streams > 0 ? e.status : 'reconnecting',
         mode: e.mode,
         last_seen: e.last_seen,
+        workgroup: e.workgroup,
+        role: e.role,
+        ...e.card,
+        updated_at: new Date(e.card_at).toISOString(),
+        age_s: Math.max(0, Math.floor((this.now() - e.card_at) / 1000)),
       }
       if (e.cwd !== undefined) view.cwd = e.cwd
       if (e.login !== undefined) view.login = e.login
