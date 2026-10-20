@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'devin') {
     const { runDevin } = await import('./cli/devin.ts')
-    process.exitCode = runDevin(args)
+    process.exitCode = await runDevin(args)
     return
   }
   console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi')
