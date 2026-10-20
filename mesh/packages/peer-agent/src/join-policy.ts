@@ -95,6 +95,40 @@ export function parentCommandLine(ppid: number = process.ppid): string {
   }
 }
 
+/** The parent of `pid`, or undefined when it cannot be read (gone, or no `ps`/PowerShell). */
+export function parentPid(pid: number): number | undefined {
+  try {
+    if (process.platform === 'linux') return Number(readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /s, '').split(' ')[1]) || undefined
+    if (process.platform === 'win32') {
+      return Number(execFileSync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
+      ], { encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim()) || undefined
+    }
+    return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Devin CLI's agent process (`devin acp`, which the `devin` front end starts and which starts MCP servers and hooks). */
+const DEVIN_AGENT = /^"?(?:[^"]*[\\/])?devin(?:\.exe)?"?\s+acp(?:\s|$)/i
+
+/**
+ * The command line that says how the user started the host. Usually our parent's; Devin CLI
+ * (3000.11) runs its agent as a child, `devin acp`, so there it is the parent's parent:
+ * `devin -p …` starts `devin acp`, which starts this server.
+ */
+export function hostCommandLine(
+  ppid: number = process.ppid,
+  io: { commandLine: (pid: number) => string; parentOf: (pid: number) => number | undefined } = { commandLine: parentCommandLine, parentOf: parentPid },
+): string {
+  const line = io.commandLine(ppid)
+  if (!DEVIN_AGENT.test(line.trim())) return line
+  const up = io.parentOf(ppid)
+  return (up && io.commandLine(up)) || line
+}
+
 const PRINT_FLAGS: Record<string, string[]> = {
   agy: ['-p', '--print', '--prompt'],
   devin: ['-p', '--print'],
