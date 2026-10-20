@@ -85,7 +85,10 @@ describe('L3: the deployed peer bundle against the ledger relay', () => {
       body: JSON.stringify({ title: 'compat probe' }),
     })
     expect(created.status).toBe(201)
-    await until(async () => (bob.stderr().includes('"event":"task"') ? true : undefined), 'the task event at the peer')
+    // Whatever name it arrives under, wait until the peer has seen it, then judge how it handled it.
+    await until(async () => (/"event":"(task|message)"/.test(bob.stderr()) ? true : undefined), 'the task event at the peer')
+    expect(bob.stderr()).not.toContain('decode_error')
+    expect(bob.stderr()).toContain('"event":"task"')
 
     const sent = await fetch(`${h.relayUrl}/v1/messages`, {
       method: 'POST',
