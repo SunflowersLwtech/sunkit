@@ -13,10 +13,13 @@ import { sessionsRoute } from './routes/sessions.ts'
 import { SessionRegistry } from './sessions/registry.ts'
 import { TaskStore } from './ledger/tasks.ts'
 import { tasksRoute } from './routes/tasks.ts'
+import { LeaseStore } from './ledger/leases.ts'
+import { leasesRoute } from './routes/leases.ts'
 
 export function buildApp(inputDeps: Deps) {
   const deps: Deps = { ...inputDeps, sessions: inputDeps.sessions ?? new SessionRegistry() }
   const tasks = inputDeps.tasks ?? new TaskStore(deps.db, deps.now)
+  const leases = inputDeps.leases ?? new LeaseStore(deps.db, deps.now)
   const app = new Hono()
   app.use('*', accessLog)
   app.get('/health', c => c.json({ ok: true }))
@@ -27,6 +30,7 @@ export function buildApp(inputDeps: Deps) {
   app.route('/v1/peers', peersRoute(deps))
   app.route('/v1/sessions', sessionsRoute(deps))
   app.route('/v1/tasks', tasksRoute({ ...deps, tasks }))
+  app.route('/v1/leases', leasesRoute({ ...deps, tasks, leases }))
   app.route('/v1/auth', authRoute(deps))
   app.route('/v1/admin', adminRoute(deps))
   app.route('/v1/permission', permissionRoute(deps))
