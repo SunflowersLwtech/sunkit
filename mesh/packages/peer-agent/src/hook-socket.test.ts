@@ -174,14 +174,33 @@ describe('HookChannel: card, task and identity events', () => {
   it('forwards the host\'s lifecycle to the task driver', () => {
     const { statuses, events, ch } = make()
     ch.handle({ op: 'turn' }); ch.handle({ op: 'tool' }); ch.handle({ op: 'blocked' }); ch.handle({ op: 'stop', natural: true }); ch.handle({ op: 'end' })
-    expect(events).toEqual(['turn', 'tool', 'blocked', 'stop', 'end'])
+    expect(events).toEqual(['turn', 'tool', 'blocked', 'done', 'end'])
     expect(statuses).toEqual(['busy', 'busy', 'idle', 'idle'])
+  })
+
+  it('tells a turn that ended on its own from one that was cut short or a session closing', () => {
+    const { events, ch } = make()
+    ch.handle({ op: 'stop', natural: true })
+    ch.handle({ op: 'stop', reason: 'NO_TOOL_CALL' })
+    ch.handle({ op: 'stop', reason: 'end_turn', natural: true })
+    ch.handle({ op: 'stop', reason: 'shutdown', natural: false })
+    ch.handle({ op: 'stop', reason: 'interrupted' })
+    expect(events).toEqual(['done', 'done', 'done', 'stop', 'stop'])
   })
 
   it('a stop that keeps the turn going is not an end of turn', () => {
     const { inbox, events, ch } = make()
     inbox.push(msg('lead [abc123]'))
     expect(ch.handle({ op: 'stop', natural: true }).continue).toBe(true)
+    expect(events).toEqual([])
+  })
+
+  it('a wake (pi polling while idle) is never a turn ending', () => {
+    const { inbox, events, ch } = make()
+    ch.handle({ op: 'wake' })
+    inbox.push(msg('lead [abc123]'))
+    expect(ch.handle({ op: 'wake' }).continue).toBe(true)
+    ch.handle({ op: 'wake' })
     expect(events).toEqual([])
   })
 
@@ -214,7 +233,7 @@ describe('HookChannel: hooks that arrive out of order', () => {
     ch.handle({ op: 'turn', at: 1_000 })
     ch.handle({ op: 'blocked', at: 1_500 })
     expect(statuses).toEqual(['idle'])
-    expect(events).toEqual(['stop'])
+    expect(events).toEqual(['done'])
     ch.handle({ op: 'turn', at: 3_000 })
     expect(statuses).toEqual(['idle', 'busy'])
     // Hosts that send no time keep the old behaviour.

@@ -3,6 +3,7 @@ import { TaskDriver, type TaskApi } from './task-driver.ts'
 
 const ID = 'task_01HRK7Y0000000000000000000'
 const ME = 's_01hrk7y0000000000000aaaaa1'
+const OLD = 's_01hrk7y0000000000000old000'
 
 function api(initial: { state: string; session: string | null }) {
   const calls: string[] = []
@@ -12,6 +13,8 @@ function api(initial: { state: string; session: string | null }) {
     async get() { calls.push('get'); return { status: 200, task: { state, assignee: { session } } } },
     async patch(_id, body) {
       calls.push(`patch:${body.state}`)
+      // As the relay does: only the assignee moves a task.
+      if (session !== ME) return { status: 403, error: 'not_allowed' }
       if (['completed', 'failed', 'canceled', 'rejected'].includes(state)) return { status: 409, error: 'task_terminal' }
       state = body.state
       return { status: 200 }
@@ -38,6 +41,60 @@ describe('TaskDriver', () => {
     await d.on('idle')
     expect(r.state).toBe('working')
     expect(r.calls.filter(c => c.startsWith('patch'))).toEqual(['patch:working', 'patch:input_required', 'patch:working'])
+  })
+
+  it('a turn that ended on its own starts a dispatched task even when the start of that turn was missed', async () => {
+    // A host that starts its MCP servers with the first prompt (Grok Build 1.0.62) runs that
+    // prompt's hook before the peer listens: the first thing the peer hears is the turn ending.
+    const r = api({ state: 'submitted', session: ME })
+    const d = new TaskDriver(r.a, ID, ME)
+    await d.start()
+    await d.on('done')
+    expect(r.state).toBe('working')
+    await d.on('blocked')
+    await d.on('done')
+    expect(r.state).toBe('working')
+    expect(r.calls.filter(c => c.startsWith('patch'))).toEqual(['patch:working', 'patch:input_required', 'patch:working'])
+  })
+
+  it('a session that starts, is interrupted or closes before any turn ended leaves a dispatched task submitted', async () => {
+    const r = api({ state: 'submitted', session: ME })
+    const d = new TaskDriver(r.a, ID, ME)
+    await d.start()
+    await d.on('idle'); await d.on('stop'); await d.on('end')
+    expect(r.state).toBe('submitted')
+    expect(r.calls.filter(c => c.startsWith('patch'))).toEqual([])
+  })
+
+  it('holds events heard before it learned the task and applies them after the takeover', async () => {
+    // A peer started by the host's first prompt can hear that turn end before its stream opens.
+    const r = api({ state: 'submitted', session: OLD })
+    const d = new TaskDriver(r.a, ID, ME)
+    const early = d.on('done')
+    await d.start()
+    await early
+    expect(r.calls).toEqual(['get', 'rebind', 'patch:working'])
+    expect(r.state).toBe('working')
+  })
+
+  it('a turn heard before the takeover is not refused, and does not turn the driver off', async () => {
+    const r = api({ state: 'submitted', session: OLD })
+    const d = new TaskDriver(r.a, ID, ME)
+    const early = d.on('turn')
+    await d.start()
+    await early
+    expect(r.state).toBe('working')
+    await d.on('blocked')
+    expect(r.state).toBe('input_required')
+  })
+
+  it('a turn ending leaves a task that waits on authorisation alone', async () => {
+    const r = api({ state: 'auth_required', session: ME })
+    const d = new TaskDriver(r.a, ID, ME)
+    await d.start()
+    await d.on('done'); await d.on('stop'); await d.on('idle')
+    expect(r.state).toBe('auth_required')
+    expect(r.calls).toEqual(['get'])
   })
 
   it('takes the task over from the session it had before a restart', async () => {

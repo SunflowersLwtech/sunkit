@@ -37002,7 +37002,10 @@ var WANT = {
   turn: () => "working",
   tool: () => "working",
   blocked: () => "input_required",
-  // The turn ended: whatever blocked it is over. Nothing else changes on a stop.
+  // A turn ran to its end, so work on the task has started even if the peer missed the turn
+  // starting (hosts that start it with the first prompt), and whatever blocked it is over.
+  done: (cur) => cur === "submitted" || cur === "input_required" ? "working" : void 0,
+  // Cut short: whatever blocked it is over. Nothing else changes.
   stop: (cur) => cur === "input_required" ? "working" : void 0,
   idle: (cur) => cur === "input_required" ? "working" : void 0
 };
@@ -37020,7 +37023,12 @@ var TaskDriver = class {
   log;
   state;
   final = false;
-  queue = Promise.resolve();
+  started;
+  // Events wait for start(): before it the state is unknown and the task may still be the
+  // previous session's, which the relay would refuse (and a refusal stops the driver for good).
+  queue = new Promise((r) => {
+    this.started = r;
+  });
   /** Learns the task's state and, after a restart or --resume, takes it over from the previous session. */
   async start() {
     try {
@@ -37041,9 +37049,11 @@ var TaskDriver = class {
       }
     } catch (err) {
       this.log("peer.task.start_error", { task: this.id, err: String(err instanceof Error ? err.message : err) });
+    } finally {
+      this.started();
     }
   }
-  /** Serialized: events arrive faster than the relay answers, and each must see the state the last one left. */
+  /** Serialized, after start(): events arrive faster than the relay answers, and each must see the state the last one left. */
   on(event) {
     this.queue = this.queue.then(() => this.apply(event)).catch(() => {
     });
@@ -37999,7 +38009,7 @@ var HookChannel = class {
         return { ...base, continue: true };
       }
       this.onStatus("idle");
-      if (req.op === "stop") event("stop");
+      if (req.op === "stop") event(natural ? "done" : "stop");
       return { ...base, continue: false };
     }
     if (req.op === "blocked") {

@@ -136,13 +136,22 @@ describe('L3: cards and tasks from host hooks', () => {
   it('MESH_CARD_WRITE=0 writes no card and leaves the task alone', async () => {
     const orch = await device(h, 'alice', 'orch-e2e', { role: 'orchestrator', workgroup: 'team' })
     const alice = h.humans.alice!.token
-    startPeer({ MESH_CARD_WRITE: '0' })
-    const r = await until(async () => row(alice), 'the session')
-    const t = (await api(h, orch, 'POST', '/v1/tasks', { title: 'x', assignee: r.session_id })).json as { id: string }
+    // Set up as in the test above, where the peer takes the task over and moves it: here it must not.
+    const old = 's_01hrk7y0000000000000old002'
+    const ac = new AbortController()
+    void fetch(new URL(`/v1/stream?session=${old}&name=card-e2e`, h.relayUrl), { headers: { authorization: `Bearer ${alice}` }, signal: ac.signal }).catch(() => {})
+    await until(async () => (await row(alice)) ? true : undefined, 'the earlier session listed')
+    const t = (await api(h, orch, 'POST', '/v1/tasks', { title: 'x', assignee: old })).json as { id: string }
+    ac.abort()
+
+    startPeer({ MESH_CARD_WRITE: '0', MESH_TASK_ID: t.id })
+    await until(async () => { const r = await row(alice); return r && r.session_id !== old ? true : undefined }, 'the session')
     await hook('turn')
     await new Promise(res => setTimeout(res, 2_500))
     expect((await row(alice))?.agent).toBeUndefined()
-    expect((await task(alice, t.id)).state).toBe('submitted')
     expect((await row(alice))?.status).toBe('busy')
+    await hook('stop')
+    await new Promise(res => setTimeout(res, 1_000))
+    expect(await task(alice, t.id)).toMatchObject({ state: 'submitted', assignee: { session: old } })
   })
 })
