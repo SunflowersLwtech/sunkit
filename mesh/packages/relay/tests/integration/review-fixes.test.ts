@@ -141,3 +141,43 @@ describe('streams follow grant changes', () => {
     expect(await readSse(watcher.body!, 1)).toEqual([])
   })
 })
+
+describe('review round 2', () => {
+  it('a grant change applies to live sessions right away, not only after they reconnect', async () => {
+    const h = harness([
+      { id: 'tk_owner', handle: 'weiliu', label: 'm4' },
+      { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
+      { id: 'tk_admin', handle: 'admin', label: 'bootstrap-admin', tier: 'admin' as const },
+    ])
+    await openSession(h.app, h.tok.tk_owner!, S.a1, 'private-work')
+    await openSession(h.app, h.tok.tk_owner!, S.a2, 'moved-to-team')
+    expect((await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/sessions')).json() as unknown[]).length).toBe(2)
+    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_owner/grant', { role: 'worker', workgroup: 'liuwei', visible: ['team'] })
+    await req(h.app, h.tok.tk_owner!, 'POST', '/v1/sessions/self', { session: S.a2, workgroup: 'team' })
+    const mate = await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/sessions')).json() as Array<{ session_id: string }>
+    expect(mate.map(r => r.session_id)).toEqual([S.a2])
+    expect((await req(h.app, h.tok.tk_mate!, 'POST', '/v1/messages', { to: 'weiliu', to_session: S.a1, kind: 'chat', content: 'x' })).status).toBe(403)
+  })
+
+  it('depth is per session: one session holding a dispatched task does not stop its sibling dispatching', async () => {
+    const h = harness(specs)
+    await openSession(h.app, h.tok.tk_orch!, S.o1, 'feishu-assistant')
+    await openSession(h.app, h.tok.tk_orch!, S.t1, 'orch-sibling')
+    await openSession(h.app, h.tok.tk_m4!, S.a1, 'w')
+    expect((await req(h.app, h.tok.tk_orch!, 'POST', '/v1/tasks', { title: 'to sibling', assignee: S.t1 }, hdr(S.o1))).status).toBe(201)
+    expect((await req(h.app, h.tok.tk_orch!, 'POST', '/v1/tasks', { title: 'unrelated', assignee: S.a1 }, hdr(S.o1))).status).toBe(201)
+    const deeper = await req(h.app, h.tok.tk_orch!, 'POST', '/v1/tasks', { title: 'sub', assignee: S.a1 }, hdr(S.t1))
+    expect(deeper.status).toBe(403)
+  })
+
+  it('observers cannot rebind, and nobody can hand a task to an observer\'s session', async () => {
+    const h = harness(specs)
+    await openSession(h.app, h.tok.tk_orch!, S.o1, 'feishu-assistant')
+    await openSession(h.app, h.tok.tk_obs!, S.b2, 'probe')
+    const toObs = await req(h.app, h.tok.tk_orch!, 'POST', '/v1/tasks', { title: 'x', assignee: S.b2 }, hdr(S.o1))
+    expect(toObs.status).toBe(403)
+    expect(await toObs.json()).toMatchObject({ error: 'assignee_read_only' })
+    const t = await (await req(h.app, h.tok.tk_orch!, 'POST', '/v1/tasks', { title: 'mine' }, hdr(S.o1))).json() as { id: string }
+    expect((await req(h.app, h.tok.tk_obs!, 'POST', `/v1/tasks/${t.id}/rebind`, {}, hdr(S.b2))).status).toBe(403)
+  })
+})

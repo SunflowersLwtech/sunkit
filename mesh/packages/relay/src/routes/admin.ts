@@ -195,8 +195,9 @@ export function adminRoute(deps: Deps) {
     const g = setGrant(deps.db, id, {
       role: parsed.data.role, workgroup: parsed.data.workgroup, visible: parsed.data.visible, machine: parsed.data.machine ?? null,
     }, now)
-    audit(deps.db, team, c.get('human').id, 'token.grant', { token_id: id, role: g.role, workgroup: g.workgroup, visible: g.visible, machine: g.machine }, now)
-    return c.json({ token_id: id, ...g })
+    const live = deps.sessions?.applyGrant(id, g) ?? 0
+    audit(deps.db, team, c.get('human').id, 'token.grant', { token_id: id, role: g.role, workgroup: g.workgroup, visible: g.visible, machine: g.machine, live_sessions: live }, now)
+    return c.json({ token_id: id, ...g, live_sessions: live })
   })
 
   app.delete('/tokens/:id', c => {

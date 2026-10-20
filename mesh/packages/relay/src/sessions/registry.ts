@@ -181,6 +181,24 @@ export class SessionRegistry {
     return true
   }
 
+  /**
+   * A token's grant changed: its live sessions take the new role and home workgroup now, not at
+   * their next reconnect, except a session that moved itself into a workgroup still granted.
+   */
+  applyGrant(token_id: string, grant: { role: Role; workgroup: string; visible: readonly string[] }): number {
+    let n = 0
+    for (const e of this.byId.values()) {
+      if (e.token_id !== token_id) continue
+      e.role = grant.role
+      if (!(e.wg_moved && grant.visible.includes(e.workgroup))) {
+        e.workgroup = grant.workgroup
+        delete e.wg_moved
+      }
+      n++
+    }
+    return n
+  }
+
   /** Sessions of the team whose workgroup is in `visible` (all of them when `visible` is omitted). */
   listTeam(team_id: string, visible?: readonly string[]): SessionView[] {
     this.sweep()

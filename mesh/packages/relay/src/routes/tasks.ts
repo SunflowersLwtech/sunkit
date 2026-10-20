@@ -7,6 +7,7 @@ import { createLimiter } from '../middleware/rate-limit.ts'
 import { audit } from '../audit.ts'
 import { checkTransition, type TaskRow, type TaskStore } from '../ledger/tasks.ts'
 import type { SessionEntry } from '../sessions/registry.ts'
+import { readGrant } from '../grants.ts'
 import type { Deps } from '../deps.ts'
 
 /** Orchestrator-dispatched tasks are depth 1; a task under one of those would be depth 2, which is refused. */
@@ -53,13 +54,16 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
   }
 
   /**
-   * The deepest dispatched task this token is working on right now. Derived on the relay, not
-   * taken from the optional parent_task, so leaving the parent out cannot reset the depth.
+   * The deepest open task the calling session is working on. Derived on the relay, not taken from
+   * the optional parent_task, so leaving the parent out cannot reset the depth. Per session, not
+   * per token: one session holding a dispatched task must not stop its siblings (or the whole
+   * orchestrator token) from dispatching.
    */
-  function heldDepth(c: C): number {
+  function heldDepth(c: C, me: SessionEntry | null): number {
+    if (!me) return 0
     const row = deps.db.prepare(`
-      SELECT MAX(depth) AS d FROM task WHERE team_id=? AND assignee_token=? AND ended_at IS NULL
-    `).get(c.get('team_id'), c.get('token').id) as { d: number | null }
+      SELECT MAX(depth) AS d FROM task WHERE team_id=? AND assignee_session=? AND ended_at IS NULL
+    `).get(c.get('team_id'), me.session_id) as { d: number | null }
     return row.d ?? 0
   }
 
@@ -117,7 +121,9 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
       const target = deps.sessions!.get(body.assignee)
       if (!target || target.team_id !== c.get('team_id')) return c.json({ error: 'no_live_session' }, 404)
       if (!grant.visible.includes(target.workgroup)) return c.json({ error: 'cross_workgroup' }, 403)
-      depth = Math.max(parent?.depth ?? 0, heldDepth(c)) + 1
+      // An observer's session could never move the task along.
+      if (readGrant(deps.db, target.token_id).role === 'observer') return c.json({ error: 'assignee_read_only' }, 403)
+      depth = Math.max(parent?.depth ?? 0, heldDepth(c, me)) + 1
       if (depth > MAX_DISPATCH_DEPTH) return c.json({ error: 'depth_exceeded', max: MAX_DISPATCH_DEPTH }, 403)
       assignee = target
       state = 'submitted'
@@ -212,6 +218,8 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
     if (!row) return c.json({ error: 'not_found' }, 404)
     const caller = callerSession(c)
     if (!caller.ok || !caller.entry) return c.json({ error: 'session_required' }, 400)
+    const ro = readOnly(c)
+    if (ro) return ro
     if (row.assignee_token !== c.get('token').id) return c.json({ error: 'not_allowed' }, 403)
     if (isTerminalTaskState(row.state)) return c.json({ error: 'task_terminal', state: row.state }, 409)
     // Only a session that is gone (restarted, resumed elsewhere) hands its task over; a live one keeps it.
