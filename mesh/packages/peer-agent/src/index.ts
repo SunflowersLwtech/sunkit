@@ -12,7 +12,7 @@ import { InboundDispatcher } from './inbound.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
-import { decideJoin, isOneShotHostRun, parentCommandLine } from './join-policy.ts'
+import { decideJoin, hostCommandLine, isOneShotHostRun, parentCommandLine } from './join-policy.ts'
 import { onHostClosed } from './host-lifetime.ts'
 import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
 import { herdrWaker } from './wake.ts'
@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
     sessionKind: identity.kind,
-  }), () => isOneShotHostRun(parentCommandLine()))
+  }), () => isOneShotHostRun(hostCommandLine()))
   const pull = decision.mode === 'pull'
   const joins = decision.mode !== 'send'
   // The login shown in list_agents is the machine's Claude login; a pull host is not Claude.

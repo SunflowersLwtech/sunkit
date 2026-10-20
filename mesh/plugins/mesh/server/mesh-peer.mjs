@@ -37446,6 +37446,29 @@ function parentCommandLine(ppid = process.ppid) {
     return "";
   }
 }
+function parentPid(pid) {
+  try {
+    if (process.platform === "linux") return Number(readFileSync5(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").split(" ")[1]) || void 0;
+    if (process.platform === "win32") {
+      return Number(execFileSync3("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`
+      ], { encoding: "utf8", timeout: 1e4, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim()) || void 0;
+    }
+    return Number(execFileSync3("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] }).trim()) || void 0;
+  } catch {
+    return void 0;
+  }
+}
+var DEVIN_AGENT = /^"?(?:[^"]*[\\/])?devin(?:\.exe)?"?\s+acp(?:\s|$)/i;
+function hostCommandLine(ppid = process.ppid, io = { commandLine: parentCommandLine, parentOf: parentPid }) {
+  const line = io.commandLine(ppid);
+  if (!DEVIN_AGENT.test(line.trim())) return line;
+  const up = io.parentOf(ppid);
+  return up && io.commandLine(up) || line;
+}
 var PRINT_FLAGS = {
   agy: ["-p", "--print", "--prompt"],
   devin: ["-p", "--print"]
@@ -37678,7 +37701,7 @@ async function main() {
     env: process.env.MESH_JOIN,
     commandLine: parentCommandLine(),
     sessionKind: identity.kind
-  }), () => isOneShotHostRun(parentCommandLine()));
+  }), () => isOneShotHostRun(hostCommandLine()));
   const pull = decision.mode === "pull";
   const joins = decision.mode !== "send";
   const readLogin = () => pullHost ? void 0 : readClaudeLogin();

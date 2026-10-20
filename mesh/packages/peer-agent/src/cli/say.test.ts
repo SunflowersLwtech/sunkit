@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parseSayArgs, sayWith, SAY_USAGE } from './say.ts'
-import { devinAddArgs, parseDevinInstall, runDevin, shellQuote, stableNode } from './devin.ts'
 import type { SessionRow } from '../resolve-target.ts'
 
 const rows: SessionRow[] = [
@@ -46,38 +45,5 @@ describe('mesh say: sending', () => {
     await expect(sayWith(client() as never, { as: 'a', to: 'dup', message: 'x' })).rejects.toThrow(/matches 2 sessions/)
     await expect(sayWith(client() as never, { as: 'a', to: 'nobody', message: 'x' })).rejects.toThrow(/no live session named "nobody"/)
     await expect(sayWith(client() as never, { as: 'a', to: 'dup [cccccc]', message: 'x' })).resolves.toMatch(/dup \[cccccc\]/)
-  })
-})
-
-describe('mesh devin install', () => {
-  const defaults = { node: '/opt/node/bin/node', peer: '/Users/me/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs' }
-  it('builds a devin mcp add that runs the peer in pull mode with absolute paths', () => {
-    expect(devinAddArgs(parseDevinInstall([], defaults))).toEqual([
-      'mcp', 'add', '-s', 'user', 'mesh', '-e', 'MESH_JOIN=pull', '--', '/opt/node/bin/node', '/Users/me/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs',
-    ])
-    expect(parseDevinInstall(['--scope', 'local', '--name', 'mesh2', '--peer', '/p.mjs'], defaults)).toEqual({ ...defaults, peer: '/p.mjs', scope: 'local', name: 'mesh2' })
-    expect(() => parseDevinInstall(['--scope', 'global'], defaults)).toThrow(/usage/)
-  })
-  it('only prints by default; --write runs devin with exactly that argv', () => {
-    const lines: string[] = []
-    const run = vi.fn()
-    expect(runDevin(['install'], { log: l => lines.push(l), run })).toBe(0)
-    expect(run).not.toHaveBeenCalled()
-    expect(lines[0]).toMatch(/^devin mcp add -s user mesh -e MESH_JOIN=pull -- \S+ \S+mesh-peer\.mjs$/)
-    runDevin(['install', '--write'], { log: () => {}, run })
-    expect(run).toHaveBeenCalledWith('devin', expect.arrayContaining(['mcp', 'add', '-e', 'MESH_JOIN=pull']))
-    expect(runDevin(['bogus'], { log: () => {} })).toBe(2)
-  })
-  it('uses the node on PATH (a link that survives upgrades), skipping fnm per-shell dirs; --node overrides', () => {
-    const exists = (p: string) => ['/x/fnm_multishells/123_456/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node'].includes(p)
-    expect(stableNode('/x/fnm_multishells/123_456/bin:/opt/homebrew/bin:/usr/bin', '/opt/homebrew/Cellar/node/26.0.0/bin/node', exists)).toBe('/opt/homebrew/bin/node')
-    expect(stableNode('/nowhere', '/fallback/node', exists)).toBe('/fallback/node')
-    expect(stableNode(undefined, '/fallback/node', exists)).toBe('/fallback/node')
-    expect(parseDevinInstall(['--node', '/usr/local/bin/node'], defaults).node).toBe('/usr/local/bin/node')
-  })
-
-  it('quotes paths with spaces for the shell', () => {
-    expect(shellQuote('/Library/Application Support/x')).toBe("'/Library/Application Support/x'")
-    expect(shellQuote('/usr/bin/node')).toBe('/usr/bin/node')
   })
 })

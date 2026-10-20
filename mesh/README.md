@@ -250,7 +250,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
-| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build, pi and other MCP hosts), hook notices and busy/idle for Antigravity, Grok Build and pi (an extension), named send-only senders, `mesh say` |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build, pi and other MCP hosts), hook notices and busy/idle for Devin CLI, Antigravity, Grok Build and pi (an extension), named send-only senders, `mesh say` |
 
 ## Devin CLI, Antigravity CLI, Grok Build, pi and other agents without channels
 
@@ -260,25 +260,11 @@ mode** for them: the session is listed like any other, marked `pull`, and messag
 wait in an inbox until the agent calls `read_messages`. Expect replies from a pull session to come
 later than from a Claude Code session.
 
-Set it up once per machine (after `mesh pair`):
+Set it up once per machine. Every host needs `mesh pair` first, and every host has its own
+installer, described below:
 
 ```bash
 M=~/sunkit/mesh/plugins/mesh/server/mesh-cli.mjs
-node $M devin install            # prints the devin mcp add command
-node $M devin install --write    # or runs it (user scope; --scope local for one project)
-```
-
-which amounts to:
-
-```bash
-devin mcp add -s user mesh -e MESH_JOIN=pull -- /path/to/node ~/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs
-```
-
-Give each Devin session a name before starting it, so others can address it and see who wrote:
-
-```bash
-export MESH_SESSION_NAME=docs-devin
-devin
 ```
 
 A Claude Code session's name comes from Claude Code's own name for it, as before. A pull session
@@ -288,6 +274,82 @@ then names the tab's main agent), then its working directory's name; the last tw
 `MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
 is never read for a pull session, so one started in a Claude Code session's directory does not
 borrow that session's name, and the name does not change while it runs.
+
+### Devin CLI
+
+Devin CLI has lifecycle hooks, and they can add a note to a tool result and keep a turn going, so
+it gets the same treatment as the other hosts without channels. Devin supports the events
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`,
+`PostCompaction` and `SessionEnd`
+([docs](https://docs.devin.ai/cli/extensibility/hooks/overview)). User-level hooks live under the
+`"hooks"` key of Devin's user config: `~/.config/devin/config.json`, or
+`%APPDATA%\devin\config.json` on Windows.
+
+- a session reports `idle` as soon as Devin starts it (its `SessionStart` fires at launch and waits
+  up to 3 seconds for the peer, which Devin starts at the same moment), so with `MESH_WAKE=herdr` a
+  freshly started session can be woken before its first prompt;
+- a prompt marks it `busy`; when mail arrives while it works, the next tool result carries a
+  one-line notice naming the senders (once per arrival);
+- a turn that ends on its own (`Stop`) while a message that arrived is still unread runs once more
+  to read it (`decision: block`);
+- `SessionEnd` only forgets the session.
+
+Devin fires no `Stop` when the user interrupts with Esc, so an interrupt is never overridden. It
+also means the session keeps showing `busy` after an interrupt, until its next prompt, and
+`MESH_WAKE=herdr` does not prompt it in that state.
+
+The notice never contains the message itself; the body still comes back from `read_messages`, under
+the same rules as any peer message.
+
+```bash
+node $M devin install            # prints what it would do
+node $M devin install --write    # devin mcp add … and the hooks in Devin's config.json
+```
+
+which amounts to:
+
+```bash
+devin mcp remove -s user mesh   # ignored when there is no such server
+devin mcp add -s user mesh -e MESH_JOIN=pull -e MESH_HOST=devin -- /path/to/node ~/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs
+```
+
+plus `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop` and `SessionEnd` hooks running
+`node …/mesh-cli.mjs devin hook <event>` (`SessionStart` with a 10 s timeout, the others 5 s). Every
+other setting and every other hook group in that file is kept, and a mesh hook group from an
+earlier install (any command ending in `devin hook <event>`) is replaced rather than duplicated;
+when the file changes, the previous one is saved as `config.json.bak-mesh-<timestamp>`. Without
+`--write` it only prints. `--config <path>` writes another file; `--scope local|project` applies to
+the MCP server only.
+
+Name each Devin session when starting it, so others can address it and see who wrote:
+
+```bash
+MESH_SESSION_NAME=docs-devin devin
+```
+
+Unnamed Devin sessions are `devin-<Herdr tab label>` or `devin-<directory>`; `MESH_HOST=devin` is
+what puts the `devin` prefix on them. Devin has no `--append-system-prompt`, so standing rules go
+in the first prompt or in the project's `AGENTS.md`.
+
+Devin 3000.11 runs its agent in a child process, `devin acp`, which starts the MCP servers and runs
+the hook commands (through `sh -c`; on Windows through Git Bash, which puts two `bash.exe` processes
+between the hook and `devin acp`). The hooks find the peer through the same socket under
+`MESH_HOME/hooks/` as the agy and Grok hooks, keyed by the `devin acp` process id, and look up to
+three levels above themselves. The first hook of a session remembers which process answered in
+`MESH_HOME/hooks/devin-<session_id>.pid` (Devin passes a `session_id` to every hook), so later hooks
+connect straight to it; on Windows, where looking up a process's parents costs about a second and a
+half, that happens once per session. `SessionEnd` deletes that file.
+
+`devin -p …` only sends. It used to join the mesh for the length of the run, because the peer's
+parent was `devin acp` rather than `devin -p`; the peer now looks past `devin acp` to the command
+the user ran.
+
+Devin also loads Claude Code-format hooks from `~/.claude/settings.json` and `.claude/`
+directories. The Claude Code plugin has no hooks, so nothing runs twice; don't add the mesh Devin
+hooks there.
+
+To remove: `devin mcp remove -s user mesh`, and delete from Devin's `config.json` the hook groups
+whose command ends in `devin hook <event>`.
 
 ### Antigravity CLI (agy)
 
@@ -417,8 +479,8 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 |---|---|
 | `MESH_JOIN` | `pull`: join in pull mode (hosts without channels). `never`: send only. `always`: join regardless. Unset: Claude Code's rules above. |
 | `MESH_SESSION_NAME` | name for a session that Claude Code doesn't name, and for send-only senders |
-| `MESH_HOST` | short host label (`agy`, `grok`, `pi`) that prefixes a pull session's fallback name |
-| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the agy or grok hooks); for pi, any value but `0` makes the extension start the turn itself |
+| `MESH_HOST` | short host label (`devin`, `agy`, `grok`, `pi`) that prefixes a pull session's fallback name |
+| `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the Devin, agy or grok hooks); for pi, any value but `0` makes the extension start the turn itself |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from

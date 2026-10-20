@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { channelOptIn, decideJoin, isOneShotHostRun, parentCommandLine, readProcCmdline } from './join-policy.ts'
+import { channelOptIn, decideJoin, hostCommandLine, isOneShotHostRun, parentCommandLine, parentPid, readProcCmdline } from './join-policy.ts'
 
 describe('channelOptIn', () => {
   it.each([
@@ -47,6 +47,56 @@ describe('parentCommandLine', () => {
   })
   it('returns empty string for a pid that does not exist', () => {
     expect(parentCommandLine(2 ** 22 - 3)).toBe('')
+  })
+})
+
+describe('parentPid', () => {
+  it('reads a real process parent (ours is the test runner)', () => {
+    expect(parentPid(process.pid)).toBe(process.ppid)
+  })
+  it('is undefined for a pid that does not exist', () => {
+    expect(parentPid(2 ** 22 - 3)).toBeUndefined()
+  })
+})
+
+describe('hostCommandLine', () => {
+  // Devin CLI 3000.11 runs its agent in a child, `devin acp`, which starts MCP servers and hooks.
+  const tree: Record<number, { line: string; parent?: number }> = {
+    10: { line: '/opt/homebrew/bin/devin acp', parent: 9 },
+    9: { line: 'devin -p Reply with exactly: OK --model swe-1-6-slow', parent: 1 },
+    20: { line: '/opt/homebrew/bin/devin acp', parent: 19 },
+    19: { line: 'devin --permission-mode dangerous', parent: 1 },
+    30: { line: '"C:\\Users\\x\\AppData\\Local\\devin\\cli\\bin\\devin.exe" acp', parent: 29 },
+    29: { line: 'devin  -p "Reply with exactly: OK" --model swe-1-6-slow', parent: 1 },
+    40: { line: 'agy --print hi', parent: 39 },
+    39: { line: 'zsh', parent: 1 },
+    50: { line: 'devin acp' },
+    60: { line: 'zed --acp devin acp', parent: 59 },
+  }
+  const asked: number[] = []
+  const io = {
+    commandLine: (pid: number) => { asked.push(pid); return tree[pid]?.line ?? '' },
+    parentOf: (pid: number) => tree[pid]?.parent,
+  }
+
+  it('looks past a Devin agent process to the command the user ran', () => {
+    expect(hostCommandLine(10, io)).toBe('devin -p Reply with exactly: OK --model swe-1-6-slow')
+    expect(isOneShotHostRun(hostCommandLine(10, io))).toBe(true)
+    expect(isOneShotHostRun(hostCommandLine(20, io))).toBe(false)
+    // Windows: a quoted devin.exe.
+    expect(isOneShotHostRun(hostCommandLine(30, io))).toBe(true)
+  })
+
+  it('any other parent is the host itself, and its parent is never read', () => {
+    asked.length = 0
+    expect(hostCommandLine(40, io)).toBe('agy --print hi')
+    expect(asked).toEqual([40])
+    expect(hostCommandLine(60, io)).toBe('zed --acp devin acp')
+  })
+
+  it('keeps the agent process line when its parent is unknown or unreadable', () => {
+    expect(hostCommandLine(50, io)).toBe('devin acp')
+    expect(isOneShotHostRun(hostCommandLine(50, io))).toBe(false)
   })
 })
 
