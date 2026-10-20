@@ -47,6 +47,22 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
     deps.fanout.deliverEvent(c.get('team_id'), row.workgroup, 'task', JSON.stringify({ type: 'task', task: store.view(row) }))
   }
 
+  /** Observers read the ledger and write nothing to it. */
+  function readOnly(c: C) {
+    return c.get('grant').role === 'observer' ? c.json({ error: 'read_only' }, 403) : null
+  }
+
+  /**
+   * The deepest dispatched task this token is working on right now. Derived on the relay, not
+   * taken from the optional parent_task, so leaving the parent out cannot reset the depth.
+   */
+  function heldDepth(c: C): number {
+    const row = deps.db.prepare(`
+      SELECT MAX(depth) AS d FROM task WHERE team_id=? AND assignee_token=? AND ended_at IS NULL
+    `).get(c.get('team_id'), c.get('token').id) as { d: number | null }
+    return row.d ?? 0
+  }
+
   function limited(c: C, limiter: ReturnType<typeof createLimiter>) {
     const retry = limiter.hit(c.get('token').id)
     return retry > 0 ? c.json({ error: 'rate_limited' }, 429, { 'retry-after': String(retry) }) : null
@@ -70,6 +86,8 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
   app.post('/', async c => {
     const parsed = TaskCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_body' }, 400)
+    const ro = readOnly(c)
+    if (ro) return ro
     const caller = callerSession(c)
     if (!caller.ok) return c.json({ error: 'unknown_sender_session' }, 403)
     const me = caller.entry
@@ -99,7 +117,7 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
       const target = deps.sessions!.get(body.assignee)
       if (!target || target.team_id !== c.get('team_id')) return c.json({ error: 'no_live_session' }, 404)
       if (!grant.visible.includes(target.workgroup)) return c.json({ error: 'cross_workgroup' }, 403)
-      depth = parent ? parent.depth + 1 : 1
+      depth = Math.max(parent?.depth ?? 0, heldDepth(c)) + 1
       if (depth > MAX_DISPATCH_DEPTH) return c.json({ error: 'depth_exceeded', max: MAX_DISPATCH_DEPTH }, 403)
       assignee = target
       state = 'submitted'
@@ -126,10 +144,14 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
   })
 
   app.patch('/:id', async c => {
+    // Read the body first: from the row read to the write below nothing awaits, so no other
+    // request can change the task in between.
+    const parsed = TaskUpdateSchema.safeParse(await c.req.json().catch(() => null))
     const row = visibleRow(c, c.req.param('id'))
     if (!row) return c.json({ error: 'not_found' }, 404)
-    const parsed = TaskUpdateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_body' }, 400)
+    const ro = readOnly(c)
+    if (ro) return ro
     const caller = callerSession(c)
     if (!caller.ok) return c.json({ error: 'unknown_sender_session' }, 403)
     const actor = actorOf(c, row, caller.entry)
@@ -155,7 +177,7 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
       ...(parsed.data.progress !== undefined ? { progress: parsed.data.progress } : {}),
       ...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {}),
     }, parsed.data.if_seq)
-    if (!r.ok) return c.json({ error: 'task_conflict', seq: r.seq }, 409)
+    if (!r.ok) return r.terminal ? c.json({ error: 'task_terminal' }, 409) : c.json({ error: 'task_conflict', seq: r.seq }, 409)
     if (to !== undefined && to !== row.state) {
       audit(deps.db, c.get('team_id'), c.get('human').id, 'task.transition',
         { task_id: row.id, from: row.state, to, by: actor.dispatcher ? 'dispatcher' : 'assignee' }, nowIso)
@@ -165,10 +187,12 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
   })
 
   app.post('/:id/artifacts', async c => {
+    const parsed = ArtifactSchema.safeParse(await c.req.json().catch(() => null))
     const row = visibleRow(c, c.req.param('id'))
     if (!row) return c.json({ error: 'not_found' }, 404)
-    const parsed = ArtifactSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_body' }, 400)
+    const ro = readOnly(c)
+    if (ro) return ro
     const caller = callerSession(c)
     if (!caller.ok) return c.json({ error: 'unknown_sender_session' }, 403)
     const actor = actorOf(c, row, caller.entry)
@@ -190,6 +214,9 @@ export function tasksRoute(deps: Deps & { tasks: TaskStore }) {
     if (!caller.ok || !caller.entry) return c.json({ error: 'session_required' }, 400)
     if (row.assignee_token !== c.get('token').id) return c.json({ error: 'not_allowed' }, 403)
     if (isTerminalTaskState(row.state)) return c.json({ error: 'task_terminal', state: row.state }, 409)
+    // Only a session that is gone (restarted, resumed elsewhere) hands its task over; a live one keeps it.
+    const old = row.assignee_session ? deps.sessions!.get(row.assignee_session) : undefined
+    if (old && old.streams > 0 && old.session_id !== caller.entry.session_id) return c.json({ error: 'assignee_live' }, 409)
     const me = caller.entry
     const updated = store.rebind(c.get('team_id'), row.id, { session: me.session_id, name: me.name, machine: me.card.herdr?.machine ?? me.device })
     deps.db.prepare(`

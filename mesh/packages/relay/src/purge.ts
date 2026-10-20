@@ -43,6 +43,7 @@ export function purgeInactive(
         "INSERT INTO audit_log(team_id,at,actor_human_id,event,detail_json) VALUES (?,?,?,?,?)"
       ).run(teamId, nowIso, actorHumanId, 'user.purge',
         JSON.stringify({ handle: c.handle, cutoff: cutoffIso, reason: 'inactive' }))
+      db.prepare("DELETE FROM token_grant WHERE token_id IN (SELECT id FROM token WHERE human_id=?)").run(c.id)
       db.prepare("DELETE FROM token WHERE human_id=?").run(c.id)
       db.prepare("DELETE FROM pair_code WHERE human_id=?").run(c.id)
       db.prepare("DELETE FROM human WHERE id=?").run(c.id)

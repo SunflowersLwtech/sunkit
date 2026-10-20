@@ -59,9 +59,8 @@ describe('leases', () => {
     const body = await res.json() as { lease: Lease }
     expect(body.lease.holder).toBeNull()
     expect(JSON.stringify(body)).not.toContain('private-holder')
-    const list = await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/leases')).json() as Lease[]
-    expect(list).toHaveLength(1)
-    expect(list[0]!.holder).toBeNull()
+    // The list itself leaves it out: only an attempt to take the same name tells a teammate it is held.
+    expect(await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/leases')).json()).toEqual([])
   })
 
   it('deploy/ and cred/ leases need an active task of the holder', async () => {

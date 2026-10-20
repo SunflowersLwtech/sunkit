@@ -134,6 +134,7 @@ export function adminRoute(deps: Deps) {
         deps.db.prepare(
           "INSERT INTO audit_log(team_id,at,actor_human_id,event,detail_json) VALUES (?,?,?,?,?)"
         ).run(team, now, c.get('human').id, 'user.delete', JSON.stringify({ handle, hard: true }))
+        deps.db.prepare("DELETE FROM token_grant WHERE token_id IN (SELECT id FROM token WHERE human_id=?)").run(row.id)
         deps.db.prepare("DELETE FROM token WHERE human_id=?").run(row.id)
         deps.db.prepare("DELETE FROM pair_code WHERE human_id=?").run(row.id)
         deps.db.prepare("DELETE FROM human WHERE id=?").run(row.id)

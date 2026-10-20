@@ -118,10 +118,12 @@ export class TaskStore {
 
   /** Applies a validated change. `ifSeq` makes it conditional on nobody having written since. */
   update(team_id: string, id: string, change: { state?: TaskState; progress?: string; reason?: string },
-    ifSeq?: number): { ok: true; row: TaskRow } | { ok: false; seq: number } {
+    ifSeq?: number): { ok: true; row: TaskRow } | { ok: false; seq: number; terminal: boolean } {
     return this.db.transaction(() => {
       const cur = this.get(team_id, id)!
-      if (ifSeq !== undefined && cur.seq !== ifSeq) return { ok: false as const, seq: cur.seq }
+      // Checked again on the row as it is now: whatever the caller read earlier may be stale.
+      if (isTerminalTaskState(cur.state)) return { ok: false as const, seq: cur.seq, terminal: true }
+      if (ifSeq !== undefined && cur.seq !== ifSeq) return { ok: false as const, seq: cur.seq, terminal: false }
       const at = this.now().toISOString()
       const state = change.state ?? cur.state
       this.db.prepare(`
@@ -153,9 +155,22 @@ export class TaskStore {
     return this.get(team_id, id)!
   }
 
-  /** Drops tasks that ended more than the retention period ago. */
+  /**
+   * Fails tasks nobody touched for the retention period (reason `abandoned`), then drops tasks
+   * that ended more than the retention period ago. Returns how many were dropped.
+   */
   sweep(): number {
-    const cutoff = new Date(this.now().getTime() - TASK_RETENTION_MS).toISOString()
+    const now = this.now()
+    const cutoff = new Date(now.getTime() - TASK_RETENTION_MS).toISOString()
+    const quiet = this.db.prepare(`
+      SELECT id, team_id FROM task WHERE ended_at IS NULL AND updated_at < ?
+    `).all(cutoff) as Array<{ id: string; team_id: string }>
+    for (const t of quiet) {
+      this.db.transaction(() => {
+        this.db.prepare("UPDATE task SET state='failed', reason='abandoned', seq=?, updated_at=?, ended_at=? WHERE id=?")
+          .run(this.nextSeq(t.team_id), now.toISOString(), now.toISOString(), t.id)
+      })()
+    }
     return this.db.prepare('DELETE FROM task WHERE ended_at IS NOT NULL AND ended_at < ?').run(cutoff).changes
   }
 

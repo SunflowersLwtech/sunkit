@@ -5,6 +5,10 @@ import { SessionOwnershipError, type SessionMode, type SessionStatus } from '../
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
 import type { Subscriber, Viewer } from '../fanout.ts'
+import { readGrant } from '../grants.ts'
+
+/** How long a live stream trusts the grant it last read; a changed grant applies within this. */
+const GRANT_REFRESH_MS = 5_000
 
 const PING_INTERVAL_MS = 25_000
 
@@ -56,12 +60,19 @@ export function streamRoute(deps: Deps) {
     return streamSSE(c, async stream => {
       const team_id = c.get('team_id')
       const handle = c.get('human').handle
-      const grant = c.get('grant')
-      // Read live: a session may move into another granted workgroup while its stream is open.
-      const viewer = (): Viewer => ({
-        workgroup: (session ? deps.sessions!.get(session)?.workgroup : undefined) ?? grant.workgroup,
-        visible: grant.visible,
-      })
+      const tokenId = c.get('token').id
+      let grant = c.get('grant')
+      let grantAt = deps.now().getTime()
+      const current = () => {
+        const t = deps.now().getTime()
+        if (t - grantAt > GRANT_REFRESH_MS) { grant = readGrant(deps.db, tokenId); grantAt = t }
+        return grant
+      }
+      // Read live: a session may move into another granted workgroup, and an admin may change the grant.
+      const viewer = (): Viewer => {
+        const g = current()
+        return { workgroup: (session ? deps.sessions!.get(session)?.workgroup : undefined) ?? g.workgroup, visible: g.visible }
+      }
 
       const backlog = since
         ? deps.store.fetchSince(team_id, handle, since, session, viewer())

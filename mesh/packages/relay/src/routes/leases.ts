@@ -36,10 +36,11 @@ export function leasesRoute(deps: Deps & { leases: LeaseStore; tasks: TaskStore 
     return retry > 0 ? c.json({ error: 'rate_limited' }, 429, { 'retry-after': String(retry) }) : null
   }
 
+  // Lists only what the caller may see; a lease held elsewhere still shows up as held (holder hidden) on a 409.
   app.get('/', c => {
     const name = c.req.query('name')
-    const rows = store.listLive(c.get('team_id')).filter(l => name === undefined || l.name === name)
-    return c.json(rows.map(l => store.view(l, sees(c, l))))
+    const rows = store.listLive(c.get('team_id')).filter(l => sees(c, l) && (name === undefined || l.name === name))
+    return c.json(rows.map(l => store.view(l, true)))
   })
 
   app.post('/', async c => {
@@ -48,14 +49,19 @@ export function leasesRoute(deps: Deps & { leases: LeaseStore; tasks: TaskStore 
     const me = holderSession(c)
     if (me === 'missing') return c.json({ error: 'session_required' }, 400)
     if (me === 'not_owned') return c.json({ error: 'unknown_sender_session' }, 403)
+    if (c.get('grant').role === 'observer') return c.json({ error: 'read_only' }, 403)
     const body = parsed.data
     const team = c.get('team_id')
 
-    if (TASK_BOUND_LEASE_PREFIXES.some(p => body.name.startsWith(p))) {
-      // A deploy or a credential rotation hangs off live work the holder owns, never a free-floating lock.
-      const t = body.task_id ? deps.tasks.get(team, body.task_id) : undefined
+    // A task named on a lease must be the holder's own live task (its dispatcher may then force-release it).
+    if (body.task_id) {
+      const t = deps.tasks.get(team, body.task_id)
       const ok = t && !isTerminalTaskState(t.state) && t.assignee_token === c.get('token').id && t.assignee_session === me.session_id
-      if (!ok) return c.json({ error: 'lease_needs_task' }, 403)
+      if (!ok) return c.json({ error: 'task_not_assigned' }, 403)
+    }
+    // A deploy or a credential rotation hangs off live work the holder owns, never a free-floating lock.
+    if (TASK_BOUND_LEASE_PREFIXES.some(p => body.name.startsWith(p)) && !body.task_id) {
+      return c.json({ error: 'lease_needs_task' }, 403)
     }
     const tooMany = limited(c)
     if (tooMany) return tooMany

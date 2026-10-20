@@ -17,9 +17,10 @@ export function sessionsRoute(deps: Deps) {
     if (taskIds.length === 0) return c.json(views)
     // dispatched_by is derived from the task, never written by the session.
     const rows = deps.db.prepare(
-      `SELECT id, dispatcher_name FROM task WHERE team_id=? AND id IN (${taskIds.map(() => '?').join(',')})`,
-    ).all(c.get('team_id'), ...taskIds) as Array<{ id: string; dispatcher_name: string | null }>
-    const by = new Map(rows.map(r => [r.id, r.dispatcher_name]))
+      `SELECT id, dispatcher_name, workgroup FROM task WHERE team_id=? AND id IN (${taskIds.map(() => '?').join(',')})`,
+    ).all(c.get('team_id'), ...taskIds) as Array<{ id: string; dispatcher_name: string | null; workgroup: string }>
+    const visible = c.get('grant').visible
+    const by = new Map(rows.filter(r => visible.includes(r.workgroup)).map(r => [r.id, r.dispatcher_name]))
     return c.json(views.map(v => (v.task_id && by.get(v.task_id) ? { ...v, dispatched_by: by.get(v.task_id) } : v)))
   })
 

@@ -83,8 +83,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_team_at ON audit_log(team_id, at);
 
 -- v4: the A2A ledger. Additive only, so an older relay image runs on this file unchanged.
 -- Role and workgroup are bound to a token, never to a session (session ids are visible to the team).
+-- No foreign key on token_id: an older relay deletes tokens without knowing this table exists.
 CREATE TABLE IF NOT EXISTS token_grant (
-  token_id TEXT PRIMARY KEY REFERENCES token(id),
+  token_id TEXT PRIMARY KEY,
   role TEXT NOT NULL CHECK(role IN ('worker','orchestrator','observer','executor')),
   workgroup TEXT NOT NULL,
   visible_json TEXT NOT NULL DEFAULT '[]',

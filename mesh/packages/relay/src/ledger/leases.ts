@@ -87,8 +87,10 @@ export class LeaseStore {
     return this.db.transaction(() => {
       const l = this.get(team_id, id)!
       if (l.released_at !== null || !this.isLive(l)) return { ok: false as const, error: 'lease_expired' as const }
-      const used = this.db.prepare('SELECT COALESCE(SUM(renewed_s), 0) AS s FROM lease WHERE holder_session=? AND released_at IS NULL')
-        .get(l.holder_session) as { s: number }
+      // Counted over the session's leases of the last day, released ones included, so releasing and re-acquiring does not reset it.
+      const since = new Date(this.now().getTime() - 24 * 60 * 60_000).toISOString()
+      const used = this.db.prepare('SELECT COALESCE(SUM(renewed_s), 0) AS s FROM lease WHERE holder_session=? AND acquired_at > ?')
+        .get(l.holder_session, since) as { s: number }
       if (used.s + ttl_s > MAX_RENEW_S_PER_SESSION) return { ok: false as const, error: 'lease_quota' as const }
       const at = this.now()
       this.db.prepare('UPDATE lease SET expires_at=?, ttl_s=?, renew_count=renew_count+1, renewed_s=renewed_s+? WHERE id=?')

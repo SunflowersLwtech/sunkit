@@ -192,7 +192,13 @@ describe('tasks: snapshot, events, artifacts, rebind', () => {
 
   it('rebinds a task to a new session of the same token after a restart, and only that token', async () => {
     const h = harness(specs)
-    const t = await dispatched(h)
+    await openSession(h.app, h.tok.tk_orch!, S.o1, 'feishu-assistant')
+    const old = await openSession(h.app, h.tok.tk_m4!, S.a1, 'fr-inkrec', '&cwd=/w')
+    const t = await (await create(h, h.tok.tk_orch!, { title: 'fix ink P1', assignee: S.a1 }, S.o1)).json() as Task
+    // The old process is gone. In-process, a cancelled body does not abort the request, so detach
+    // the way the stream's cleanup does when a real connection drops.
+    await old.body!.cancel()
+    h.sessions.detach(S.a1)
     await openSession(h.app, h.tok.tk_m4!, S.a2, 'fr-inkrec')
     const rb = await req(h.app, h.tok.tk_m4!, 'POST', `/v1/tasks/${t.id}/rebind`, {}, { 'x-mesh-session': S.a2 })
     expect(rb.status).toBe(200)
