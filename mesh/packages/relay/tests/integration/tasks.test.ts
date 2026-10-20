@@ -35,6 +35,8 @@ describe('tasks: who may create them', () => {
     const t = await res.json() as Task
     expect(t).toMatchObject({ state: 'working', depth: 0, workgroup: 'liuwei', assignee: { session: S.a1, name: 'manual-work' } })
     expect((await req(h.app, h.tok.tk_m4!, 'POST', '/v1/sessions/self', { session: S.a1, task_id: t.id })).status).toBe(200)
+    const rows = await (await req(h.app, h.tok.tk_aws!, 'GET', '/v1/sessions')).json() as Array<Record<string, unknown>>
+    expect(rows.find(r => r.session_id === S.a1)).toMatchObject({ task_id: t.id, dispatched_by: 'manual-work' })
   })
 
   it('a worker cannot hand a task to another session', async () => {
