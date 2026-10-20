@@ -3,6 +3,7 @@ import type { MessageStore } from './messages/store.ts'
 import type { Fanout } from './fanout.ts'
 import type { PresenceRegistry } from './presence/registry.ts'
 import type { SessionRegistry } from './sessions/registry.ts'
+import type { TaskStore } from './ledger/tasks.ts'
 
 export interface Deps {
   db: Db
@@ -10,5 +11,6 @@ export interface Deps {
   fanout: Fanout
   presence: PresenceRegistry
   sessions?: SessionRegistry
+  tasks?: TaskStore
   now: () => Date
 }
