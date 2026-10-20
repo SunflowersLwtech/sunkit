@@ -21,6 +21,8 @@ export interface SessionEntry {
   detached_at?: number
   /** Set by the relay from the token's grant (or a granted move); never taken from the client as-is. */
   workgroup: string
+  /** True once the session moved itself (a granted self-update); only a move survives a reconnect. */
+  wg_moved?: boolean
   /** The token's role at attach time; display only, every check re-reads the request token's grant. */
   role: Role
   card: SessionCard
@@ -123,9 +125,12 @@ export class SessionRegistry {
       streams: (existing?.streams ?? 0) + 1,
       last_seen: new Date(this.now()).toISOString(),
       // A reconnect keeps a granted move (e.g. into the shared workgroup) and the card.
-      workgroup: existing && (input.visible ?? []).includes(existing.workgroup)
+      // A session follows its token's current grant on every reconnect, except one that moved
+      // itself into another workgroup the token is still granted.
+      workgroup: existing?.wg_moved && (input.visible ?? []).includes(existing.workgroup)
         ? existing.workgroup
         : input.workgroup ?? 'team',
+      ...(existing?.wg_moved && (input.visible ?? []).includes(existing.workgroup) ? { wg_moved: true } : {}),
       role: input.role ?? existing?.role ?? 'worker',
       card: existing?.card ?? {},
       card_at: existing?.card_at ?? this.now(),
@@ -165,7 +170,7 @@ export class SessionRegistry {
     if (patch.cwd !== undefined) e.cwd = patch.cwd
     if (patch.login !== undefined) e.login = patch.login
     if (patch.status !== undefined) e.status = patch.status
-    if (patch.workgroup !== undefined) e.workgroup = patch.workgroup
+    if (patch.workgroup !== undefined) { e.workgroup = patch.workgroup; e.wg_moved = true }
     const card: SessionCard = { ...e.card }
     for (const k of ['agent', 'model', 'repo', 'branch', 'herdr', 'task_id', 'source'] as const) {
       if (patch[k] !== undefined) (card as Record<string, unknown>)[k] = patch[k]

@@ -50,6 +50,20 @@ describe('session cards (POST /v1/sessions/self)', () => {
     expect((await list(h, h.tok.tk_mate!)).map(r => r.session_id)).toContain(S.a1)
   })
 
+  it('on reconnect a session follows its token\'s current grant, unless it moved itself to a workgroup still granted', async () => {
+    const h = harness([{ id: 'tk_x', handle: 'weiliu', label: 'x' }, { id: 'tk_admin', handle: 'weiliu', label: 'admin', tier: 'admin' as const }])
+    const a = await openSession(h.app, h.tok.tk_x!, S.a1, 'stays')
+    const b = await openSession(h.app, h.tok.tk_x!, S.a2, 'moves')
+    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_x/grant', { role: 'worker', workgroup: 'liuwei', visible: ['team'] })
+    expect((await req(h.app, h.tok.tk_x!, 'POST', '/v1/sessions/self', { session: S.a2, workgroup: 'team' })).status).toBe(200)
+    await a.body!.cancel(); await b.body!.cancel()
+    await openSession(h.app, h.tok.tk_x!, S.a1, 'stays')
+    await openSession(h.app, h.tok.tk_x!, S.a2, 'moves')
+    const rows = await list(h, h.tok.tk_x!)
+    expect(rows.find(r => r.session_id === S.a1)?.workgroup).toBe('liuwei')
+    expect(rows.find(r => r.session_id === S.a2)?.workgroup).toBe('team')
+  })
+
   it('refuses a task_id that is not assigned to this token', async () => {
     const h = harness(specs)
     await openSession(h.app, h.tok.tk_m4!, S.a1, 'x')
