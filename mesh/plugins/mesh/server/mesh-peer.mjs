@@ -36941,6 +36941,7 @@ var CardWriter = class {
   card = {};
   sent = {};
   cancel = null;
+  failures = 0;
   delayMs;
   enabled;
   schedule;
@@ -36965,10 +36966,11 @@ var CardWriter = class {
   }
   arm() {
     if (this.cancel || Object.keys(this.pending()).length === 0) return;
+    const delay = Math.min(6e4, this.delayMs * 2 ** this.failures);
     this.cancel = this.schedule(() => {
       this.cancel = null;
       void this.flush();
-    }, this.delayMs);
+    }, delay);
   }
   async flush() {
     if (!this.enabled) return;
@@ -36977,7 +36979,18 @@ var CardWriter = class {
     try {
       await this.write(patch);
       this.sent = { ...this.sent, ...patch };
-    } catch {
+      this.failures = 0;
+    } catch (err) {
+      const { status, code } = err;
+      if (status !== void 0 && status >= 400 && status < 500 && status !== 404 && status !== 429) {
+        if (code === "task_not_assigned") {
+          delete this.card.task_id;
+        } else {
+          this.sent = { ...this.sent, ...patch };
+        }
+      } else {
+        this.failures = Math.min(this.failures + 1, 10);
+      }
     }
     this.arm();
   }
@@ -37024,6 +37037,7 @@ var TaskDriver = class {
       if (r.task.assignee.session && r.task.assignee.session !== this.session) {
         const rb = await this.api.rebind(this.id);
         this.log("peer.task.rebind", { task: this.id, status: rb.status });
+        if (rb.status !== 200) this.final = true;
       }
     } catch (err) {
       this.log("peer.task.start_error", { task: this.id, err: String(err instanceof Error ? err.message : err) });
@@ -37049,6 +37063,7 @@ var TaskDriver = class {
       return;
     }
     this.log("peer.task.update_refused", { task: this.id, want, status: r.status, error: r.error ?? "" });
+    if (r.status === 403 || r.status === 404) this.final = true;
   }
 };
 
@@ -37107,8 +37122,16 @@ var RelayClient = class {
       headers: { authorization: `Bearer ${this.opts.token}`, "content-type": "application/json" },
       body: JSON.stringify({ session: this.opts.sessionId, ...card })
     });
-    if (res.status === 404) throw new Error("session not attached yet");
-    if (res.status !== 200) throw new Error(`card update failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+    if (res.status === 404) throw Object.assign(new Error("session not attached yet"), { status: 404 });
+    if (res.status !== 200) {
+      const text = await res.text();
+      let code;
+      try {
+        code = JSON.parse(text).error;
+      } catch {
+      }
+      throw Object.assign(new Error(`card update failed: ${res.status} ${text.slice(0, 200)}`), { status: res.status, code });
+    }
   }
   sessionHeaders() {
     return {
@@ -37943,10 +37966,15 @@ var HookChannel = class {
   extras;
   nudgedSeq = 0;
   notifiedSeq = 0;
+  lastAt = 0;
   handle(req) {
     const p = this.inbox.peek();
     const base = { unread: p.size, from: p.from };
     const event = (e) => this.extras.onEvent?.(e);
+    if (typeof req.at === "number" && ["turn", "tool", "idle", "stop", "blocked", "end"].includes(req.op)) {
+      if (req.at < this.lastAt) return req.op === "stop" ? { ...base, continue: false } : base;
+      this.lastAt = req.at;
+    }
     if (req.op === "turn") {
       this.onStatus("busy");
       event("turn");

@@ -550,15 +550,20 @@ socket every joined peer now serves.
   takes its task over (`rebind`) once the old session is gone.
 - **Claude Code**: the plugin ships `hooks/hooks.json` (SessionStart, UserPromptSubmit,
   Notification for permission/input prompts, Stop, SessionEnd), each running
-  `mesh-cli.mjs claude hook <event>`: exec form, in the background except at session start and
-  end, silent, always exit 0. At session start it also exports `MESH_SESSION_ID` through
-  `CLAUDE_ENV_FILE`. Once hooks report, the 3 s status poll stops writing busy/idle (it keeps
+  `mesh-cli.mjs claude hook <event>`: exec form, in the background (session end excepted),
+  silent, always exit 0; each asks only its parent process (claude) and carries its start time so
+  the peer drops one that arrives after a newer event. At session start it also exports
+  `MESH_SESSION_ID` through `CLAUDE_ENV_FILE`. Once hooks report, the 3 s status poll stops writing busy/idle (it keeps
   following the name and the login). Claude Code has no event for a prompt being answered, so
   `input_required` clears at the end of that turn, not the moment the prompt is answered.
 - **agy, Grok Build, Devin CLI, pi** report through the hooks they already have; nothing changes
   in their configuration.
 - **Commands run inside a host** (`mesh task …`, `mesh lease …` from a Bash tool) find their
-  session by asking the host's peer when neither `--session` nor `MESH_SESSION_ID` is given.
+  session by asking the host's peer unless `--session` is given; `MESH_SESSION_ID` is the last
+  resort (it may be inherited from an outer session).
+- A card field the relay refuses for good (a `MESH_TASK_ID` that is gone or not this token's) is
+  dropped and the rest is sent; failures back off up to a minute. The task driver stops once the
+  relay refuses to let the session move the task.
 - **Waking** (`MESH_WAKE`) is capped locally: 6 wakes per session and 60 per machine per hour
   (`~/.claude-mesh/wakes.json`), for Herdr wakes and for turns a host starts by itself (pi) alike.
 - `MESH_CARD_WRITE=0` turns card and task writes off for a session (busy/idle still flow).

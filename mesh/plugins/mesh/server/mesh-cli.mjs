@@ -5400,8 +5400,16 @@ var init_outbound = __esm({
           headers: { authorization: `Bearer ${this.opts.token}`, "content-type": "application/json" },
           body: JSON.stringify({ session: this.opts.sessionId, ...card })
         });
-        if (res.status === 404) throw new Error("session not attached yet");
-        if (res.status !== 200) throw new Error(`card update failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+        if (res.status === 404) throw Object.assign(new Error("session not attached yet"), { status: 404 });
+        if (res.status !== 200) {
+          const text = await res.text();
+          let code;
+          try {
+            code = JSON.parse(text).error;
+          } catch {
+          }
+          throw Object.assign(new Error(`card update failed: ${res.status} ${text.slice(0, 200)}`), { status: res.status, code });
+        }
       }
       sessionHeaders() {
         return {
@@ -5666,6 +5674,13 @@ async function askHostPeer(req, ppid = process.ppid, opts = {}) {
   };
   const deadline = Date.now() + (opts.waitMs ?? 0);
   let chain;
+  if (opts.ancestors === false) {
+    for (; ; ) {
+      const reply = await askPid(ppid, req);
+      if (reply || Date.now() >= deadline) return reply;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
   for (; ; ) {
     for (const pid of [cached, ppid]) {
       const reply = pid ? await askPid(pid, req) : void 0;
@@ -6291,12 +6306,12 @@ async function runClaudeHook(args, deps = defaults) {
     input = JSON.parse(await deps.stdin());
   } catch {
   }
-  const cacheKey = typeof input.session_id === "string" ? input.session_id : void 0;
+  const at = Date.now();
   try {
     if (event === "session-start") {
       const card = typeof input.model === "string" ? { model: input.model } : {};
-      await deps.ask({ op: "card", card }, { cacheKey, waitMs: START_WAIT_MS });
-      const me = await deps.ask({ op: "whoami" }, { cacheKey });
+      await deps.ask({ op: "card", card }, { ...ONLY_PARENT, waitMs: START_WAIT_MS });
+      const me = await deps.ask({ op: "whoami" }, ONLY_PARENT);
       const envFile = deps.env.CLAUDE_ENV_FILE;
       if (envFile && me?.session && SESSION_ID_REGEX.test(me.session)) {
         appendFileSync(envFile, `export MESH_SESSION_ID=${me.session}
@@ -6304,18 +6319,15 @@ async function runClaudeHook(args, deps = defaults) {
       }
       return 0;
     }
-    if (event === "turn") await deps.ask({ op: "turn" }, { cacheKey });
-    if (event === "blocked") await deps.ask({ op: "blocked" }, { cacheKey });
-    if (event === "stop") await deps.ask({ op: "stop", natural: true }, { cacheKey });
-    if (event === "end") {
-      await deps.ask({ op: "end" }, { cacheKey });
-      deps.forget(cacheKey);
-    }
+    if (event === "turn") await deps.ask({ op: "turn", at }, ONLY_PARENT);
+    if (event === "blocked") await deps.ask({ op: "blocked", at }, ONLY_PARENT);
+    if (event === "stop") await deps.ask({ op: "stop", natural: true, at }, ONLY_PARENT);
+    if (event === "end") await deps.ask({ op: "end", at }, ONLY_PARENT);
   } catch {
   }
   return 0;
 }
-var CLAUDE_HOOK_EVENTS, defaults, START_WAIT_MS;
+var CLAUDE_HOOK_EVENTS, defaults, ONLY_PARENT, START_WAIT_MS;
 var init_claude = __esm({
   "packages/peer-agent/src/cli/claude.ts"() {
     "use strict";
@@ -6328,6 +6340,7 @@ var init_claude = __esm({
       forget: forgetHostPeer,
       env: process.env
     };
+    ONLY_PARENT = { ancestors: false };
     START_WAIT_MS = 4e3;
   }
 });
@@ -6434,13 +6447,15 @@ function makeCtx(globals, deps) {
       if (deps.client) return deps.client;
       if (!cached) {
         const cfg = loadConfig();
-        const sess = session ?? process.env.MESH_SESSION_ID;
+        const discover = deps.discover ?? (async () => (await askHostPeer({ op: "whoami" }))?.session);
         cached = new LedgerClient({
           relayUrl: relay ?? cfg.relay_url,
           token: loadToken(cfg.token_path),
-          ...sess ? { session: sess } : {},
-          // Run inside a host (a Bash tool of Claude Code, pi, agy …): its peer knows the session.
-          discoverSession: async () => (await askHostPeer({ op: "whoami" }))?.session
+          ...session ? { session } : {},
+          // --session first; then the peer of the host this runs in (a Bash tool of Claude Code,
+          // pi, agy …), which knows its session even when an outer session's MESH_SESSION_ID was
+          // inherited; MESH_SESSION_ID last.
+          discoverSession: async () => await discover().catch(() => void 0) ?? process.env.MESH_SESSION_ID
         });
       }
       return cached;
@@ -6918,7 +6933,7 @@ function writeMeshMcpConfig(dir = meshDir()) {
 
 // packages/peer-agent/src/cli.ts
 init_relay_url();
-loadEnvFiles();
+if (process.argv[2] !== "claude") loadEnvFiles();
 function argValue5(args, flag5) {
   const i = args.indexOf(flag5);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
