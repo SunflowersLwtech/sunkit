@@ -20,6 +20,9 @@ import { decideJoin, hostCommandLine, isOneShotHostRun, parentCommandLine } from
 import { onHostClosed } from './host-lifetime.ts'
 import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
 import { herdrWaker } from './wake.ts'
+import { WakeBudget } from './wake-budget.ts'
+import { meshDir } from './paths.ts'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logJson } from './logger.ts'
 
@@ -150,7 +153,10 @@ async function main(): Promise<void> {
   // (agy, Grok Build, Devin CLI, pi) to see the inbox and report busy/idle, Claude Code (the
   // plugin's hooks) to report turns; all of them for the card and the task. MESH_WAKE=herdr also
   // prompts an idle pull host.
-  const waker = inbox ? herdrWaker() : undefined
+  // One wake budget per session, its ledger shared by every session on the machine: Herdr wakes
+  // and turns a host starts by itself (pi) count against the same limits.
+  const wakeBudget = new WakeBudget({ file: join(meshDir(), 'wakes.json') })
+  const waker = inbox ? herdrWaker(process.env, undefined, wakeBudget) : undefined
   {
     const setStatus = (status: 'busy' | 'idle') => {
       if (identity.status === status) return
@@ -165,6 +171,7 @@ async function main(): Promise<void> {
       },
       onCard: c => cards.set(cardFromHook(c)),
       whoami: () => ({ session: sessionId, name: identity.name }),
+      wakeAllowed: () => wakeBudget.take(),
     })
     serveHookSocket(hookPath, channel)
       .then(server => {
