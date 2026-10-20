@@ -4,6 +4,10 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { createMcpServer } from './mcp-server.ts'
 import { loadConfig, loadToken, assertTokenNotInRepo, defaultConfigPath } from './config.ts'
 import { existsSync, realpathSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { CardPatchSchema } from '@claude-mesh/shared'
+import { CardWriter, initialCard, type CardFields } from './card.ts'
+import { TaskDriver } from './task-driver.ts'
 import { RelayClient } from './outbound.ts'
 import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.ts'
 import { chooseJoinMode, Inbox } from './inbox.ts'
@@ -16,6 +20,9 @@ import { decideJoin, hostCommandLine, isOneShotHostRun, parentCommandLine } from
 import { onHostClosed } from './host-lifetime.ts'
 import { HookChannel, hookSocketPath, serveHookSocket } from './hook-socket.ts'
 import { herdrWaker } from './wake.ts'
+import { WakeBudget } from './wake-budget.ts'
+import { meshDir } from './paths.ts'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logJson } from './logger.ts'
 
@@ -110,30 +117,63 @@ async function main(): Promise<void> {
   void refreshRoster()
   setInterval(refreshRoster, 60_000).unref()
 
+  // The session's card (what it is, where, on what) and its relay task (MESH_TASK_ID). The peer is
+  // their only writer here; the host's hooks tell it what changed. MESH_CARD_WRITE=0 turns both off.
+  const cardOn = process.env.MESH_CARD_WRITE !== '0'
+  const machine = cfg.machine ?? (process.env.MESH_MACHINE?.trim() || undefined)
+  const git = (args: string[]) => {
+    try { return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return undefined }
+  }
+  const card0 = initialCard({ env: process.env, host: pullHost ? (process.env.MESH_HOST ?? '') : undefined, machine, git })
+  const cards = new CardWriter(card => client.writeCard(card), { enabled: cardOn })
+  cards.set({ ...card0, source: pullHost ? 'hook' : 'poll' })
+  const tasks = cardOn && card0.task_id
+    ? new TaskDriver({ get: id => client.getTask(id), patch: (id, b) => client.patchTask(id, b), rebind: id => client.rebindTask(id) },
+      card0.task_id, sessionId, (event, fields) => logJson('info', event, fields))
+    : undefined
+  // Once Claude Code's hooks report (the mesh plugin's hooks.json), they own busy/idle and the
+  // status poll below stops writing it; the poll keeps following the name and the login.
+  let hooksActive = false
+
   // Follow Claude Code's own name/status for this session (read-only). A pull host keeps the
   // name it started with.
   if (!pull) setInterval(() => {
     const next = probeClaudeSession({ cwd })
     const nextLogin = readLogin()
-    if (next.name === identity.name && next.status === identity.status && nextLogin === login) return
-    identity = next
+    const status = hooksActive ? identity.status : next.status
+    if (next.name === identity.name && status === identity.status && nextLogin === login) return
+    const statusChanged = status !== identity.status
+    identity = { ...next, status }
     login = nextLogin
-    client.updateSelf({ name: next.name, status: next.status, ...(nextLogin ? { login: nextLogin } : {}) })
+    client.updateSelf({ name: next.name, ...(statusChanged ? { status } : {}), ...(nextLogin ? { login: nextLogin } : {}) })
       .catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
   }, IDENTITY_POLL_MS).unref()
 
-  // Pull hosts with lifecycle hooks (Antigravity CLI) reach the inbox through a local socket:
-  // the hooks tell a working agent that messages arrived and report busy/idle; MESH_WAKE=herdr
-  // also prompts an idle one.
-  const waker = inbox ? herdrWaker() : undefined
-  if (inbox) {
+  // Every joined session listens on a local socket for its host's lifecycle hooks: pull hosts
+  // (agy, Grok Build, Devin CLI, pi) to see the inbox and report busy/idle, Claude Code (the
+  // plugin's hooks) to report turns; all of them for the card and the task. MESH_WAKE=herdr also
+  // prompts an idle pull host.
+  // One wake budget per session, its ledger shared by every session on the machine: Herdr wakes
+  // and turns a host starts by itself (pi) count against the same limits.
+  const wakeBudget = new WakeBudget({ file: join(meshDir(), 'wakes.json') })
+  const waker = inbox ? herdrWaker(process.env, undefined, wakeBudget) : undefined
+  {
     const setStatus = (status: 'busy' | 'idle') => {
       if (identity.status === status) return
       identity = { ...identity, status }
       client.updateSelf({ status }).catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
     }
     const hookPath = hookSocketPath(process.ppid)
-    serveHookSocket(hookPath, new HookChannel(inbox, setStatus))
+    const channel = new HookChannel(inbox ?? new Inbox(), setStatus, {
+      onEvent: e => {
+        if (!hooksActive && !pull) { hooksActive = true; cards.set({ source: 'hook' }) }
+        void tasks?.on(e)
+      },
+      onCard: c => cards.set(cardFromHook(c)),
+      whoami: () => ({ session: sessionId, name: identity.name }),
+      wakeAllowed: () => wakeBudget.take(),
+    })
+    serveHookSocket(hookPath, channel)
       .then(server => {
         server.unref()
         if (process.platform !== 'win32') process.on('exit', () => { try { rmSync(hookPath, { force: true }) } catch { /* gone */ } })
@@ -143,6 +183,7 @@ async function main(): Promise<void> {
   }
 
   let cursor: string | undefined
+  let taskStarted = false
   const dispatcher = new InboundDispatcher({
     gate,
     sessionId,
@@ -168,8 +209,11 @@ async function main(): Promise<void> {
     sessionParams: () => ({ session: sessionId, name: identity.name, status: identity.status, cwd, ...(login ? { login } : {}), ...(pull ? { mode: 'pull' } : {}) }),
     onEnvelope: e => dispatcher.handle(e),
     // A host that reported busy/idle before the relay attached this session lost that update
-    // (404): send what we have now if it differs from what the stream was opened with.
+    // (404): send what we have now if it differs from what the stream was opened with. The card
+    // goes again in full (a restarted relay forgot it), and the first open starts the task driver.
     onOpen: sent => {
+      cards.resend()
+      if (!taskStarted) { taskStarted = true; void tasks?.start() }
       if (sent.status === identity.status) return
       client.updateSelf({ status: identity.status }).catch(err => logJson('warn', 'peer.session.update_error', describeError(err)))
     },
@@ -181,6 +225,17 @@ async function main(): Promise<void> {
     })
     process.exit(1)
   })
+}
+
+/** Fields a hook may set on the card (it knows the model; the peer knows the rest), each checked against the relay's schema. */
+export function cardFromHook(c: Record<string, unknown>): CardFields {
+  const out: Record<string, unknown> = {}
+  for (const key of ['model', 'repo', 'branch'] as const) {
+    if (c[key] === undefined) continue
+    const r = CardPatchSchema.shape[key].safeParse(c[key])
+    if (r.success) out[key] = r.data
+  }
+  return out as CardFields
 }
 
 function describeError(err: unknown): Record<string, string> {

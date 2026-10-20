@@ -35,6 +35,12 @@ export interface AskOpts {
   cacheKey?: string | undefined
   /** Keep trying this long for a peer that is still starting. */
   waitMs?: number
+  /**
+   * false: ask only `ppid` (no remembered pid, no ancestors). For hooks the host runs directly
+   * (Claude Code's exec form), whose parent is the host itself: anything further up could be
+   * another session.
+   */
+  ancestors?: boolean
 }
 
 const KEY = /^[A-Za-z0-9_-]{1,80}$/
@@ -73,6 +79,13 @@ export async function askHostPeer(req: HookRequest, ppid: number = process.ppid,
   const deadline = Date.now() + (opts.waitMs ?? 0)
   // The parent's ancestors are looked up only when nearer candidates do not answer, and only once.
   let chain: number[] | undefined
+  if (opts.ancestors === false) {
+    for (;;) {
+      const reply = await askPid(ppid, req)
+      if (reply || Date.now() >= deadline) return reply
+      await new Promise(r => setTimeout(r, 200))
+    }
+  }
   for (;;) {
     for (const pid of [cached, ppid]) {
       const reply = pid ? await askPid(pid, req) : undefined

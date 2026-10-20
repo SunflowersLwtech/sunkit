@@ -9,6 +9,8 @@ export const ConfigSchema = z.object({
   relay_url: z.string().url(),
   token_path: z.string(),
   self_handle: z.string().optional(),
+  /** This machine's name as Herdr and meshd know it, for the session card (e.g. m4, aws-sin-8c32g-261016). */
+  machine: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
   admin_token_path: z.string().optional(),
   permission_relay: z.object({
     enabled: z.boolean().default(false),

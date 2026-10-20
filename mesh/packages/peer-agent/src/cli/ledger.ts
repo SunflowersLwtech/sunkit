@@ -1,6 +1,7 @@
 import type { CommandRequest, LeaseView, MachineView, TaskView } from '@claude-mesh/shared'
 import { loadConfig, loadToken } from '../config.ts'
 import { resolveTarget, type SessionRow } from '../resolve-target.ts'
+import { askHostPeer } from './host-hook.ts'
 
 /**
  * The relay's ledger, from the command line: machines (what each machine last reported),
@@ -35,6 +36,8 @@ export interface LedgerClientOpts {
   token: string
   /** This session's id; sent as x-mesh-session so the relay can bind the request to it. */
   session?: string
+  /** When no session is given: ask the peer of the host this command runs in (its hook socket). */
+  discoverSession?: () => Promise<string | undefined>
 }
 
 interface Injected { fetch?: typeof globalThis.fetch }
@@ -84,6 +87,10 @@ export class LedgerClient {
   /** `session` may be an id, or a name / `name [ref]` as list_agents shows it, resolved once. */
   private session(): Promise<string | undefined> {
     const s = this.opts.session
+    if (!s && this.opts.discoverSession) {
+      this.sessionId ??= this.opts.discoverSession().catch(() => undefined)
+      return this.sessionId
+    }
     if (!s || SESSION_ID.test(s)) return Promise.resolve(s)
     this.sessionId ??= (async () => {
       const res = await this.fetchImpl(this.url('/v1/sessions'), { headers: { authorization: `Bearer ${this.opts.token}` } })
@@ -198,6 +205,8 @@ export class LedgerClient {
 export interface LedgerDeps {
   /** A ready client; when absent one is built from the config file and the token file. */
   client?: LedgerClient
+  /** Asks the host's peer which session this is; tests replace it. */
+  discover?: () => Promise<string | undefined>
   out?: (s: string) => void
   err?: (s: string) => void
   sleep?: (ms: number) => Promise<void>
@@ -275,11 +284,15 @@ function makeCtx(globals: { relay?: string; session?: string }, deps: LedgerDeps
       if (deps.client) return deps.client
       if (!cached) {
         const cfg = loadConfig()
-        const sess = session ?? process.env.MESH_SESSION_ID
+        const discover = deps.discover ?? (async () => (await askHostPeer({ op: 'whoami' }))?.session)
         cached = new LedgerClient({
           relayUrl: relay ?? cfg.relay_url,
           token: loadToken(cfg.token_path),
-          ...(sess ? { session: sess } : {}),
+          ...(session ? { session } : {}),
+          // --session first; then the peer of the host this runs in (a Bash tool of Claude Code,
+          // pi, agy …), which knows its session even when an outer session's MESH_SESSION_ID was
+          // inherited; MESH_SESSION_ID last.
+          discoverSession: async () => (await discover().catch(() => undefined)) ?? process.env.MESH_SESSION_ID,
         })
       }
       return cached

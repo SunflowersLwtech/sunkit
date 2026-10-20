@@ -22659,6 +22659,8 @@ var ConfigSchema = external_exports.object({
   relay_url: external_exports.string().url(),
   token_path: external_exports.string(),
   self_handle: external_exports.string().optional(),
+  /** This machine's name as Herdr and meshd know it, for the session card (e.g. m4, aws-sin-8c32g-261016). */
+  machine: external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).optional(),
   admin_token_path: external_exports.string().optional(),
   permission_relay: external_exports.object({
     enabled: external_exports.boolean().default(false),

@@ -4,7 +4,9 @@ import { runPair } from './cli/pair.ts'
 import { writeMeshMcpConfig, MESH_SERVER_NAME } from './mcp-registration.ts'
 import { resolveRelayUrl } from './cli/relay-url.ts'
 
-loadEnvFiles()
+// Not for hooks: a project's .env would be read on every turn, and one that cannot be read
+// would make the hook fail visibly in the host.
+if (process.argv[2] !== 'claude') loadEnvFiles()
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag)
@@ -84,6 +86,14 @@ async function main(): Promise<void> {
     process.exitCode = await runDevin(args)
     return
   }
+  if (cmd === 'claude') {
+    // Run by the mesh plugin's hooks: never prints, always exits 0.
+    if (args[0] === 'hook') {
+      const { runClaudeHook } = await import('./cli/claude.ts')
+      process.exitCode = await runClaudeHook(args.slice(1))
+    }
+    return
+  }
   if (cmd === 'machine') {
     const { runMachine } = await import('./cli/ledger.ts')
     process.exitCode = await runMachine(args)
@@ -99,7 +109,7 @@ async function main(): Promise<void> {
     process.exitCode = await runLease(args)
     return
   }
-  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, machine, task, lease')
+  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, claude hook, machine, task, lease')
   process.exit(2)
 }
 

@@ -537,3 +537,42 @@ describe('ledger CLI after review', () => {
     expect(calls[1]!.headers['x-mesh-session']).toBe('s_zzzzzzzzzzzzzzzz1')
   })
 })
+
+describe('ledger CLI inside a host', () => {
+  it('asks the host\'s peer which session it is when none is given', async () => {
+    const { impl, calls } = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const c = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', discoverSession: async () => 's_discoveredfromhook' }, { fetch: impl })
+    expect(await runTask(['create', '--title', 'x'], { client: c, ...io().deps })).toBe(0)
+    expect(calls[0]!.headers['x-mesh-session']).toBe('s_discoveredfromhook')
+  })
+
+  it('a given session wins over the host\'s, and no peer means no header', async () => {
+    const a = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const given = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', session: 's_givenonthecommand', discoverSession: async () => 's_discoveredfromhook' }, { fetch: a.impl })
+    await runTask(['create', '--title', 'x'], { client: given, ...io().deps })
+    expect(a.calls[0]!.headers['x-mesh-session']).toBe('s_givenonthecommand')
+    const b = fakeRelay([{ status: 201, body: { ...TASK } }])
+    const none = new LedgerClient({ relayUrl: 'https://relay.example', token: 't', discoverSession: async () => undefined }, { fetch: b.impl })
+    await runTask(['create', '--title', 'x'], { client: none, ...io().deps })
+    expect(b.calls[0]!.headers['x-mesh-session']).toBeUndefined()
+  })
+})
+
+describe('ledger CLI: which session a command speaks for', () => {
+  it('the host\'s own peer wins over an inherited MESH_SESSION_ID (a nested session)', async () => {
+    const seen: Array<string | undefined> = []
+    vi.stubGlobal('fetch', async (_url: string | URL, init: RequestInit = {}) => {
+      seen.push((init.headers as Record<string, string>)['x-mesh-session'])
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const home = mkdtempSync(join(tmpdir(), 'mesh-ledger-'))
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ relay_url: 'https://relay.local', token_path: join(home, 'token') }))
+    writeFileSync(join(home, 'token'), 'file-token\n')
+    process.env.MESH_HOME = home
+    process.env.MESH_SESSION_ID = 's_inheritedfromouter'
+    expect(await runMachine(['list'], { ...io().deps, discover: async () => 's_thishostspeer' })).toBe(0)
+    expect(await runMachine(['list'], { ...io().deps, discover: async () => undefined })).toBe(0)
+    expect(seen).toEqual(['s_thishostspeer', 's_inheritedfromouter'])
+    delete process.env.MESH_SESSION_ID
+  })
+})

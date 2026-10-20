@@ -74,6 +74,53 @@ export class RelayClient {
     if (res.status !== 200 && res.status !== 404) throw new Error(`updateSelf failed: ${res.status}`)
   }
 
+  /** Card fields for this session. Throws while the relay has not attached the session yet, so the writer tries again. */
+  async writeCard(card: Record<string, unknown>): Promise<void> {
+    if (!this.opts.sessionId) return
+    const res = await this.fetchImpl(new URL('/v1/sessions/self', this.opts.relayUrl), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.opts.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ session: this.opts.sessionId, ...card }),
+    })
+    if (res.status === 404) throw Object.assign(new Error('session not attached yet'), { status: 404 })
+    if (res.status !== 200) {
+      const text = await res.text()
+      let code: string | undefined
+      try { code = (JSON.parse(text) as { error?: string }).error } catch { /* not json */ }
+      throw Object.assign(new Error(`card update failed: ${res.status} ${text.slice(0, 200)}`), { status: res.status, code })
+    }
+  }
+
+  private sessionHeaders(): Record<string, string> {
+    return {
+      authorization: `Bearer ${this.opts.token}`,
+      'content-type': 'application/json',
+      ...(this.opts.sessionId ? { 'x-mesh-session': this.opts.sessionId } : {}),
+    }
+  }
+
+  async getTask(id: string): Promise<{ status: number; task?: { state: string; assignee: { session: string | null } } }> {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}`, this.opts.relayUrl), { headers: this.sessionHeaders() })
+    const body = await res.json().catch(() => null) as { state: string; assignee: { session: string | null } } | null
+    return res.status === 200 && body ? { status: 200, task: { state: body.state, assignee: { session: body.assignee?.session ?? null } } } : { status: res.status }
+  }
+
+  async patchTask(id: string, body: { state: string }): Promise<{ status: number; error?: string }> {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}`, this.opts.relayUrl), {
+      method: 'PATCH', headers: this.sessionHeaders(), body: JSON.stringify(body),
+    })
+    const j = await res.json().catch(() => null) as { error?: string } | null
+    return { status: res.status, ...(j?.error ? { error: j.error } : {}) }
+  }
+
+  async rebindTask(id: string): Promise<{ status: number }> {
+    const res = await this.fetchImpl(new URL(`/v1/tasks/${encodeURIComponent(id)}/rebind`, this.opts.relayUrl), {
+      method: 'POST', headers: this.sessionHeaders(), body: '{}',
+    })
+    await res.text().catch(() => '')
+    return { status: res.status }
+  }
+
   async setPresence(body: { summary: string; cwd?: string; branch?: string; repo?: string }): Promise<void> {
     const res = await this.fetchImpl(new URL('/v1/presence', this.opts.relayUrl), {
       method: 'POST',
