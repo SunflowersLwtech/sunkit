@@ -6,12 +6,12 @@ import { runClaudeHook, CLAUDE_HOOK_EVENTS } from './claude.ts'
 import type { HookReply, HookRequest } from '../hook-socket.ts'
 
 function rig(reply: Partial<HookReply> | undefined = { unread: 0, from: [] }) {
-  const asked: Array<{ req: HookRequest; key: string | undefined; waitMs: number | undefined }> = []
+  const asked: Array<{ req: HookRequest; key: string | undefined; waitMs: number | undefined; ancestors: boolean | undefined }> = []
   const forgotten: Array<string | undefined> = []
   const deps = {
     stdin: async () => JSON.stringify({ session_id: 'cc-session-1', hook_event_name: 'X', model: 'claude-opus-5-5' }),
-    ask: async (req: HookRequest, opts: { cacheKey?: string | undefined; waitMs?: number }) => {
-      asked.push({ req, key: opts.cacheKey, waitMs: opts.waitMs })
+    ask: async (req: HookRequest, opts: { cacheKey?: string | undefined; waitMs?: number; ancestors?: boolean }) => {
+      asked.push({ req, key: opts.cacheKey, waitMs: opts.waitMs, ancestors: opts.ancestors })
       return reply ? { unread: 0, from: [], ...reply } : undefined
     },
     forget: (k: string | undefined) => { forgotten.push(k) },
@@ -26,10 +26,14 @@ describe('mesh claude hook', () => {
     for (const [ev, op] of [['turn', 'turn'], ['blocked', 'blocked'], ['stop', 'stop'], ['end', 'end']] as const) {
       expect(await runClaudeHook([ev], r.deps)).toBe(0)
       expect(r.asked.at(-1)!.req.op).toBe(op)
-      expect(r.asked.at(-1)!.key).toBe('cc-session-1')
+      // Exec-form hooks are children of claude itself: only that pid is asked, never a cached or
+      // an ancestor pid that could belong to another session.
+      expect(r.asked.at(-1)!.key).toBeUndefined()
+      expect(r.asked.at(-1)!.ancestors).toBe(false)
+      expect(typeof (r.asked.at(-1)!.req as { at?: number }).at).toBe('number')
     }
-    expect(r.asked.find(a => a.req.op === 'stop')!.req).toEqual({ op: 'stop', natural: true })
-    expect(r.forgotten).toEqual(['cc-session-1'])
+    expect(r.asked.find(a => a.req.op === 'stop')!.req).toMatchObject({ op: 'stop', natural: true })
+    expect(r.forgotten).toEqual([])
   })
 
   it('at session start passes the model on and puts MESH_SESSION_ID in Claude Code\'s env file', async () => {
@@ -39,6 +43,7 @@ describe('mesh claude hook', () => {
     r.deps.env = { CLAUDE_ENV_FILE: envFile }
     expect(await runClaudeHook(['session-start'], r.deps)).toBe(0)
     expect(r.asked.map(a => a.req)).toEqual([{ op: 'card', card: { model: 'claude-opus-5-5' } }, { op: 'whoami' }])
+    expect(r.asked.every(a => a.ancestors === false && a.key === undefined)).toBe(true)
     expect(r.asked[0]!.waitMs).toBeGreaterThan(0)
     expect(readFileSync(envFile, 'utf8')).toBe('export A=1\nexport MESH_SESSION_ID=s_01hrk7y0000000000000aaaaa1\n')
   })

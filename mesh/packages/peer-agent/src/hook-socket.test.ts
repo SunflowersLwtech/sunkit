@@ -203,3 +203,22 @@ describe('HookChannel: card, task and identity events', () => {
     expect(statuses).toEqual(['idle'])
   })
 })
+
+describe('HookChannel: hooks that arrive out of order', () => {
+  it('ignores an event older than one already applied (separate background hook processes can race)', () => {
+    const inbox = new Inbox()
+    const statuses: string[] = []
+    const events: string[] = []
+    const ch = new HookChannel(inbox, s => statuses.push(s), { onEvent: e => events.push(e) })
+    ch.handle({ op: 'stop', natural: true, at: 2_000 })
+    ch.handle({ op: 'turn', at: 1_000 })
+    ch.handle({ op: 'blocked', at: 1_500 })
+    expect(statuses).toEqual(['idle'])
+    expect(events).toEqual(['stop'])
+    ch.handle({ op: 'turn', at: 3_000 })
+    expect(statuses).toEqual(['idle', 'busy'])
+    // Hosts that send no time keep the old behaviour.
+    ch.handle({ op: 'idle' })
+    expect(statuses).toEqual(['idle', 'busy', 'idle'])
+  })
+})

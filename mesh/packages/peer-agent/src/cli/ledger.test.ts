@@ -557,3 +557,22 @@ describe('ledger CLI inside a host', () => {
     expect(b.calls[0]!.headers['x-mesh-session']).toBeUndefined()
   })
 })
+
+describe('ledger CLI: which session a command speaks for', () => {
+  it('the host\'s own peer wins over an inherited MESH_SESSION_ID (a nested session)', async () => {
+    const seen: Array<string | undefined> = []
+    vi.stubGlobal('fetch', async (_url: string | URL, init: RequestInit = {}) => {
+      seen.push((init.headers as Record<string, string>)['x-mesh-session'])
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const home = mkdtempSync(join(tmpdir(), 'mesh-ledger-'))
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ relay_url: 'https://relay.local', token_path: join(home, 'token') }))
+    writeFileSync(join(home, 'token'), 'file-token\n')
+    process.env.MESH_HOME = home
+    process.env.MESH_SESSION_ID = 's_inheritedfromouter'
+    expect(await runMachine(['list'], { ...io().deps, discover: async () => 's_thishostspeer' })).toBe(0)
+    expect(await runMachine(['list'], { ...io().deps, discover: async () => undefined })).toBe(0)
+    expect(seen).toEqual(['s_thishostspeer', 's_inheritedfromouter'])
+    delete process.env.MESH_SESSION_ID
+  })
+})

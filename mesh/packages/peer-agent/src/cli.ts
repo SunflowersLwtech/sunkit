@@ -4,7 +4,9 @@ import { runPair } from './cli/pair.ts'
 import { writeMeshMcpConfig, MESH_SERVER_NAME } from './mcp-registration.ts'
 import { resolveRelayUrl } from './cli/relay-url.ts'
 
-loadEnvFiles()
+// Not for hooks: a project's .env would be read on every turn, and one that cannot be read
+// would make the hook fail visibly in the host.
+if (process.argv[2] !== 'claude') loadEnvFiles()
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag)

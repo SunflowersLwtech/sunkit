@@ -205,6 +205,8 @@ export class LedgerClient {
 export interface LedgerDeps {
   /** A ready client; when absent one is built from the config file and the token file. */
   client?: LedgerClient
+  /** Asks the host's peer which session this is; tests replace it. */
+  discover?: () => Promise<string | undefined>
   out?: (s: string) => void
   err?: (s: string) => void
   sleep?: (ms: number) => Promise<void>
@@ -282,13 +284,15 @@ function makeCtx(globals: { relay?: string; session?: string }, deps: LedgerDeps
       if (deps.client) return deps.client
       if (!cached) {
         const cfg = loadConfig()
-        const sess = session ?? process.env.MESH_SESSION_ID
+        const discover = deps.discover ?? (async () => (await askHostPeer({ op: 'whoami' }))?.session)
         cached = new LedgerClient({
           relayUrl: relay ?? cfg.relay_url,
           token: loadToken(cfg.token_path),
-          ...(sess ? { session: sess } : {}),
-          // Run inside a host (a Bash tool of Claude Code, pi, agy …): its peer knows the session.
-          discoverSession: async () => (await askHostPeer({ op: 'whoami' }))?.session,
+          ...(session ? { session } : {}),
+          // --session first; then the peer of the host this runs in (a Bash tool of Claude Code,
+          // pi, agy …), which knows its session even when an outer session's MESH_SESSION_ID was
+          // inherited; MESH_SESSION_ID last.
+          discoverSession: async () => (await discover().catch(() => undefined)) ?? process.env.MESH_SESSION_ID,
         })
       }
       return cached

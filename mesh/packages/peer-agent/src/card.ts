@@ -65,6 +65,7 @@ export class CardWriter {
   private card: CardFields = {}
   private sent: CardFields = {}
   private cancel: (() => void) | null = null
+  private failures = 0
   private readonly delayMs: number
   private readonly enabled: boolean
   private readonly schedule: (fn: () => void, ms: number) => () => void
@@ -98,7 +99,9 @@ export class CardWriter {
 
   private arm(): void {
     if (this.cancel || Object.keys(this.pending()).length === 0) return
-    this.cancel = this.schedule(() => { this.cancel = null; void this.flush() }, this.delayMs)
+    // After failures, wait longer each time (up to a minute) instead of hitting the relay every window.
+    const delay = Math.min(60_000, this.delayMs * 2 ** this.failures)
+    this.cancel = this.schedule(() => { this.cancel = null; void this.flush() }, delay)
   }
 
   async flush(): Promise<void> {
@@ -108,8 +111,21 @@ export class CardWriter {
     try {
       await this.write(patch)
       this.sent = { ...this.sent, ...patch }
-    } catch {
-      // Kept as pending; the next window tries again.
+      this.failures = 0
+    } catch (err) {
+      const { status, code } = err as { status?: number; code?: string }
+      if (status !== undefined && status >= 400 && status < 500 && status !== 404 && status !== 429) {
+        // The relay refuses this for good (a task that is gone or not ours, a value it rejects):
+        // drop it and send the rest, rather than asking again forever.
+        if (code === 'task_not_assigned') {
+          delete this.card.task_id
+        } else {
+          this.sent = { ...this.sent, ...patch }
+        }
+      } else {
+        // Not attached yet, rate-limited, relay down: kept as pending, tried again later.
+        this.failures = Math.min(this.failures + 1, 10)
+      }
     }
     this.arm()
   }

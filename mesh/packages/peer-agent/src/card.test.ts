@@ -80,4 +80,28 @@ describe('CardWriter', () => {
     await w.flush()
     expect(sent).toEqual([])
   })
+
+  it('drops a field the relay refuses for good and sends the rest; backs off on other failures', async () => {
+    const sent: Array<Record<string, unknown>> = []
+    const delays: number[] = []
+    let timer: (() => void) | null = null
+    let mode: 'refuse-task' | 'down' | 'ok' = 'refuse-task'
+    const w = new CardWriter(async p => {
+      if (mode === 'refuse-task' && 'task_id' in p) throw Object.assign(new Error('refused'), { status: 403, code: 'task_not_assigned' })
+      if (mode === 'down') throw new Error('relay down')
+      sent.push(p)
+    }, { delayMs: 2_000, schedule: (fn, ms) => { delays.push(ms); timer = fn; return () => { timer = null } } })
+    w.set({ agent: 'claude', task_id: 'task_01HRK7Y0000000000000000000' })
+    timer!(); await new Promise(r => setImmediate(r))
+    timer!(); await new Promise(r => setImmediate(r))
+    expect(sent).toEqual([{ agent: 'claude' }])
+    expect(w.current).not.toHaveProperty('task_id')
+    mode = 'down'
+    w.set({ repo: 'x' })
+    for (let i = 0; i < 4; i++) { timer!(); await new Promise(r => setImmediate(r)) }
+    expect(delays.slice(-4)).toEqual([4_000, 8_000, 16_000, 32_000])
+    mode = 'ok'
+    timer!(); await new Promise(r => setImmediate(r))
+    expect(sent.at(-1)).toEqual({ repo: 'x' })
+  })
 })

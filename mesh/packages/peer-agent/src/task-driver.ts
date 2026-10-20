@@ -41,6 +41,8 @@ export class TaskDriver {
       if (r.task.assignee.session && r.task.assignee.session !== this.session) {
         const rb = await this.api.rebind(this.id)
         this.log('peer.task.rebind', { task: this.id, status: rb.status })
+        // Still held by a live session (or not ours): this session does not drive it.
+        if (rb.status !== 200) this.final = true
       }
     } catch (err) {
       this.log('peer.task.start_error', { task: this.id, err: String(err instanceof Error ? err.message : err) })
@@ -61,5 +63,7 @@ export class TaskDriver {
     if (r.status === 200) { this.state = want; return }
     if (r.status === 409 && r.error === 'task_terminal') { this.final = true; return }
     this.log('peer.task.update_refused', { task: this.id, want, status: r.status, error: r.error ?? '' })
+    // Not this session's to move (403) or gone (404): stop asking on every event.
+    if (r.status === 403 || r.status === 404) this.final = true
   }
 }

@@ -66,4 +66,30 @@ describe('TaskDriver', () => {
     await d.on('turn')
     expect(r.state).toBe('working')
   })
+
+  it('stops driving a task the relay will not let this session move', async () => {
+    const calls: string[] = []
+    const a: TaskApi = {
+      async get() { calls.push('get'); return { status: 200, task: { state: 'working', assignee: { session: 's_other000000000000000' } } } },
+      async patch() { calls.push('patch'); return { status: 403, error: 'not_allowed' } },
+      async rebind() { calls.push('rebind'); return { status: 409 } },
+    }
+    const d = new TaskDriver(a, ID, ME)
+    await d.start()
+    await d.on('blocked'); await d.on('turn'); await d.on('blocked')
+    expect(calls).toEqual(['get', 'rebind'])
+  })
+
+  it('a refused update stops further ones', async () => {
+    const calls: string[] = []
+    const a: TaskApi = {
+      async get() { return { status: 200, task: { state: 'submitted', assignee: { session: ME } } } },
+      async patch() { calls.push('patch'); return { status: 403, error: 'not_allowed' } },
+      async rebind() { return { status: 200 } },
+    }
+    const d = new TaskDriver(a, ID, ME)
+    await d.start()
+    await d.on('turn'); await d.on('blocked'); await d.on('turn')
+    expect(calls).toEqual(['patch'])
+  })
 })

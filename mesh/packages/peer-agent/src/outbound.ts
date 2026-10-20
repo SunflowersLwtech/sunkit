@@ -82,8 +82,13 @@ export class RelayClient {
       headers: { authorization: `Bearer ${this.opts.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ session: this.opts.sessionId, ...card }),
     })
-    if (res.status === 404) throw new Error('session not attached yet')
-    if (res.status !== 200) throw new Error(`card update failed: ${res.status} ${(await res.text()).slice(0, 200)}`)
+    if (res.status === 404) throw Object.assign(new Error('session not attached yet'), { status: 404 })
+    if (res.status !== 200) {
+      const text = await res.text()
+      let code: string | undefined
+      try { code = (JSON.parse(text) as { error?: string }).error } catch { /* not json */ }
+      throw Object.assign(new Error(`card update failed: ${res.status} ${text.slice(0, 200)}`), { status: res.status, code })
+    }
   }
 
   private sessionHeaders(): Record<string, string> {

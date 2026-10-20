@@ -16,7 +16,7 @@ type ClaudeHookEvent = typeof CLAUDE_HOOK_EVENTS[number]
 
 interface Deps {
   stdin: () => Promise<string>
-  ask: (req: HookRequest, opts: { cacheKey?: string | undefined; waitMs?: number }) => Promise<HookReply | undefined>
+  ask: (req: HookRequest, opts: { cacheKey?: string | undefined; waitMs?: number; ancestors?: boolean }) => Promise<HookReply | undefined>
   forget: (cacheKey: string | undefined) => void
   env: NodeJS.ProcessEnv
 }
@@ -28,6 +28,11 @@ const defaults: Deps = {
   env: process.env,
 }
 
+// The hooks run in exec form, so their parent is claude itself and the peer's socket is keyed by
+// that pid: ask exactly it. A remembered pid or an ancestor could belong to another session (a pid
+// reused after a reboot, the outer claude of a nested one).
+const ONLY_PARENT = { ancestors: false } as const
+
 /** The peer starts with the session; at session start give it a moment to open its socket. */
 const START_WAIT_MS = 4_000
 
@@ -36,25 +41,24 @@ export async function runClaudeHook(args: string[], deps: Deps = defaults): Prom
   if (!(CLAUDE_HOOK_EVENTS as readonly string[]).includes(event)) return 0
   let input: { session_id?: unknown; model?: unknown } = {}
   try { input = JSON.parse(await deps.stdin()) as typeof input } catch { /* no input: still report the event */ }
-  const cacheKey = typeof input.session_id === 'string' ? input.session_id : undefined
+  // Background hooks are separate processes and can reach the peer out of order: the time they
+  // started lets the peer drop one that is older than what it already applied.
+  const at = Date.now()
   try {
     if (event === 'session-start') {
       const card = typeof input.model === 'string' ? { model: input.model } : {}
-      await deps.ask({ op: 'card', card }, { cacheKey, waitMs: START_WAIT_MS })
-      const me = await deps.ask({ op: 'whoami' }, { cacheKey })
+      await deps.ask({ op: 'card', card }, { ...ONLY_PARENT, waitMs: START_WAIT_MS })
+      const me = await deps.ask({ op: 'whoami' }, ONLY_PARENT)
       const envFile = deps.env.CLAUDE_ENV_FILE
       if (envFile && me?.session && SESSION_ID_REGEX.test(me.session)) {
         appendFileSync(envFile, `export MESH_SESSION_ID=${me.session}\n`)
       }
       return 0
     }
-    if (event === 'turn') await deps.ask({ op: 'turn' }, { cacheKey })
-    if (event === 'blocked') await deps.ask({ op: 'blocked' }, { cacheKey })
-    if (event === 'stop') await deps.ask({ op: 'stop', natural: true }, { cacheKey })
-    if (event === 'end') {
-      await deps.ask({ op: 'end' }, { cacheKey })
-      deps.forget(cacheKey)
-    }
+    if (event === 'turn') await deps.ask({ op: 'turn', at }, ONLY_PARENT)
+    if (event === 'blocked') await deps.ask({ op: 'blocked', at }, ONLY_PARENT)
+    if (event === 'stop') await deps.ask({ op: 'stop', natural: true, at }, ONLY_PARENT)
+    if (event === 'end') await deps.ask({ op: 'end', at }, ONLY_PARENT)
   } catch {
     // Nothing a hook does may break the session.
   }

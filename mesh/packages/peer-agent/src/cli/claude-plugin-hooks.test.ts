@@ -22,8 +22,10 @@ describe('plugins/mesh/hooks/hooks.json', () => {
     }
   })
 
-  it('never makes the user wait on a turn: everything but session start and end runs in the background', () => {
-    for (const ev of ['UserPromptSubmit', 'Notification', 'Stop']) expect(doc.hooks[ev]![0]!.hooks[0]!.async).toBe(true)
+  it('never makes the user wait: everything but session end runs in the background', () => {
+    // Session start too: with no mesh peer (claude -p, a session without the channel) it would
+    // otherwise hold every start for the whole wait.
+    for (const ev of ['SessionStart', 'UserPromptSubmit', 'Notification', 'Stop']) expect(doc.hooks[ev]![0]!.hooks[0]!.async).toBe(true)
     expect(doc.hooks.SessionEnd![0]!.hooks[0]!.timeout).toBeLessThanOrEqual(2)
   })
 

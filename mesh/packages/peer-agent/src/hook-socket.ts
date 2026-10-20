@@ -12,7 +12,8 @@ import type { HostEvent } from './task-driver.ts'
  * process, so both sides find the socket by that process's pid (Grok Build too). The hooks
  * learn whether messages are waiting (and tell the agent to read them); the peer learns busy/idle.
  */
-export type HookRequest =
+/** `at`: when the hook started (ms). Hosts whose hooks run in the background send it so out-of-order arrivals can be dropped. */
+export type HookRequest = (
   | { op: 'turn' }
   | { op: 'tool' }
   | { op: 'idle' }
@@ -28,6 +29,7 @@ export type HookRequest =
   | { op: 'whoami' }
   /** Card fields a hook knows and the peer does not (e.g. Claude Code's model); validated by the peer. */
   | { op: 'card'; card: Record<string, unknown> }
+) & { at?: number }
 export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean; session?: string; name?: string }
 
 export interface HookExtras {
@@ -51,6 +53,7 @@ export function hookSocketPath(hostPid: number, dir: string = meshDir()): string
 export class HookChannel {
   private nudgedSeq = 0
   private notifiedSeq = 0
+  private lastAt = 0
 
   /** Push-mode hosts (Claude Code) pass an inbox that stays empty: they get messages through the channel. */
   constructor(private readonly inbox: Inbox, private readonly onStatus: (s: 'busy' | 'idle') => void, private readonly extras: HookExtras = {}) {}
@@ -59,6 +62,12 @@ export class HookChannel {
     const p = this.inbox.peek()
     const base = { unread: p.size, from: p.from }
     const event = (e: HostEvent) => this.extras.onEvent?.(e)
+    if (typeof req.at === 'number' && ['turn', 'tool', 'idle', 'stop', 'blocked', 'end'].includes(req.op)) {
+      // An event older than one already applied came late (separate background hook processes
+      // race): applying it would undo the newer one, e.g. leave a finished turn busy.
+      if (req.at < this.lastAt) return req.op === 'stop' ? { ...base, continue: false } : base
+      this.lastAt = req.at
+    }
     if (req.op === 'turn') {
       this.onStatus('busy')
       event('turn')
