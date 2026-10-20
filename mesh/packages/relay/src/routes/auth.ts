@@ -6,6 +6,7 @@ import { parsePairCode } from '../auth/pair-code.ts'
 import { bearerAuth, type AuthContext } from '../auth/middleware.ts'
 import type { Deps } from '../deps.ts'
 import { rateLimit } from '../middleware/rate-limit.ts'
+import { inheritGrant } from '../grants.ts'
 import { getConnInfo } from '@hono/node-server/conninfo'
 
 /** Pair codes are ~40 bits; cap guesses per source address. */
@@ -59,11 +60,15 @@ export function authRoute(deps: Deps) {
       ).run(tokenId, row.human_id, hashToken(raw), parsed.data.device_label, row.tier, nowIso)
       deps.db.prepare("UPDATE pair_code SET consumed_at=? WHERE code_hash=?").run(nowIso, codeHash)
       deps.db.prepare("UPDATE human SET last_active_at=? WHERE id=?").run(nowIso, row.human_id)
+      const inherited = inheritGrant(deps.db, row.human_id, tokenId, nowIso)
       deps.db.prepare(
         "INSERT INTO audit_log(team_id,at,actor_human_id,event,detail_json) VALUES (?,?,?,?,?)"
       ).run(
         row.team_id, nowIso, row.human_id, 'token.pair',
-        JSON.stringify({ token_id: tokenId, label: parsed.data.device_label, tier: row.tier })
+        JSON.stringify({
+          token_id: tokenId, label: parsed.data.device_label, tier: row.tier,
+          ...(inherited ? { workgroup: inherited.workgroup, visible: inherited.visible } : {}),
+        })
       )
     })
     tx()

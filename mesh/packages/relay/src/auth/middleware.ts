@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono'
 import type { Db } from '../db/db.ts'
 import { hashToken, timingSafeEqual } from './hash.ts'
+import { grantFromRow, type Grant } from '../grants.ts'
 
 export type Tier = 'human' | 'admin'
 
@@ -22,6 +23,8 @@ export interface AuthContext {
   token: TokenRecord
   human: HumanRecord
   team_id: string
+  /** Role and workgroups of this token (the default worker/team grant when none was set). */
+  grant: Grant
 }
 
 interface AuthRow {
@@ -35,6 +38,10 @@ interface AuthRow {
   handle: string
   display_name: string
   disabled_at: string | null
+  g_role: string | null
+  g_workgroup: string | null
+  g_visible_json: string | null
+  g_machine: string | null
 }
 
 export function bearerAuth(
@@ -43,8 +50,10 @@ export function bearerAuth(
 ): MiddlewareHandler<{ Variables: AuthContext }> {
   const stmt = db.prepare(`
     SELECT t.id AS token_id, t.human_id, t.tier, t.label, t.token_hash, t.revoked_at,
-           h.team_id, h.handle, h.display_name, h.disabled_at
+           h.team_id, h.handle, h.display_name, h.disabled_at,
+           g.role AS g_role, g.workgroup AS g_workgroup, g.visible_json AS g_visible_json, g.machine AS g_machine
     FROM token t JOIN human h ON h.id = t.human_id
+    LEFT JOIN token_grant g ON g.token_id = t.id
     WHERE t.token_hash = ?
   `)
 
@@ -84,6 +93,9 @@ export function bearerAuth(
       display_name: row.display_name,
     })
     c.set('team_id', row.team_id)
+    c.set('grant', grantFromRow(row.g_role === null ? undefined : {
+      role: row.g_role, workgroup: row.g_workgroup, visible_json: row.g_visible_json, machine: row.g_machine,
+    }))
     return next()
   }
 }

@@ -38,6 +38,20 @@ function migrateV2ToV3(db: Db): void {
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_to_session ON message(team_id, to_session, id)')
   db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (3)')
+  migrateV3ToV4(db)
+}
+
+/**
+ * v4: workgroup routing columns on `message` (the ledger tables come from schema.sql).
+ * from_wg is the sender's workgroup, scope_json the workgroups the sender may reach; both NULL on
+ * older rows, which stay deliverable as before.
+ */
+function migrateV3ToV4(db: Db): void {
+  const cols = db.pragma('table_info(message)') as Array<{ name: string }>
+  for (const col of ['from_wg', 'scope_json']) {
+    if (!cols.some(c => c.name === col)) db.exec(`ALTER TABLE message ADD COLUMN ${col} TEXT`)
+  }
+  db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (4)')
 }
 
 export function getSchemaVersion(db: Db): number {
