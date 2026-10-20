@@ -20,6 +20,8 @@ export default defineConfig({
         'src/cli/pair.ts',
         'src/cli/respond.ts',
         'src/mcp-registration.ts',
+        // meshd's entry point (process wiring); runs bundled in e2e/src/scenarios/meshd.test.ts.
+        'src/meshd/main.ts',
         // SSE client — reconnect loop with infinite fetch is better covered
         // by the e2e harness than a mock-heavy unit test.
         'src/stream.ts'

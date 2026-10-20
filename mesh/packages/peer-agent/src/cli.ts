@@ -84,7 +84,22 @@ async function main(): Promise<void> {
     process.exitCode = await runDevin(args)
     return
   }
-  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi')
+  if (cmd === 'machine') {
+    const { runMachine } = await import('./cli/ledger.ts')
+    process.exitCode = await runMachine(args)
+    return
+  }
+  if (cmd === 'task') {
+    const { runTask } = await import('./cli/ledger.ts')
+    process.exitCode = await runTask(args)
+    return
+  }
+  if (cmd === 'lease') {
+    const { runLease } = await import('./cli/ledger.ts')
+    process.exitCode = await runLease(args)
+    return
+  }
+  console.error('commands: pair, admin, respond, send, policy, say, devin, agy, grok, pi, machine, task, lease')
   process.exit(2)
 }
 

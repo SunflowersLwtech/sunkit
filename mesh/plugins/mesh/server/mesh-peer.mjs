@@ -6941,7 +6941,7 @@ var require_index_umd = __commonJS({
           return encodeTime(seedTime, TIME_LEN) + encodeRandom(RANDOM_LEN, currPrng);
         };
       }
-      function monotonicFactory2(currPrng) {
+      function monotonicFactory3(currPrng) {
         if (!currPrng) {
           currPrng = detectPrng();
         }
@@ -6967,7 +6967,7 @@ var require_index_umd = __commonJS({
       exports2.encodeTime = encodeTime;
       exports2.factory = factory;
       exports2.incrementBase32 = incrementBase32;
-      exports2.monotonicFactory = monotonicFactory2;
+      exports2.monotonicFactory = monotonicFactory3;
       exports2.randomChar = randomChar;
       exports2.replaceCharAt = replaceCharAt;
       exports2.ulid = ulid4;
@@ -36967,6 +36967,173 @@ function escapeChannelBody(s) {
   return s.replace(/[<>&]/g, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;");
 }
 
+// packages/shared/dist/ledger.js
+var import_ulid3 = __toESM(require_index_umd(), 1);
+var ULID = "[0-9A-HJKMNP-TV-Z]{26}";
+var monotonicUlid2 = (0, import_ulid3.monotonicFactory)();
+var TASK_ID_REGEX = new RegExp(`^task_${ULID}$`);
+var TaskIdSchema = external_exports.string().regex(TASK_ID_REGEX);
+var LeaseIdSchema = external_exports.string().regex(new RegExp(`^lease_${ULID}$`));
+var CommandIdSchema = external_exports.string().regex(new RegExp(`^cmd_${ULID}$`));
+var TASK_STATES = [
+  "submitted",
+  "working",
+  "input_required",
+  "auth_required",
+  "completed",
+  "failed",
+  "canceled",
+  "rejected"
+];
+var TaskStateSchema = external_exports.enum(TASK_STATES);
+var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+var RoleSchema2 = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
+var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
+var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
+var HerdrPaneIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:p[0-9A-Za-z]{1,8}$/);
+function redactUrlCredentials(value) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
+    return value;
+  try {
+    const u = new URL(value);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
+  }
+}
+var RepoSchema = external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
+var BranchSchema = external_exports.string().max(128).regex(/^[A-Za-z0-9._+-][A-Za-z0-9._/+-]{0,127}$/).refine((b) => !b.includes(".."), "branch");
+var ModelSchema = external_exports.string().regex(/^[A-Za-z0-9._:/@+\[\]-]{1,64}$/);
+var HerdrLocationSchema = external_exports.object({
+  machine: MachineNameSchema,
+  tab: HerdrTabIdSchema.optional(),
+  pane: HerdrPaneIdSchema.optional()
+}).strict();
+var CardSourceSchema = external_exports.enum(["hook", "poll", "manual"]);
+var CardPatchSchema = external_exports.object({
+  session: external_exports.string(),
+  name: SessionNameSchema.optional(),
+  cwd: external_exports.string().max(1024).optional(),
+  login: LoginSchema.optional(),
+  status: external_exports.enum(["busy", "idle", "unknown"]).optional(),
+  agent: AgentKindSchema.optional(),
+  model: ModelSchema.optional(),
+  repo: RepoSchema.optional(),
+  branch: BranchSchema.optional(),
+  herdr: HerdrLocationSchema.optional(),
+  task_id: TaskIdSchema.optional(),
+  source: CardSourceSchema.optional(),
+  workgroup: WorkgroupSchema.optional()
+}).strict();
+var ArtifactTypeSchema = external_exports.enum(["pr", "commit", "vault", "deploy", "url"]);
+function artifactRefOk(type, ref) {
+  if (/[\u0000-\u001f\u007f\s]/.test(ref))
+    return false;
+  if (type === "vault") {
+    return !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").some((seg) => seg === ".." || seg === "");
+  }
+  if (type === "deploy")
+    return /^[A-Za-z0-9._:+-]{1,64}@[0-9TZ:.+-]{4,40}$/.test(ref);
+  if (ref.startsWith("gh://"))
+    return /^gh:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\/(pull|issues|commit)\/[0-9a-f]+)?$/.test(ref);
+  let u;
+  try {
+    u = new URL(ref);
+  } catch {
+    return false;
+  }
+  return u.protocol === "https:" && u.username === "" && u.password === "";
+}
+var ArtifactSchema = external_exports.object({
+  type: ArtifactTypeSchema,
+  ref: external_exports.string().min(1).max(512),
+  note: external_exports.string().max(200).optional()
+}).strict().superRefine((a, ctx) => {
+  if (!artifactRefOk(a.type, a.ref))
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["ref"], message: "ref" });
+});
+var LeaseNameSchema = external_exports.string().regex(/^(deploy|repo|file|device|build|cred)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).refine((n) => !n.includes(".."), "lease name");
+var MAX_LEASE_TTL_S = 1800;
+var MIN_LEASE_TTL_S = 30;
+var AgentStatusSchema = external_exports.enum(["idle", "working", "blocked", "done", "unknown"]).catch("unknown");
+var MachineAgentSchema = external_exports.object({
+  name: external_exports.string().min(1).max(64),
+  agent: external_exports.string().regex(/^[a-z0-9_-]{1,32}$/),
+  status: AgentStatusSchema,
+  pane: HerdrPaneIdSchema,
+  tab: HerdrTabIdSchema.optional(),
+  workspace: HerdrWorkspaceIdSchema.optional(),
+  cwd: external_exports.string().max(1024).transform(redactUrlCredentials).optional(),
+  agent_session: external_exports.object({
+    kind: external_exports.string().regex(/^[a-z_]{1,16}$/),
+    value: external_exports.string().min(1).max(1024)
+  }).strict().optional()
+}).strict();
+var MachineReportSchema = external_exports.object({
+  version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/),
+  herdr: external_exports.object({
+    ok: external_exports.boolean(),
+    version: external_exports.string().regex(/^[A-Za-z0-9._+-]{1,32}$/).optional(),
+    error: external_exports.string().max(200).optional()
+  }).strict(),
+  load: external_exports.object({
+    load1: external_exports.number().min(0).max(1e4),
+    cpus: external_exports.number().int().min(1).max(1024),
+    mem_used_pct: external_exports.number().min(0).max(100).optional()
+  }).strict(),
+  kinds: external_exports.array(external_exports.object({
+    kind: AgentKindSchema,
+    version: external_exports.string().regex(/^[A-Za-z0-9._ ()+-]{1,64}$/).optional()
+  }).strict()).max(8),
+  seats: external_exports.array(external_exports.object({
+    email: LoginSchema,
+    org: external_exports.string().max(64).optional(),
+    plan: external_exports.string().regex(/^[a-z_-]{1,16}$/).optional(),
+    five_hour_pct: external_exports.number().min(0).max(1e3).optional(),
+    resets_at: external_exports.string().datetime().optional(),
+    blocked: external_exports.boolean().optional()
+  }).strict()).max(6),
+  active: external_exports.number().int().min(0).max(1e3),
+  blocked: external_exports.number().int().min(0).max(1e3),
+  max_active: external_exports.number().int().min(0).max(1e3).optional(),
+  agents: external_exports.array(MachineAgentSchema).max(64),
+  roots: external_exports.array(external_exports.object({ path: external_exports.string().min(1).max(256), exists: external_exports.boolean() }).strict()).max(8)
+}).strict();
+var CommandRequestSchema = external_exports.discriminatedUnion("op", [
+  external_exports.object({ op: external_exports.literal("probe"), args: external_exports.object({}).strict().optional() }).strict(),
+  external_exports.object({
+    op: external_exports.literal("read"),
+    args: external_exports.object({ pane: HerdrPaneIdSchema, lines: external_exports.number().int().min(1).max(400).optional() }).strict()
+  }).strict()
+]);
+var CommandResultSchema = external_exports.object({
+  ok: external_exports.boolean(),
+  output: external_exports.string().max(65536).optional(),
+  error: external_exports.string().max(500).optional()
+}).strict();
+var TaskCreateSchema = external_exports.object({
+  title: external_exports.string().min(1).max(120),
+  /** Omit to register a task for the calling session itself (depth 0). Another session's id needs the orchestrator role. */
+  assignee: SessionIdSchema.optional(),
+  parent_task: TaskIdSchema.optional(),
+  prompt_sha256: external_exports.string().regex(/^[0-9a-f]{64}$/).optional(),
+  deadline: external_exports.string().datetime().optional()
+}).strict();
+var TaskUpdateSchema = external_exports.object({
+  state: TaskStateSchema.optional(),
+  progress: external_exports.string().max(200).optional(),
+  reason: external_exports.string().max(200).optional(),
+  if_seq: external_exports.number().int().min(0).optional()
+}).strict();
+var LeaseAcquireSchema = external_exports.object({
+  name: LeaseNameSchema,
+  ttl_s: external_exports.number().int().min(MIN_LEASE_TTL_S).max(MAX_LEASE_TTL_S),
+  note: external_exports.string().max(200).optional(),
+  task_id: TaskIdSchema.optional()
+}).strict();
+
 // packages/peer-agent/src/logger.ts
 function logJson(level, event, fields = {}) {
   const safe = {};
@@ -37143,7 +37310,7 @@ var ReplyLimiter = class {
 };
 
 // packages/peer-agent/src/session-identity.ts
-var import_ulid3 = __toESM(require_index_umd(), 1);
+var import_ulid4 = __toESM(require_index_umd(), 1);
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFileSync as readFileSync4, readdirSync as readdirSync2, statSync as statSync3 } from "node:fs";
 import { join as join4, basename } from "node:path";
@@ -37326,7 +37493,7 @@ function readClaudeLogin(path = claudeGlobalConfigPath()) {
   }
 }
 function mintSessionId() {
-  return `s_${(0, import_ulid3.ulid)().toLowerCase()}`;
+  return `s_${(0, import_ulid4.ulid)().toLowerCase()}`;
 }
 function sanitizeName(raw) {
   const cleaned = raw.trim().replace(/[\s[\]<>"&]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);

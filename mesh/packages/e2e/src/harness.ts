@@ -19,6 +19,8 @@ export interface HarnessHuman {
 export interface Harness {
   relayUrl: string
   humans: Record<string, HarnessHuman>
+  /** Admin-tier token of the team, for scenarios that set grants or add devices. */
+  adminToken: string
   cleanup: () => Promise<void>
 }
 
@@ -85,6 +87,7 @@ export async function startHarness(
   return {
     relayUrl,
     humans,
+    adminToken: init.admin_token,
     cleanup: async () => {
       await new Promise<void>(resolve => server.close(() => resolve()))
       for (const h of Object.values(humans)) rmSync(h.configDir, { recursive: true, force: true })
