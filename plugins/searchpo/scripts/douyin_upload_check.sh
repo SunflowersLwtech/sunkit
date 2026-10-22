@@ -65,6 +65,13 @@ case "$SOCIAL_PYTHON" in
   *) SOCIAL_PYTHON="$ROOT/$SOCIAL_PYTHON" ;;
 esac
 
+UPLOADER="$(env_value SEARCHPO_DOUYIN_UPLOADER)"
+UPLOADER="${UPLOADER:-social-auto-upload}"
+EGO_PUBLISHER="$(env_value SEARCHPO_EGO_PUBLISHER)"
+DOUYIN_VISIBILITY="$(env_value SEARCHPO_DOUYIN_VISIBILITY)"
+DOUYIN_VISIBILITY="${DOUYIN_VISIBILITY:-self_only}"
+NODE_BIN="$(env_value SEARCHPO_NODE_BIN)"
+
 SOCIAL_CLI="$(env_value SOCIAL_AUTO_UPLOAD_CLI)"
 if [[ -z "$SOCIAL_CLI" && -x "$SOCIAL_ROOT/.venv/bin/sau" ]]; then
   SOCIAL_CLI="$SOCIAL_ROOT/.venv/bin/sau"
@@ -81,7 +88,7 @@ if [[ "$LIVE" == "1" && "$CHECK_LEVEL" != "adapter" ]]; then
   exit 2
 fi
 
-python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$RENDERED_COVER" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" "$CHECK_LEVEL" <<'PY'
+python3 - "$ROOT" "$RUN_DIR" "$SOCIAL_ROOT" "$SOCIAL_PYTHON" "$SOCIAL_CLI" "$ACCOUNT_NAME" "$RENDERED_VIDEO" "$RENDERED_COVER" "$SOCIAL_UPLOAD_HEADED" "$LIVE" "$CHECK_JSON" "$CHECK_LEVEL" "$UPLOADER" "$EGO_PUBLISHER" "$DOUYIN_VISIBILITY" "$NODE_BIN" <<'PY'
 from __future__ import annotations
 
 import json
@@ -90,6 +97,7 @@ import html as html_lib
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -103,6 +111,7 @@ run_dir = Path(sys.argv[2]).resolve()
 sys.path.insert(0, str(root))
 from agent_harness.artifact_identity import validate_upload_identity  # noqa: E402
 from scripts.cover_health import analyze_cover  # noqa: E402
+from scripts.douyin_tags import compose_caption  # noqa: E402
 
 social_root = Path(sys.argv[3]).expanduser()
 social_python = sys.argv[4]
@@ -114,6 +123,15 @@ upload_headed = sys.argv[9] == "1"
 live = sys.argv[10] == "1"
 check_json = Path(sys.argv[11])
 check_level = sys.argv[12]
+uploader = sys.argv[13]
+ego_publisher = sys.argv[14]
+visibility = sys.argv[15]
+node_bin = sys.argv[16] or shutil.which("node") or ""
+use_ego = uploader == "ego"
+DOUYIN_UPLOADERS = {"social-auto-upload", "ego"}
+EGO_TITLE_MAX_UTF16 = 30
+EGO_VISIBILITIES = {"self_only", "public"}
+REMOTE_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,64}")
 
 post_dir = run_dir / "post"
 manifest_path = post_dir / "douyin_upload_manifest.json"
@@ -439,15 +457,154 @@ def build_post_publish_verification(manifest: dict[str, Any], upload_result: dic
     return payload, verification_errors
 
 
+def utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def fit_ego_title(title: str) -> str:
+    """Cut the title to the publisher's 30-character limit (counted in UTF-16 units, as JavaScript does)."""
+    fitted = ""
+    for char in title.strip():
+        if utf16_len(fitted + char) > EGO_TITLE_MAX_UTF16:
+            break
+        fitted += char
+    return fitted.rstrip(" -:：，,。.、|｜")
+
+
+def ego_shots_dir() -> Path:
+    return post_dir / "ego_publish_shots"
+
+
+def ego_args(manifest: dict[str, Any]) -> list[str]:
+    return [
+        node_bin or "node",
+        ego_publisher or "<SEARCHPO_EGO_PUBLISHER>",
+        "--file",
+        str(video_path),
+        "--title",
+        fit_ego_title(str(manifest.get("title") or "")),
+        "--description",
+        compose_caption(str(manifest.get("desc") or ""), [str(tag) for tag in manifest.get("tags") or []]),
+        "--visibility",
+        visibility,
+        "--shots",
+        str(ego_shots_dir()),
+    ]
+
+
+def parse_publisher_line(stdout: str) -> dict[str, Any]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
+    return _parse_json_payload(stdout)
+
+
+def run_ego_publisher(manifest: dict[str, Any]) -> dict[str, Any]:
+    ego_shots_dir().mkdir(parents=True, exist_ok=True)
+    command = ego_args(manifest)
+    base = {"command": " ".join(shlex.quote(part) for part in command), "cwd": str(root), "timeout_sec": command_timeout}
+    try:
+        proc = subprocess.run(command, cwd=root, text=True, capture_output=True, timeout=command_timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            **base,
+            "returncode": -1,
+            "timed_out": True,
+            "stdout": ((exc.stdout or "") if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace"))[-1200:],
+            "stderr": ((exc.stderr or "") if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace"))[-1200:],
+            "publisher_result": {"ok": False, "error": f"publisher timed out after {command_timeout}s"},
+        }
+    except OSError as exc:
+        return {**base, "returncode": -1, "timed_out": False, "stdout": "", "stderr": str(exc)[-1200:], "publisher_result": {"ok": False, "error": str(exc)}}
+    return {
+        **base,
+        "returncode": proc.returncode,
+        "timed_out": False,
+        "stdout": proc.stdout[-1200:],
+        "stderr": proc.stderr[-1200:],
+        "publisher_result": parse_publisher_line(proc.stdout),
+    }
+
+
+def build_ego_verification(manifest: dict[str, Any], upload_result: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    result = upload_result.get("publisher_result") if isinstance(upload_result.get("publisher_result"), dict) else {}
+    remote_id = str(result.get("remote_id") or "").strip()
+    permalink = str(result.get("url") or "").strip()
+    publisher_ok = result.get("ok") is True and upload_result.get("returncode") == 0
+    checks = {
+        "publisher_ok": publisher_ok,
+        "remote_identity_present": bool(REMOTE_ID_RE.fullmatch(remote_id)),
+        "permalink_matches_remote_id": not permalink or (bool(remote_id) and remote_id in permalink),
+        # The publisher echoes the visibility it was asked for; a mismatch means it posted with other settings.
+        "visibility_matches_request": str(result.get("visibility") or visibility) == visibility,
+        "local_hash_bound": bool(manifest.get("expected_video_sha256") and manifest.get("cover_sha256")),
+    }
+    verification_errors = [name for name, ok in checks.items() if not ok]
+    payload = {
+        "schema_version": 1,
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "status": "pass" if not verification_errors else "fail",
+        "platform": "douyin",
+        "verification_method": "ego_publisher_remote_id",
+        "remote": {
+            "remote_post_id": remote_id,
+            "permalink": permalink,
+            "title": fit_ego_title(str(manifest.get("title") or "")),
+            "account": result.get("account") or {},
+            "visibility": str(result.get("visibility") or ""),
+            "published_at": str(result.get("published_at") or ""),
+            "screenshots": str(result.get("screenshots") or ego_shots_dir()),
+            "status": "published" if publisher_ok else "failed",
+            "raw_detection_source": "ego_publisher",
+        },
+        "local": {
+            "run_id": manifest.get("run_id"),
+            "selected_candidate_id": manifest.get("selected_candidate_id"),
+            "video_sha256": manifest.get("expected_video_sha256"),
+            "cover_sha256": manifest.get("cover_sha256"),
+            "title": manifest.get("title"),
+            "duration_evidence": manifest.get("expected_video_path"),
+        },
+        "checks": checks,
+        "errors": verification_errors,
+        "publisher_error": "" if publisher_ok else str(result.get("error") or "publisher returned no result"),
+    }
+    return payload, verification_errors
+
+
+def write_post_publish_verification(payload: dict[str, Any]) -> None:
+    (post_dir / "post_publish_verification.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 errors: list[str] = []
 warnings: list[str] = []
 manifest: dict[str, Any] = {}
+if uploader not in DOUYIN_UPLOADERS:
+    errors.append(f"SEARCHPO_DOUYIN_UPLOADER must be one of {sorted(DOUYIN_UPLOADERS)}, got {uploader!r}")
 
 required_files = {
     "douyin_manifest": manifest_path.is_file(),
     "rendered_video": video_path.is_file(),
 }
-if check_level == "adapter":
+if check_level == "adapter" and use_ego:
+    required_files.update(
+        {
+            "ego_publisher": bool(ego_publisher) and Path(ego_publisher).expanduser().is_file(),
+            "node": bool(node_bin) and Path(node_bin).is_file(),
+        }
+    )
+    if visibility not in EGO_VISIBILITIES:
+        errors.append(f"SEARCHPO_DOUYIN_VISIBILITY must be one of {sorted(EGO_VISIBILITIES)}, got {visibility!r}")
+elif check_level == "adapter":
     required_files.update(
         {
             "social_root": social_root.exists(),
@@ -490,7 +647,7 @@ if cover_health.get("status") != "pass":
     errors.append("Douyin cover image failed pixel health check: " + ", ".join(cover_health.get("errors") or []))
 
 cli_help: dict[str, Any] | None = None
-if check_level == "adapter" and cli_path.is_file():
+if check_level == "adapter" and cli_path.is_file() and not use_ego:
     cli_help = run_sau(["douyin", "--help"])
     if cli_help["returncode"] != 0:
         warnings.append(
@@ -501,6 +658,8 @@ if check_level == "adapter" and cli_path.is_file():
 account_check: dict[str, Any] = {"status": "not-required", "reason": "DOUYIN_ACCOUNT_NAME/SOCIAL_UPLOAD_ACCOUNT_NAME not set"}
 if check_level != "adapter":
     account_check = {"status": "not-required", "reason": f"SEARCHPO_DOUYIN_CHECK_LEVEL={check_level}"}
+elif use_ego:
+    account_check = {"status": "not-required", "reason": "SEARCHPO_DOUYIN_UPLOADER=ego publishes through an already signed-in browser profile"}
 elif account_name:
     check_attempts = int(os.environ.get("SEARCHPO_DOUYIN_ACCOUNT_CHECK_ATTEMPTS") or (3 if live else 1))
     result = run_sau_until_success(["douyin", "check", "--account", account_name], attempts=check_attempts)
@@ -519,7 +678,32 @@ post_publish_verification: dict[str, Any] = {
     "status": "not-required",
     "reason": "contract-check mode does not perform live publish verification",
 }
-if live:
+if live and use_ego:
+    if errors:
+        upload_result = {"status": "not-run", "reason": "pre-flight errors blocked live upload"}
+    elif os.environ.get("SEARCHPO_DOUYIN_REVERIFY_ONLY") == "1":
+        existing_check = json.loads(check_json.read_text(encoding="utf-8")) if check_json.is_file() else {}
+        previous_upload = existing_check.get("live_upload") or {}
+        if previous_upload.get("returncode") != 0 or not isinstance(previous_upload.get("publisher_result"), dict):
+            errors.append("Douyin reverify requested but no previous successful ego publisher result exists.")
+            upload_result = {"status": "not-run", "reason": "reverify requires previous successful live_upload"}
+        else:
+            upload_result = previous_upload
+            post_publish_verification, verify_errors = build_ego_verification(manifest, upload_result)
+            write_post_publish_verification(post_publish_verification)
+            if verify_errors:
+                errors.append("Douyin ego publish verification failed: " + ", ".join(verify_errors))
+    elif manifest and video_path.is_file():
+        upload_result = run_ego_publisher(manifest)
+        publisher_ok = upload_result["returncode"] == 0 and upload_result["publisher_result"].get("ok") is True
+        upload_result["status"] = "submitted" if publisher_ok else "failed"
+        post_publish_verification, verify_errors = build_ego_verification(manifest, upload_result)
+        write_post_publish_verification(post_publish_verification)
+        if not publisher_ok:
+            errors.append("Douyin ego publisher failed: " + str(upload_result["publisher_result"].get("error") or "no result"))
+        elif verify_errors:
+            errors.append("Douyin ego publisher returned without a verifiable remote identity: " + ", ".join(verify_errors))
+elif live:
     if not account_name:
         errors.append("Live Douyin upload requires DOUYIN_ACCOUNT_NAME or SOCIAL_UPLOAD_ACCOUNT_NAME.")
     elif errors:
@@ -553,7 +737,10 @@ if live:
             if verify_errors:
                 errors.append("Douyin upload submitted but post-publish verification failed: " + ", ".join(verify_errors))
 
-command = sau_command(upload_args(manifest)) if manifest else []
+if use_ego:
+    command = ego_args(manifest) if manifest else []
+else:
+    command = sau_command(upload_args(manifest)) if manifest else []
 execution_profile = str(
     manifest.get("execution_profile")
     or os.environ.get("SEARCHPO_EXECUTION_PROFILE")
@@ -574,7 +761,8 @@ result = {
     "render_mode": effective_render_mode,
     "publish_mode": effective_publish_mode,
     "platform": "douyin",
-    "adapter": "dreammis/social-auto-upload",
+    "adapter": "ego-publisher" if use_ego else "dreammis/social-auto-upload",
+    "uploader": uploader,
     "check_level": check_level,
     "run_dir": str(run_dir),
     "rendered_video_path": str(video_path),
@@ -586,6 +774,8 @@ result = {
     "social_auto_upload_python": social_python,
     "social_auto_upload_cli": social_cli,
     "social_upload_headed": upload_headed,
+    "ego_publisher": ego_publisher if use_ego else "",
+    "douyin_visibility": visibility if use_ego else "",
     "required_files": required_files,
     "cli_help": cli_help,
     "account_check": account_check,
