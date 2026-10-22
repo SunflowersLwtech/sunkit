@@ -7,6 +7,7 @@
     "AWS_BEDROCK_API_KEY",
     "BLUESKY_APP_PASSWORD",
     "BLUESKY_HANDLE",
+    "CARTESIA_API_KEY",
     "CONTEXT7_API_KEY",
     "DEEPSEEK_API_KEY",
     "DOUYIN_ACCOUNT_NAME",
@@ -46,13 +47,18 @@
     "SEARCHPO_AGENT_MODE",
     "SEARCHPO_AUDIO_TARGET_LUFS",
     "SEARCHPO_BARK_URL",
+    "SEARCHPO_CARTESIA_MODEL",
+    "SEARCHPO_CARTESIA_VOICE",
     "SEARCHPO_DEEPSEEK_MODEL",
     "SEARCHPO_DOUYIN_CHECK_LEVEL",
     "SEARCHPO_DOUYIN_LIVE",
     "SEARCHPO_DOUYIN_MAX_TAGS",
     "SEARCHPO_DOUYIN_MAX_TAG_LEN",
+    "SEARCHPO_DOUYIN_UPLOADER",
+    "SEARCHPO_DOUYIN_VISIBILITY",
     "SEARCHPO_DURATION_FRAMES",
     "SEARCHPO_E2E_PROFILE",
+    "SEARCHPO_EGO_PUBLISHER",
     "SEARCHPO_GEMINI_API_MODE",
     "SEARCHPO_GEMINI_AUDIT_MODEL",
     "SEARCHPO_GEMINI_INLINE_VIDEO_MAX_BYTES",
@@ -66,6 +72,10 @@
     "SEARCHPO_GEMINI_TTS_VOLUME_GAIN_DB",
     "SEARCHPO_GEMINI_VERTEX_LOCATION",
     "SEARCHPO_GEMINI_VERTEX_PROJECT",
+    "SEARCHPO_LLM_API_KEY",
+    "SEARCHPO_LLM_MODEL",
+    "SEARCHPO_LLM_SCORER_MODEL",
+    "SEARCHPO_LLM_URL",
     "SEARCHPO_POLISH_MULTI_CANDIDATE",
     "SEARCHPO_REMOTION_PROPS",
     "SEARCHPO_REMOTION_RENDER_MODE",
@@ -73,8 +83,11 @@
     "SEARCHPO_RENDER_AUDIO_BITRATE",
     "SEARCHPO_RENDER_CRF",
     "SEARCHPO_SLACK_WEBHOOK",
+    "SEARCHPO_TTS_DAILY_CHARS",
+    "SEARCHPO_TTS_PROVIDER",
     "SEARCHPO_VIDEO_FPS",
     "SEARCHPO_VIDEO_TAIL_FRAMES",
+    "SEARCHPO_VISUAL_AUDIT",
     "SOCIAL_AUTO_UPLOAD_CLI",
     "SOCIAL_AUTO_UPLOAD_PYTHON",
     "SOCIAL_AUTO_UPLOAD_ROOT",
@@ -207,10 +220,29 @@
         "SEARCHPO_GEMINI_AUDIT_MODEL",
         "SEARCHPO_GEMINI_INLINE_VIDEO_MAX_BYTES",
         "SEARCHPO_GEMINI_SCORER_MODEL",
-        "SEARCHPO_AUDIO_TARGET_LUFS"
+        "SEARCHPO_AUDIO_TARGET_LUFS",
+        "SEARCHPO_VISUAL_AUDIT"
       ],
       "required_any": ["GOOGLE_AGENT_PLATFORM_API", "GOOGLE_API_KEY"],
-      "purpose": "Run Gemini content scoring, TTS, and visual audit scripts with the configured Searchpo model and voice parameters."
+      "purpose": "Run Gemini content scoring, TTS, and visual audit scripts with the configured Searchpo model and voice parameters. SEARCHPO_VISUAL_AUDIT=deterministic skips the Gemini video audits and lets the deterministic audit decide the visual gate."
+    },
+    {
+      "id": "llm-gateway-text",
+      "owner_agent": "searchpo-impl-agent",
+      "profiles": ["implementation", "provider", "all"],
+      "kind": "api",
+      "env": ["SEARCHPO_LLM_URL", "SEARCHPO_LLM_API_KEY", "SEARCHPO_LLM_MODEL", "SEARCHPO_LLM_SCORER_MODEL"],
+      "required_all": ["SEARCHPO_LLM_URL", "SEARCHPO_LLM_API_KEY", "SEARCHPO_LLM_MODEL"],
+      "purpose": "Send copy polish and content scoring to an OpenAI-compatible chat/completions endpoint instead of DeepSeek and Gemini."
+    },
+    {
+      "id": "cartesia-tts",
+      "owner_agent": "searchpo-impl-agent",
+      "profiles": ["implementation", "provider", "all"],
+      "kind": "script",
+      "env": ["SEARCHPO_TTS_PROVIDER", "CARTESIA_API_KEY", "SEARCHPO_CARTESIA_VOICE", "SEARCHPO_CARTESIA_MODEL", "SEARCHPO_TTS_DAILY_CHARS"],
+      "required_all": ["CARTESIA_API_KEY", "SEARCHPO_CARTESIA_VOICE"],
+      "purpose": "Run `scripts/cartesia_tts.py` for the voiceover when SEARCHPO_TTS_PROVIDER=cartesia, within the daily character cap."
     },
     {
       "id": "remotion-local-render",
@@ -277,6 +309,15 @@
       ],
       "required_any": ["DOUYIN_ACCOUNT_NAME", "SOCIAL_UPLOAD_ACCOUNT_NAME"],
       "purpose": "Run Douyin adapter checks and live upload only after the main agent confirms an explicit current-run publish request."
+    },
+    {
+      "id": "douyin-browser-publisher",
+      "owner_agent": "searchpo-impl-agent",
+      "profiles": ["implementation", "publish", "live", "all"],
+      "kind": "script",
+      "env": ["SEARCHPO_DOUYIN_UPLOADER", "SEARCHPO_EGO_PUBLISHER", "SEARCHPO_DOUYIN_VISIBILITY"],
+      "required_all": ["SEARCHPO_EGO_PUBLISHER"],
+      "purpose": "With SEARCHPO_DOUYIN_UPLOADER=ego, publish through a script that drives an already signed-in browser profile instead of social-auto-upload; live upload still needs an explicit current-run publish request."
     },
     {
       "id": "x-twitter-source-and-distribution",

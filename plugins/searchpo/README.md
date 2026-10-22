@@ -242,6 +242,17 @@ Still optional / only needed later:
 - `X_BEARER_TOKEN`: X/Twitter backlog source if not using the existing Twitter API provider keys.
 - Douyin publishing: `SOCIAL_AUTO_UPLOAD_ROOT`, `SOCIAL_AUTO_UPLOAD_CLI`, `SOCIAL_AUTO_UPLOAD_PYTHON`, and `DOUYIN_ACCOUNT_NAME` or `SOCIAL_UPLOAD_ACCOUNT_NAME`.
 
+Provider switches (each unset value keeps the default provider, so nothing changes unless you set it):
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `SEARCHPO_LLM_URL` | empty | Full OpenAI-compatible chat/completions URL. When set, `deepseek_polish.py` and `content_scorer.py` call it with `SEARCHPO_LLM_API_KEY` and `SEARCHPO_LLM_MODEL` (`SEARCHPO_LLM_SCORER_MODEL` overrides the scorer model) instead of DeepSeek and Gemini. |
+| `SEARCHPO_TTS_PROVIDER` | `gemini` | `cartesia` runs `scripts/cartesia_tts.py` with `CARTESIA_API_KEY`, `SEARCHPO_CARTESIA_VOICE` (voice id) and `SEARCHPO_CARTESIA_MODEL` (`sonic-3.6`). It writes the same `voiceover.wav` and manifest as Gemini TTS. |
+| `SEARCHPO_TTS_DAILY_CHARS` | `5000` | Hard cap on Cartesia transcript characters per UTC day, kept in `runtime/tts_usage/cartesia_daily_chars.json`. A run that would exceed it is refused before any request. |
+| `SEARCHPO_VISUAL_AUDIT` | `gemini` | `deterministic` lets `deterministic_visual_audit.py` decide the visual gate; the Gemini visual and showcase audits are recorded as `not-used` (never `pass`), and only this mode accepts that at release. |
+| `SEARCHPO_DOUYIN_UPLOADER` | `social-auto-upload` | `ego` skips social-auto-upload and publishes with `node "$SEARCHPO_EGO_PUBLISHER" --file --title --description --visibility --shots`, a script that drives an already signed-in browser profile and prints one JSON line. Verification passes only when it reports `ok` with a remote id. |
+| `SEARCHPO_DOUYIN_VISIBILITY` | `self_only` | Visibility the ego publisher posts with: `self_only` or `public`. |
+
 For Gemini shell calls:
 
 ```bash
