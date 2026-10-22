@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Polish the selected searchpo candidate through DeepSeek and write run artifacts."""
+"""Polish the selected searchpo candidate through DeepSeek (or an OpenAI-compatible gateway) and write run artifacts."""
 
 from __future__ import annotations
 
@@ -45,8 +45,12 @@ from agent_harness.storyboard import (
 )
 from agent_harness.video_profile import choose_video_profile, normalize_video_profile
 from env_utils import env_value
+from llm_gateway import GATEWAY_PROVIDER, chat_completion, gateway_config, parse_json_text
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
+# main() points this at SEARCHPO_LLM_URL when an OpenAI-compatible gateway is configured.
+CHAT_GATEWAY_URL = ""
 UNSAFE_RE = unsupported_claim_regex()
 VIEWER_BURDEN_QUESTION_RE = re.compile(
     r"(?P<question>(?:你|大家|观众|评论区|会不会|要不要|该不该|怎么选|怎么判断)[^。！？!?\n]{0,140}[？?])\s*$"
@@ -643,13 +647,7 @@ def longform_storyboard_contract_errors(polished: dict[str, Any]) -> list[str]:
 
 
 def parse_json_object(content: str) -> dict[str, Any]:
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.S)
-        if not match:
-            raise
-        return json.loads(match.group(0))
+    return parse_json_text(content)
 
 
 def normalize_polish_payload(data: dict[str, Any]) -> dict[str, Any]:
@@ -2494,13 +2492,15 @@ def deepseek_constraints(video_seconds: int, *, variant_count: int = 1, video_pr
 
 
 def request_deepseek(api_key: str, model: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
+    api_attempts = int(policy_get("deepseek.api_attempts", 2))
+    if CHAT_GATEWAY_URL:
+        return chat_completion(CHAT_GATEWAY_URL, api_key, body, timeout, attempts=api_attempts)
     request = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
+        DEEPSEEK_CHAT_URL,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
-    api_attempts = int(policy_get("deepseek.api_attempts", 2))
     last_exc: Exception | None = None
     for attempt in range(api_attempts):
         try:
@@ -2531,6 +2531,8 @@ def response_message_content(payload: dict[str, Any]) -> str:
     choice = (payload.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
     if not isinstance(content, str) or not content.strip():
         finish_reason = choice.get("finish_reason")
         message_keys = sorted(str(key) for key in message.keys())
@@ -3734,6 +3736,7 @@ def _multi_candidate_polish(
 
 
 def main() -> int:
+    global CHAT_GATEWAY_URL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
     parser.add_argument("--env-file", default=".env")
@@ -3747,10 +3750,18 @@ def main() -> int:
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
     env_file = Path(args.env_file).resolve()
-    api_key = env_value("DEEPSEEK_API_KEY", env_file)
-    if not api_key:
-        raise SystemExit("DEEPSEEK_API_KEY is required for scripts/deepseek_polish.py")
-    model = env_value("SEARCHPO_DEEPSEEK_MODEL", env_file, "deepseek-v4-pro")
+    gateway = gateway_config(env_file)
+    if gateway:
+        CHAT_GATEWAY_URL = gateway["url"]
+        provider = GATEWAY_PROVIDER
+        api_key = gateway["api_key"]
+        model = gateway["model"]
+    else:
+        provider = "deepseek"
+        api_key = env_value("DEEPSEEK_API_KEY", env_file)
+        if not api_key:
+            raise SystemExit("DEEPSEEK_API_KEY is required for scripts/deepseek_polish.py")
+        model = env_value("SEARCHPO_DEEPSEEK_MODEL", env_file, "deepseek-v4-pro")
     candidate_path = run_dir / "selected_candidate.json"
     plan_path = run_dir / "content_plan.json"
     evidence_path = run_dir / "evidence_bundle.json"
@@ -3903,7 +3914,7 @@ def main() -> int:
     result = {
         "schema_version": 1,
         "created_at": utc_now(),
-        "provider": "deepseek",
+        "provider": provider,
         "model": model,
         "attempt": args.attempt,
         "mode": args.mode,

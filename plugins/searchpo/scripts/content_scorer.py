@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score polished content quality via Gemini for searchpo quality gate."""
+"""Score polished content quality via Gemini (or an OpenAI-compatible gateway) for searchpo quality gate."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from agent_harness.service_artifacts import RENDER_TO_PLANNING_TYPE, bounded_tex
 from agent_harness.storyboard import minimum_storyboard_scene_count
 from env_utils import first_env, env_value
 from gemini_api import default_gemini_mode, generate_content_url
+from llm_gateway import GATEWAY_PROVIDER, chat_completion, gateway_config, message_text, parse_json_text
 
 LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 
@@ -63,8 +64,8 @@ def score_content(
     topic_brief: dict[str, Any] | None = None,
     fact_bank: dict[str, Any] | None = None,
     scene_plan: dict[str, Any] | None = None,
+    gateway_url: str = "",
 ) -> dict[str, Any]:
-    url = generate_content_url(model, api_key, env_file)
     target_overall = float(policy_get("content_optimization.target_overall", 8.0))
     min_dimension = float(policy_get("content_optimization.min_dimension", 7.0))
     prompt = json.dumps({
@@ -177,6 +178,9 @@ def score_content(
         ],
     }, ensure_ascii=False)
 
+    if gateway_url:
+        return score_via_gateway(gateway_url, api_key, model, prompt, timeout)
+    url = generate_content_url(model, api_key, env_file)
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -225,6 +229,23 @@ def score_content(
         if not match:
             raise
         return json.loads(match.group(0))
+
+
+def score_via_gateway(url: str, api_key: str, model: str, prompt: str, timeout: float) -> dict[str, Any]:
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You score short-video content packages against the given rubric. Return strict JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    payload = chat_completion(url, api_key, body, timeout, attempts=4, label="LLM gateway scorer")
+    result = parse_json_text(message_text(payload, label="LLM gateway scorer"))
+    if not isinstance(result, dict):
+        raise RuntimeError("LLM gateway scorer returned JSON that is not an object")
+    return result
 
 
 def candidate_entity_terms(candidate: dict[str, Any]) -> list[str]:
@@ -589,10 +610,17 @@ def main() -> int:
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
     env_file = Path(args.env_file).resolve()
-    api_key = first_env(["GOOGLE_API_KEY", "GOOGLE_AGENT_PLATFORM_API"], env_file)
-    if not api_key:
-        raise SystemExit("GOOGLE_API_KEY or GOOGLE_AGENT_PLATFORM_API is required")
-    model = env_value("SEARCHPO_GEMINI_SCORER_MODEL", env_file, "gemini-3.5-flash")
+    gateway = gateway_config(env_file, role="scorer")
+    if gateway:
+        provider = GATEWAY_PROVIDER
+        api_key = gateway["api_key"]
+        model = gateway["model"]
+    else:
+        provider = "gemini"
+        api_key = first_env(["GOOGLE_API_KEY", "GOOGLE_AGENT_PLATFORM_API"], env_file)
+        if not api_key:
+            raise SystemExit("GOOGLE_API_KEY or GOOGLE_AGENT_PLATFORM_API is required")
+        model = env_value("SEARCHPO_GEMINI_SCORER_MODEL", env_file, "gemini-3.5-flash")
 
     polish_path = Path(args.polish).resolve() if args.polish else run_dir / "deepseek_polish.json"
     candidate_path = run_dir / "selected_candidate.json"
@@ -623,6 +651,7 @@ def main() -> int:
         topic_brief=topic_brief,
         fact_bank=fact_bank,
         scene_plan=scene_plan,
+        gateway_url=gateway["url"] if gateway else "",
     )
     blocking_checks = deterministic_blocking_checks(polish, candidate, evidence_bundle, cross_check_review)
     deterministic_metrics = deterministic_content_metrics(polish, candidate)
@@ -638,7 +667,7 @@ def main() -> int:
     output = {
         "schema_version": 1,
         "created_at": utc_now(),
-        "provider": "gemini",
+        "provider": provider,
         "model": model,
         "attempt": args.attempt,
         "polish_path": str(polish_path),
