@@ -60,6 +60,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 from douyin_tags import build_tag_bundle, extract_inline_hashtags  # noqa: E402
+from provider_modes import REAL_TTS_PROVIDERS, TTS_SCRIPTS, tts_provider  # noqa: E402
 
 
 PROVIDER_ENV_CONTRACT = {
@@ -88,7 +89,7 @@ def voiceover_manifest_errors(manifest: dict[str, Any], audio_path: Path) -> lis
     errors: list[str] = []
     if manifest.get("status") != "pass":
         errors.append(f"status is {manifest.get('status') or 'missing'}")
-    if manifest.get("provider") != "gemini":
+    if manifest.get("provider") not in REAL_TTS_PROVIDERS:
         errors.append(f"provider is {manifest.get('provider') or 'missing'}")
     if not audio_path.is_file():
         errors.append(f"audio file missing: {audio_path}")
@@ -1226,21 +1227,25 @@ class DeepSeekPolishStage:
 
 @dataclass(frozen=True)
 class GeminiTTSStage:
+    # The stage keeps its historical name; SEARCHPO_TTS_PROVIDER picks the script that runs.
     name: str = "gemini_tts"
-    title: str = "Run Gemini TTS script"
+    title: str = "Run TTS script"
     owner: str = IMPL_AGENT
 
     def run(self, context: HarnessContext) -> StageResult:
-        script_result = run_repo_script(context, ["scripts/gemini_tts.py", str(context.run_dir)], timeout=600)
+        provider = tts_provider()
+        script_result = run_repo_script(context, [TTS_SCRIPTS[provider], str(context.run_dir)], timeout=600)
         manifest_path = context.run_dir / "voiceover_manifest.json"
         manifest = read_json(manifest_path)
         audio_path = Path(manifest["audio_path"])
         manifest_errors = voiceover_manifest_errors(manifest, audio_path)
+        if manifest.get("provider") != provider:
+            manifest_errors.append(f"provider is {manifest.get('provider') or 'missing'}, expected {provider}")
         context.state["voiceover_manifest"] = manifest
         return StageResult(
             step="act",
             status="completed" if not manifest_errors else "failed",
-            details="Gemini generated the run voiceover audio artifact.",
+            details=f"{provider.capitalize()} TTS generated the run voiceover audio artifact.",
             artifacts=[
                 Artifact("voiceover_manifest", manifest_path, {"model": manifest.get("model"), "voice": manifest.get("voice")}),
                 Artifact("voiceover_audio", audio_path, {"mime_type": manifest.get("output_mime_type")}),
@@ -1249,7 +1254,7 @@ class GeminiTTSStage:
                 Gate(
                     "voiceover_generated",
                     "pass" if not manifest_errors else "fail",
-                    "Gemini TTS wrote a hash-bound voiceover.wav",
+                    f"{provider.capitalize()} TTS wrote a hash-bound voiceover.wav",
                     {"errors": manifest_errors},
                 )
             ],

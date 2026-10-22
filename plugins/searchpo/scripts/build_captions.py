@@ -40,6 +40,7 @@ LATEST_RUN_PATH = ROOT / "runtime" / "latest_run.txt"
 
 from agent_harness.policy import policy_get
 from agent_harness.speech_quality import normalize_voiceover_text
+from scripts.provider_modes import REAL_TTS_PROVIDERS
 
 # Punctuation that ends a phrase. Terminal marks imply a longer spoken pause.
 _TERMINAL = "。！？!?…"
@@ -396,8 +397,8 @@ def sha256_file(path: Path) -> str:
 def require_voiceover_audio(manifest: dict[str, Any], run_dir: Path) -> tuple[Path, float]:
     if manifest.get("status") != "pass":
         raise SystemExit(f"voiceover_manifest.json status is not pass: {manifest.get('status')}")
-    if manifest.get("provider") != "gemini":
-        raise SystemExit(f"voiceover_manifest.json provider must be gemini: {manifest.get('provider')}")
+    if manifest.get("provider") not in REAL_TTS_PROVIDERS:
+        raise SystemExit(f"voiceover_manifest.json provider must be one of {sorted(REAL_TTS_PROVIDERS)}: {manifest.get('provider')}")
     audio_path = Path(str(manifest.get("audio_path") or ""))
     if not audio_path.is_absolute():
         audio_path = (run_dir / audio_path).resolve()
@@ -439,7 +440,7 @@ def main() -> int:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         _, audio_sec = require_voiceover_audio(manifest, run_dir)
     if not audio_sec:
-        raise SystemExit("voiceover_manifest.json missing valid Gemini audio duration")
+        raise SystemExit("voiceover_manifest.json missing valid TTS audio duration")
     if args.text is not None:
         text = args.text
     else:
@@ -483,7 +484,7 @@ def main() -> int:
         "created_at": utc_now(),
         "fps": args.fps,
         "audio_duration_sec": audio_sec,
-        "source": "verified_gemini_voiceover_audio",
+        "source": f"verified_{manifest.get('provider')}_voiceover_audio",
         "segment_count": len(segments),
         "end_frame": end_frame,
         "segments": segments,
