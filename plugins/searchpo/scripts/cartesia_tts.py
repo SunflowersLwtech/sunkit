@@ -5,6 +5,8 @@ Writes the same voiceover.wav and voiceover_manifest.json as scripts/gemini_tts.
 so captions and render timing downstream read it unchanged. Selected with
 SEARCHPO_TTS_PROVIDER=cartesia. Spending is bounded by a daily character cap
 (SEARCHPO_TTS_DAILY_CHARS) kept in a ledger under the ignored runtime/ directory.
+The ledger path can be moved with SEARCHPO_TTS_LEDGER, so several checkouts on
+one machine can share one day's budget for the same voice provider.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ SAMPLE_RATE_HZ = 44100
 SAMPLE_WIDTH_BYTES = 2
 CHANNELS = 1
 CHUNK_CHARS = 1200
-DEFAULT_DAILY_CHARS = 5000
+DEFAULT_DAILY_CHARS = 20000
 DEFAULT_LEDGER_PATH = ROOT / "runtime" / "tts_usage" / "cartesia_daily_chars.json"
 LEDGER_KEEP_DAYS = 31
 RETRYABLE_STATUS = (429, 500, 502, 503, 504)
@@ -309,11 +311,16 @@ def main() -> int:
     parser.add_argument("run_dir", nargs="?", help="Artifact run directory. Defaults to runtime/latest_run.txt.")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=float, default=180)
-    parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH), help="Daily character ledger JSON path.")
+    parser.add_argument(
+        "--ledger",
+        default=str(DEFAULT_LEDGER_PATH),
+        help="Daily character ledger JSON path. Defaults to SEARCHPO_TTS_LEDGER, then the checkout's own file.",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve() if args.run_dir else latest_run_dir()
     env_file = Path(args.env_file).resolve()
+    ledger_path = env_value("SEARCHPO_TTS_LEDGER", env_file).strip() or args.ledger
     api_key = env_value("CARTESIA_API_KEY", env_file)
     if not api_key:
         raise SystemExit("CARTESIA_API_KEY is required for scripts/cartesia_tts.py")
@@ -370,7 +377,7 @@ def main() -> int:
         reuse = reusable_chunk(chunk_path, text_hash=text_hash, index=index, previous_manifest=previous_manifest, model=model, voice=voice)
         planned.append((index, chunk_text, chunk_path, text_hash, reuse))
 
-    ledger = DailyCharLedger(Path(args.ledger).expanduser().resolve(), daily_cap)
+    ledger = DailyCharLedger(Path(ledger_path).expanduser().resolve(), daily_cap)
     chars_needed = sum(len(chunk_text) for _index, chunk_text, _path, _hash, reuse in planned if not reuse)
     try:
         used_before = ledger.check(chars_needed)

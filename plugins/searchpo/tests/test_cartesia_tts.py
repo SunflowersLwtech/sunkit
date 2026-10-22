@@ -135,6 +135,32 @@ class DailyCapTests(unittest.TestCase):
             self.assertEqual(json.loads(ledger_path.read_text())["days"][cartesia.utc_date()]["chars"], 4990)
 
 
+    def test_the_ledger_path_can_point_at_a_shared_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "deepseek_polish.json").write_text(json.dumps({"voiceover_text": VOICEOVER}, ensure_ascii=False), encoding="utf-8")
+            shared = Path(tmp) / "shared" / "cartesia_daily_chars.json"
+            # Another tool already spent part of today's budget in the shared file.
+            cartesia.DailyCharLedger(shared, 20000).reserve(19990)
+            env = {
+                "CARTESIA_API_KEY": TEST_KEY,
+                "SEARCHPO_CARTESIA_VOICE": "voice-123",
+                "SEARCHPO_TTS_DAILY_CHARS": "20000",
+                "SEARCHPO_TTS_LEDGER": str(shared),
+            }
+            argv = ["cartesia_tts.py", str(run_dir), "--env-file", str(Path(tmp) / "none.env"),
+                    "--ledger", str(Path(tmp) / "ignored.json")]
+            with patch.dict(os.environ, env), patch.object(sys, "argv", argv), patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaises(SystemExit) as caught:
+                    cartesia.main()
+            urlopen.assert_not_called()
+            self.assertIn("daily character cap", str(caught.exception.code))
+            # The shared file is the one that counted the run, not the checkout's own file.
+            self.assertEqual(json.loads(shared.read_text())["days"][cartesia.utc_date()]["chars"], 19990)
+            self.assertFalse((Path(tmp) / "ignored.json").exists())
+
+
 class CartesiaManifestTests(unittest.TestCase):
     def test_manifest_matches_the_gemini_contract_and_feeds_captions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

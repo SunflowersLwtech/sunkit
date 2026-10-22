@@ -84,6 +84,7 @@
     "SEARCHPO_RENDER_CRF",
     "SEARCHPO_SLACK_WEBHOOK",
     "SEARCHPO_TTS_DAILY_CHARS",
+    "SEARCHPO_TTS_LEDGER",
     "SEARCHPO_TTS_PROVIDER",
     "SEARCHPO_VIDEO_FPS",
     "SEARCHPO_VIDEO_TAIL_FRAMES",
@@ -240,7 +241,7 @@
       "owner_agent": "searchpo-impl-agent",
       "profiles": ["implementation", "provider", "all"],
       "kind": "script",
-      "env": ["SEARCHPO_TTS_PROVIDER", "CARTESIA_API_KEY", "SEARCHPO_CARTESIA_VOICE", "SEARCHPO_CARTESIA_MODEL", "SEARCHPO_TTS_DAILY_CHARS"],
+      "env": ["SEARCHPO_TTS_PROVIDER", "CARTESIA_API_KEY", "SEARCHPO_CARTESIA_VOICE", "SEARCHPO_CARTESIA_MODEL", "SEARCHPO_TTS_DAILY_CHARS", "SEARCHPO_TTS_LEDGER"],
       "required_all": ["CARTESIA_API_KEY", "SEARCHPO_CARTESIA_VOICE"],
       "purpose": "Run `scripts/cartesia_tts.py` for the voiceover when SEARCHPO_TTS_PROVIDER=cartesia, within the daily character cap."
     },
