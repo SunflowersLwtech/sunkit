@@ -12,6 +12,7 @@ from unittest.mock import patch
 import scripts.cartesia_tts as cartesia
 from agent_harness.stages import voiceover_manifest_errors
 from scripts.build_captions import require_voiceover_audio
+from scripts.gemini_tts import gemini_previous_manifest
 
 SAMPLE_RATE = 44100
 TEST_KEY = "cartesia-test-key-not-real"
@@ -178,6 +179,23 @@ class CartesiaManifestTests(unittest.TestCase):
             self.assertEqual(voiceover_manifest_errors(manifest, audio_path), [])
             _path, seconds = require_voiceover_audio(manifest, run_dir)
             self.assertAlmostEqual(seconds, 2.0, places=3)
+
+    def test_chunks_are_never_reused_across_tts_providers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            chunk = run_dir / "voiceover_part_001.wav"
+            pcm, fmt = cartesia.parse_streamed_wav(streamed_wav(0.5))
+            cartesia.write_wav(chunk, pcm, fmt)
+            record = {"index": 1, "text_hash": "h", "audio_sha256": cartesia.sha256_file(chunk)}
+            manifest = {"provider": "cartesia", "model": "sonic-3.6", "voice": "voice-123", "tts_chunking": {"chunks": [record]}}
+            reuse = dict(text_hash="h", index=1, model="sonic-3.6", voice="voice-123")
+            self.assertTrue(cartesia.reusable_chunk(chunk, previous_manifest=manifest, **reuse))
+            self.assertFalse(cartesia.reusable_chunk(chunk, previous_manifest={**manifest, "provider": "gemini"}, **reuse))
+            self.assertFalse(cartesia.reusable_chunk(chunk, previous_manifest={**manifest, "voice": "other"}, **reuse))
+            (run_dir / "voiceover_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(gemini_previous_manifest(run_dir), {})
+            (run_dir / "voiceover_manifest.json").write_text(json.dumps({**manifest, "provider": "gemini"}), encoding="utf-8")
+            self.assertEqual(gemini_previous_manifest(run_dir)["provider"], "gemini")
 
     def test_unknown_tts_provider_is_still_rejected_downstream(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

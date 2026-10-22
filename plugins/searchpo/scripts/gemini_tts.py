@@ -117,6 +117,15 @@ def reusable_audio_chunk(
     return bool(duration and duration > 0)
 
 
+def gemini_previous_manifest(run_dir: Path) -> dict[str, Any]:
+    """The run's previous manifest, or {} when another TTS provider wrote it (its chunks are not Gemini audio)."""
+    path = run_dir / "voiceover_manifest.json"
+    manifest = read_json(path) if path.exists() else {}
+    if not isinstance(manifest, dict) or manifest.get("provider", "gemini") != "gemini":
+        return {}
+    return manifest
+
+
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -368,7 +377,7 @@ def main() -> int:
     if not polish_path.exists():
         raise SystemExit(f"DeepSeek polish artifact missing: {polish_path}")
     polish = read_json(polish_path)
-    previous_manifest = read_json(run_dir / "voiceover_manifest.json") if (run_dir / "voiceover_manifest.json").exists() else {}
+    previous_manifest = gemini_previous_manifest(run_dir)
     source_text = str(polish.get("voiceover_text") or "").strip()
     if not source_text:
         raise SystemExit("deepseek_polish.json has no voiceover_text")
