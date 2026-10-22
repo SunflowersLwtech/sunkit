@@ -19,6 +19,6 @@ Secrets live in `.env` or the operator's shell, never in tracked files or CI log
 - AWS keys should be least-privilege for Remotion Lambda/S3 in the active region.
 - Google and DeepSeek keys should be separate from unrelated products when possible.
 - Google keys are needed only while Gemini still scores (no gateway), speaks (`SEARCHPO_TTS_PROVIDER` unset or `gemini`), or audits video (`SEARCHPO_VISUAL_AUDIT` unset or `gemini`); `scripts/check_env.py` reports which keys the selected switches require.
-- The Cartesia ledger lives at `runtime/tts_usage/cartesia_daily_chars.json` (ignored) unless `SEARCHPO_TTS_LEDGER` points somewhere else. Several checkouts on one machine can share one file, so the daily cap covers every tool that speaks with the same provider. Do not delete it to get more characters; raise `SEARCHPO_TTS_DAILY_CHARS` deliberately instead.
+- The Cartesia ledger lives at `~/.local/state/cartesia-daily-chars.json` unless `SEARCHPO_TTS_LEDGER` points somewhere else. It is one file for the machine, so the daily cap covers every tool that speaks with the same provider here. Do not delete it to get more characters; raise `SEARCHPO_TTS_DAILY_CHARS` deliberately instead.
 - Douyin cookies under `runtime/social-auto-upload` are local operational state and must not be committed.
 - CI may run only `contract` profile and must never contain live publishing credentials.

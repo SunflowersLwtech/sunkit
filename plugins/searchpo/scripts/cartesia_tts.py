@@ -59,7 +59,9 @@ SAMPLE_WIDTH_BYTES = 2
 CHANNELS = 1
 CHUNK_CHARS = 1200
 DEFAULT_DAILY_CHARS = 20000
-DEFAULT_LEDGER_PATH = ROOT / "runtime" / "tts_usage" / "cartesia_daily_chars.json"
+# One machine-level file, so every tool on this machine that speaks with the same provider spends from the
+# same day's budget. The other line's variable (CARTESIA_DAILY_LEDGER) points at the same path.
+DEFAULT_LEDGER_PATH = Path.home() / ".local" / "state" / "cartesia-daily-chars.json"
 LEDGER_KEEP_DAYS = 31
 RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 MAX_DURATION_DRIFT_SEC = 0.35
