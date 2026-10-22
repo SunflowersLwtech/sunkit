@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
 from agent_harness.artifact_paths import preview_output_paths
 from agent_harness.policy import policy_get
 from agent_harness.runtime_contracts import IMPL_AGENT, write_implementation_loop
+from scripts.provider_modes import AUDIT_NOT_USED, visual_audit_mode
 
 
 GENERATED_SOURCE_LOCK = ROOT / "runtime" / "locks" / "remotion-generated-source.lock"
@@ -661,6 +662,23 @@ def _render_attempt_unlocked(
     }
 
 
+def not_used_model_audit(audit_name: str, video_path: Path, deterministic_path: Path) -> dict[str, Any]:
+    """Record that a model audit did not run; release gates accept this only in deterministic mode."""
+    return {
+        "schema_version": 1,
+        "created_at": utc_now(),
+        "audit_name": audit_name,
+        "provider": "gemini",
+        "status": AUDIT_NOT_USED,
+        "visual_audit_mode": "deterministic",
+        "reason": "SEARCHPO_VISUAL_AUDIT=deterministic: the visual gate is decided by the deterministic audit alone; no model audit ran.",
+        "video_path": str(video_path),
+        "video_sha256": sha256_file(video_path),
+        "deterministic_audit_path": str(deterministic_path),
+        "deterministic_audit_status": "pass",
+    }
+
+
 def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Path) -> dict[str, Any]:
     metadata_path = attempt_dir / "render_metadata_check.json"
     deterministic_path = attempt_dir / "visual_audit_deterministic.json"
@@ -712,6 +730,25 @@ def audit_attempt(run_dir: Path, attempt_dir: Path, attempt: int, video_path: Pa
         decision = deterministic_decision(deterministic)
         decision.update({"deterministic": deterministic, "deterministic_command": deterministic_meta, "metadata": metadata, "metadata_command": metadata_meta})
         return decision
+
+    if visual_audit_mode() == "deterministic":
+        gemini = not_used_model_audit("gemini_visual_audit", video_path, deterministic_path)
+        premium = not_used_model_audit("premium_showcase_audit", video_path, deterministic_path)
+        write_json(gemini_path, gemini)
+        write_json(premium_path, premium)
+        return {
+            "status": "pass",
+            "repair_route": "none",
+            "repair_hint": "",
+            "failed_checks": [],
+            "visual_audit_mode": "deterministic",
+            "metadata": metadata,
+            "metadata_command": metadata_meta,
+            "deterministic": deterministic,
+            "deterministic_command": deterministic_meta,
+            "gemini": gemini,
+            "premium_showcase_not_used": premium,
+        }
 
     try:
         gemini_timeout = int(os.environ.get("SEARCHPO_GEMINI_VISUAL_AUDIT_TIMEOUT", "600"))
@@ -868,6 +905,27 @@ def promote_attempt(run_dir: Path, attempt_dir: Path, render_info: dict[str, Any
         artifacts={"visual_audit_deterministic": run_dir / "visual_audit_deterministic.json"},
         gates=[("deterministic_visual_audit_passed", "pass", "Frame caption black-frame and audio checks passed")],
     )
+    if visual_audit_mode() == "deterministic":
+        record_stage(
+            run_dir,
+            name="gemini_visual_audit",
+            title="Gemini video visual audit (not used)",
+            status="skipped",
+            artifacts={"gemini_visual_audit": run_dir / "gemini_visual_audit.json"},
+            gates=[
+                ("visual_audit_passed", "pass", "Deterministic visual audit decided the visual gate (SEARCHPO_VISUAL_AUDIT=deterministic)"),
+                ("gemini_visual_audit", AUDIT_NOT_USED, "Gemini visual audit did not run in deterministic visual-audit mode"),
+            ],
+        )
+        record_stage(
+            run_dir,
+            name="premium_showcase_audit",
+            title="Premium Remotion showcase audit (not used)",
+            status="skipped",
+            artifacts={"premium_showcase_audit": run_dir / "premium_showcase_audit.json"},
+            gates=[("premium_showcase_audit_passed", AUDIT_NOT_USED, "Model showcase audit did not run in deterministic visual-audit mode")],
+        )
+        return
     record_stage(
         run_dir,
         name="gemini_visual_audit",
@@ -893,6 +951,7 @@ def main() -> int:
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
+    visual_mode = visual_audit_mode()
     max_attempts = max(1, int(policy_get("video_optimization.max_video_attempts", 3)))
     max_semantic_backtracks = max(0, int(policy_get("video_optimization.max_semantic_backtracks", 1)))
     semantic_backtracks = 0
@@ -973,6 +1032,7 @@ def main() -> int:
         "schema_version": 1,
         "created_at": utc_now(),
         "status": status,
+        "visual_audit_mode": visual_mode,
         "max_attempts": max_attempts,
         "attempt_count": len(attempts),
         "semantic_backtracks": semantic_backtracks,

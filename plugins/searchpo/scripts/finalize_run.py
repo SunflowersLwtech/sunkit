@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from agent_harness.runtime_contracts import MAIN_AGENT, RELEASE_GATE_FILENAME, w
 from agent_harness.service_artifacts import write_delivery_package
 from agent_harness.side_effect_tiers import side_effect_axes
 from scripts.gemini_visual_audit import audit_contract_errors
+from scripts.provider_modes import AUDIT_NOT_USED, visual_audit_mode
 
 NATIVE_GEMINI_VIDEO_INPUT_MODES = {"file_api", "inline_video", "agent_platform"}
 MIN_DETERMINISTIC_AUDIT_SCHEMA_VERSION = 2
@@ -74,6 +76,27 @@ def _gemini_release_errors(gemini_audit: dict[str, Any], *, expected_orientation
     return errors
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _not_used_audit_errors(label: str, record: dict[str, Any], final_video: Path) -> list[str]:
+    """A model audit that did not run is acceptable only as a deterministic-mode record bound to the final MP4."""
+    errors: list[str] = []
+    if record.get("visual_audit_mode") != "deterministic":
+        errors.append(f"{label} is marked {AUDIT_NOT_USED} but was not recorded by the deterministic visual-audit mode")
+    audited_sha256 = str(record.get("video_sha256") or "")
+    if not audited_sha256:
+        errors.append(f"{label} {AUDIT_NOT_USED} record is missing the audited video_sha256")
+    elif final_video.is_file() and _sha256_file(final_video) != audited_sha256:
+        errors.append(f"{label} {AUDIT_NOT_USED} record belongs to a different video than the final MP4")
+    return errors
+
+
 def _deterministic_release_errors(deterministic_audit: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     schema_version = deterministic_audit.get("schema_version")
@@ -116,6 +139,7 @@ def main() -> int:
     try:
         snapshot_before = board.snapshot(root_task_id)
         artifact_manifest = _maybe_json(run_dir / "artifact_manifest.json")
+        visual_mode = visual_audit_mode()
         execution_profile = args.execution_profile or artifact_manifest.get("execution_profile")
         if not execution_profile:
             if args.publish_mode == "live":
@@ -158,16 +182,27 @@ def main() -> int:
         if deterministic_audit_status != "pass":
             errors.append(f"deterministic visual audit status is {deterministic_audit_status}")
         errors.extend(_deterministic_release_errors(_maybe_json(run_dir / "visual_audit_deterministic.json")))
-        if gemini_audit_status != "pass":
+        # In deterministic visual-audit mode a not-used model audit is accepted; in every other mode it fails.
+        gemini_not_used = visual_mode == "deterministic" and gemini_audit_status == AUDIT_NOT_USED
+        premium_not_used = visual_mode == "deterministic" and premium_showcase_audit_status == AUDIT_NOT_USED
+        final_video_path = Path(str(artifact_manifest.get("final_video_path") or ""))
+        if gemini_audit_status != "pass" and not gemini_not_used:
             errors.append(f"Gemini visual audit status is {gemini_audit_status}")
-        if premium_showcase_audit_status != "pass":
+        if premium_showcase_audit_status != "pass" and not premium_not_used:
             errors.append(f"premium showcase audit status is {premium_showcase_audit_status}")
-        errors.extend(
-            _gemini_release_errors(
-                _maybe_json(run_dir / "gemini_visual_audit.json"),
-                expected_orientation=_expected_orientation(run_dir),
+        if gemini_not_used:
+            errors.extend(_not_used_audit_errors("Gemini visual audit", _maybe_json(run_dir / "gemini_visual_audit.json"), final_video_path))
+        else:
+            errors.extend(
+                _gemini_release_errors(
+                    _maybe_json(run_dir / "gemini_visual_audit.json"),
+                    expected_orientation=_expected_orientation(run_dir),
+                )
             )
-        )
+        if premium_not_used:
+            errors.extend(
+                _not_used_audit_errors("premium showcase audit", _maybe_json(run_dir / "premium_showcase_audit.json"), final_video_path)
+            )
         if manual_visual_review and manual_visual_review.get("status") != "pass":
             reason = manual_visual_review.get("reason") or manual_visual_review.get("summary") or "manual visual review failed"
             errors.append(f"manual visual review status is {manual_visual_review.get('status')}: {reason}")
@@ -263,6 +298,7 @@ def main() -> int:
             "preview_cover": artifact_manifest.get("preview_cover_path"),
             "render_metadata_status": render_metadata_status,
             "deterministic_visual_audit_status": deterministic_audit_status,
+            "visual_audit_mode": visual_mode,
             "gemini_visual_audit_status": gemini_audit_status,
             "premium_showcase_audit_status": premium_showcase_audit_status,
             "manual_visual_review": manual_visual_review,
