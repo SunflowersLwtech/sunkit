@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# magpie-client — point this machine's Claude Code at the magpie gateway on llm-gateway, or take it off.
+#
+#   magpie-client setup       per process (the way to use it): writes ~/.claude/magpie-settings.json
+#                             for claude-gw; the global settings.json is not touched. Key on stdin.
+#   magpie-client on          GLOBAL: every new session goes through the gateway. Don't, on a machine with
+#                             interactive sessions: see the README's "Why not the global default".
+#   magpie-client off         global back to Anthropic directly
+#   magpie-client status      what the global settings.json and magpie-settings.json say
+#
+# Claude Code keeps its claude.ai sign-in: no ANTHROPIC_AUTH_TOKEN is written, the gateway key
+# rides in ANTHROPIC_CUSTOM_HEADERS (x-api-key), so claude.ai connectors, /usage and mesh channels
+# keep working. Remote Control and ultrareview only exist against api.anthropic.com: start those
+# sessions with claude-native.
+#
+# Model names stay native (claude-opus-5-5, …): magpie's groups carry those ids, so Claude Code
+# keeps its per-model behaviour and every tier goes through the group's routing.
+set -euo pipefail
+
+GATEWAY=${MAGPIE_GATEWAY:-http://100.116.218.86:3425}
+SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+NATIVE=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/native-settings.json
+GW_SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/magpie-settings.json
+KEYS="ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS"
+
+py() { command -v python3 >/dev/null || { echo "magpie-client: needs python3" >&2; exit 1; }; python3 -I - "$@"; }
+
+case "${1:-status}" in
+setup)
+	key=$(cat)
+	case "$key" in sk-magpie-key-*) ;; *) echo "magpie-client: stdin must be an sk-magpie-key-… gateway key" >&2; exit 1 ;; esac
+	[ "${#key}" -ge 40 ] || { echo "magpie-client: key too short (${#key})" >&2; exit 1; }
+	code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -H "x-api-key: $key" "$GATEWAY/v1/models" || true)
+	[ "$code" = 200 ] || { echo "magpie-client: gateway $GATEWAY answered $code with this key; nothing changed" >&2; exit 1; }
+	mkdir -p "$(dirname "$GW_SETTINGS")"
+	MAGPIE_CLIENT_KEY="$key" py "$GW_SETTINGS" "$GATEWAY" <<'EOF'
+import json, os, sys, tempfile
+path, gw = sys.argv[1], sys.argv[2]
+key = os.environ.pop("MAGPIE_CLIENT_KEY", "")
+if not key.startswith("sk-magpie-key-") or len(key) < 40:
+    sys.exit(f"magpie-client: the key did not reach the writer (length {len(key)}); nothing changed")
+d = {"env": {"ANTHROPIC_BASE_URL": gw, "ANTHROPIC_CUSTOM_HEADERS": "x-api-key: " + key,
+             "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"}}
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(d, f, indent=2); f.write("\n")
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+back = json.load(open(path, encoding="utf-8"))["env"]
+assert back["ANTHROPIC_CUSTOM_HEADERS"] == "x-api-key: " + key and len(key) >= 40 and back["ANTHROPIC_BASE_URL"] == gw
+print(f"magpie-client: setup — {path} ({os.path.getsize(path)} bytes); start a gateway session with claude-gw")
+EOF
+	;;
+on)
+	key=$(cat)
+	case "$key" in sk-magpie-key-*) ;; *) echo "magpie-client: stdin must be an sk-magpie-key-… gateway key" >&2; exit 1 ;; esac
+	[ "${#key}" -ge 40 ] || { echo "magpie-client: key too short (${#key})" >&2; exit 1; }
+	code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -H "x-api-key: $key" "$GATEWAY/v1/models" || true)
+	[ "$code" = 200 ] || { echo "magpie-client: gateway $GATEWAY answered $code with this key; nothing changed" >&2; exit 1; }
+	mkdir -p "$(dirname "$SETTINGS")"
+	[ -f "$SETTINGS" ] && cp -p "$SETTINGS" "$SETTINGS.bak-magpie-$(date +%Y%m%d-%H%M%S)"
+	# the key goes in through the environment: the heredoc below is python's stdin, so a pipe into py would be lost
+	MAGPIE_CLIENT_KEY="$key" py "$SETTINGS" "$GATEWAY" <<'EOF'
+import json, os, sys, tempfile
+path, gw = sys.argv[1], sys.argv[2]
+key = os.environ.pop("MAGPIE_CLIENT_KEY", "")
+if not key.startswith("sk-magpie-key-") or len(key) < 40:
+    sys.exit(f"magpie-client: the key did not reach the writer (length {len(key)}); nothing changed")
+d = json.load(open(path, encoding="utf-8-sig")) if os.path.exists(path) else {}
+env = d.setdefault("env", {})
+for k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+    if k in env:
+        sys.exit(f"magpie-client: settings.json sets {k}; that signs Claude Code out of claude.ai. Remove it first.")
+env["ANTHROPIC_BASE_URL"] = gw
+env["ANTHROPIC_CUSTOM_HEADERS"] = "x-api-key: " + key
+env["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"   # the billing line changes every request and spoils non-Anthropic caches
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(d, f, ensure_ascii=False, indent=2); f.write("\n")
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+back = json.load(open(path, encoding="utf-8"))["env"]
+assert back["ANTHROPIC_CUSTOM_HEADERS"] == "x-api-key: " + key and len(key) >= 40 and back["ANTHROPIC_BASE_URL"] == gw
+print("magpie-client: on —", gw)
+EOF
+	# claude-native's override: empty values count as unset to Claude Code
+	printf '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "",\n    "ANTHROPIC_CUSTOM_HEADERS": ""\n  }\n}\n' >"$NATIVE"
+	;;
+off)
+	[ -f "$SETTINGS" ] || exit 0
+	cp -p "$SETTINGS" "$SETTINGS.bak-magpie-$(date +%Y%m%d-%H%M%S)"
+	py "$SETTINGS" $KEYS <<'EOF'
+import json, os, sys, tempfile
+path, keys = sys.argv[1], sys.argv[2:]
+d = json.load(open(path, encoding="utf-8-sig"))
+env = d.get("env", {})
+for k in keys: env.pop(k, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(d, f, ensure_ascii=False, indent=2); f.write("\n")
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+print("magpie-client: off — Claude Code talks to Anthropic directly")
+EOF
+	;;
+status)
+	py "$SETTINGS" <<'EOF'
+import json, os, sys
+p = sys.argv[1]
+env = json.load(open(p, encoding="utf-8-sig")).get("env", {}) if os.path.exists(p) else {}
+u = env.get("ANTHROPIC_BASE_URL")
+h = env.get("ANTHROPIC_CUSTOM_HEADERS", "")
+print("gateway:", u or "(none: Anthropic directly)")
+print("key:", ("sk-magpie-key-…" + h[-6:]) if "sk-magpie-key-" in h else "(none)")
+EOF
+	if [ -f "$GW_SETTINGS" ]; then echo "per process: $GW_SETTINGS ($(wc -c < "$GW_SETTINGS" | tr -d " ") bytes) for claude-gw"; else echo "per process: not set up"; fi
+	;;
+*) sed -n '2,8p' "$0"; exit 2 ;;
+esac
