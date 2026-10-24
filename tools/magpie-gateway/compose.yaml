@@ -1,0 +1,39 @@
+# magpie on llm-gateway (2026-10-24): one gateway for every machine's Claude Code.
+# Separate project from /opt/llm-gateway (the products' LiteLLM): its own compose,
+# its own volume, a memory cap so it can never starve LiteLLM.
+#
+#   gateway  :3425  published on every host address; reachable only from the tailnet:
+#                   the security group doesn't open 3425, and MAGPIE_ALLOW_IPS refuses
+#                   anything outside Tailscale's ranges before a key is even read.
+#                   Every caller needs a gateway key (one per machine).
+#   web UI   :3430  host loopback only: ssh -L 3430:127.0.0.1:3430 llm-gateway
+#
+# Image pinned by digest; upgrade with ./upgrade.sh <version>.
+name: magpie
+services:
+  magpie:
+    image: ${MAGPIE_IMAGE:?set in .env}
+    restart: unless-stopped
+    command: [web, --addr, "0.0.0.0:3430", --no-open]
+    ports:
+      - "3425:3425"
+      - "127.0.0.1:3430:3430"
+    environment:
+      MAGPIE_PUBLIC_URL: http://100.116.218.86:3425
+      MAGPIE_WEB_KEY: ${MAGPIE_WEB_KEY:?set in .env}
+      # Tailscale IPv4/IPv6, plus Docker's bridge for checks from the host itself
+      MAGPIE_ALLOW_IPS: 100.64.0.0/10,fd7a:115c:a1e0::/48,172.16.0.0/12
+      # no usage stats to usemagpie.ai; not DO_NOT_TRACK, which Claude Code also
+      # reads and which turns its feature flags off in the runs magpie starts
+      MAGPIE_NO_STATS: "1"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config:/config
+      # our own middleware (kiro-harness), added with: magpie plugin add /plugins/<file>
+      - ./plugins:/plugins:ro
+    mem_limit: 5g
+    memswap_limit: 5g
+    pids_limit: 4096
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }

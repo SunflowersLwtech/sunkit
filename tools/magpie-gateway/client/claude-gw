@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# claude-gw — one Claude Code session through the magpie gateway; plain `claude` stays on Anthropic.
+#
+#   claude-gw                                   Opus 5.5 through the gateway's claude-opus-5-5 group
+#   claude-gw --model zed/claude-sonnet-5-5     any model the gateway lists (GET /v1/models)
+#   claude-gw -p "…" --model grok/grok-4.7
+#
+# The gateway's address and this machine's key are in ~/.claude/magpie-settings.json, which
+# `magpie-client setup` writes. That file is passed with --settings, which outranks the global
+# settings.json, so this session is on the gateway whatever the global file says, and no other
+# session is. Claude Code keeps its claude.ai sign-in (the key rides in a header), so mesh channels
+# and claude.ai connectors work; Remote Control does not exist on a gateway.
+set -euo pipefail
+GW=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/magpie-settings.json
+[ -f "$GW" ] || { echo "claude-gw: no $GW; run: <gateway key> | magpie-client setup" >&2; exit 1; }
+args=(--settings "$GW")
+has_model=0
+for a in "$@"; do case "$a" in --model | --model=*) has_model=1 ;; esac; done
+[ "$has_model" = 1 ] || args+=(--model claude-opus-5-5)
+# what the shell's `claude` wrapper does: interactive sessions join the mesh channel.
+# --channels takes every word after it, so it goes last, as the wrapper puts it.
+tail_args=()
+if [ -f "${MESH_HOME:-$HOME/.claude-mesh}/config.json" ]; then
+	join=1
+	for a in "$@"; do
+		case "$a" in -p | --print | -h | --help | -v | --version | --channels | --channels=* | --dangerously-load-development-channels*) join=0 ;; esac
+	done
+	[ "$join" = 1 ] && tail_args+=(--channels plugin:mesh@sunkit)
+fi
+exec claude "${args[@]}" "$@" ${tail_args[@]+"${tail_args[@]}"}

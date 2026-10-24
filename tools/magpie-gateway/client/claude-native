@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# claude-native — one Claude Code session straight to Anthropic, not through magpie.
+# For what only exists against api.anthropic.com: Remote Control (/remote-control, --remote-control)
+# and ultrareview. The session runs on whichever Claude account this machine is signed in to.
+# Everything else (mesh, connectors, skills) is the same as a plain `claude`.
+set -euo pipefail
+NATIVE=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/native-settings.json
+[ -f "$NATIVE" ] || printf '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "",\n    "ANTHROPIC_CUSTOM_HEADERS": ""\n  }\n}\n' >"$NATIVE"
+args=(--settings "$NATIVE")
+# what the shell's `claude` wrapper does: interactive sessions join the mesh channel.
+# --channels takes every word after it, so it goes last, as the wrapper puts it.
+tail_args=()
+if [ -f "${MESH_HOME:-$HOME/.claude-mesh}/config.json" ]; then
+	join=1
+	for a in "$@"; do
+		case "$a" in -p | --print | -h | --help | -v | --version | --channels | --channels=* | --dangerously-load-development-channels*) join=0 ;; esac
+	done
+	[ "$join" = 1 ] && tail_args+=(--channels plugin:mesh@sunkit)
+fi
+exec claude "${args[@]}" "$@" ${tail_args[@]+"${tail_args[@]}"}
