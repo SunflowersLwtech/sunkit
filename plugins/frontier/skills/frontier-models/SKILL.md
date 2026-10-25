@@ -15,14 +15,14 @@ Routing groups (magpie `routing=order`, `stays=session`: one member per session 
 
 | id | chain |
 |---|---|
-| `claude-opus-5-5` (Opus row, claude-gw's default) | Kiro Opus 5.5 → `claude-sonnet-5-5` |
-| `claude-sonnet-5-5` | Zed Sonnet 5.5 → Kiro Sonnet 5.5 → `frontier` |
-| `claude-haiku-5-5` | Zed Haiku 5.5 → Kiro Haiku 5.5 → DeepSeek V4.1 Flash → GLM-5.3 Flash → Go Haiku |
+| `claude-opus-5-5` (Opus row, claude-gw's default) | Opus 5.5 on the three Claude Team seats → Kiro Opus 5.5 → `claude-sonnet-5-5` |
+| `claude-sonnet-5-5` | Sonnet 5.5 on the seats → Zed Sonnet 5.5 → Kiro Sonnet 5.5 → `frontier` |
+| `claude-haiku-5-5` | Haiku 5.5 on the seats → Zed Haiku 5.5 → Kiro Haiku 5.5 → DeepSeek V4.1 Flash → GLM-5.3 Flash → Go Haiku |
 | `claude-fable-5-1` | `claude-opus-5-5` (no Fable on the gateway) |
 | `frontier` | GPT-6.1 Sol (Zed) → Grok 4.7 → GPT-6 Sol → GPT-6.1 Sol (Trae) → Kimi K3.1 Pro → GLM-5.3 → DeepSeek V4 Pro → Qwen3.8 Max → MiniMax M3 → Doubao Seed 2.1 Pro → the OpenCode Go copies |
 | `auto/<model>` (magpie finds these) | one model on whichever subscription renews soonest and has quota, e.g. `auto/gpt-6.1-sol`, `auto/glm-5.3`, `auto/kimi-k3.1-pro`, `auto/deepseek-v4-pro`, `auto/qwen3.8-max` |
 
-Subscriptions behind it: Kiro Student (1000 credits a month), Zed Student, Grok (SuperGrok), WorkBuddy free, Trae CN and Trae Global, OpenCode Go, Copilot Student (only `copilot/auto`; named models are refused on the Student plan). The Claude subscription bridge is in no group and serves no model: it retells a whole conversation as text when it takes one over.
+Subscriptions behind it: Kiro Student (1000 credits a month), Zed Student, Grok (SuperGrok), WorkBuddy free, Trae CN and Trae Global, OpenCode Go, Copilot Student (only `copilot/auto`; named models are refused on the Student plan). The Claude seats are served by magpie's subscription bridge (a Claude Code process on the server per conversation), each capped at 95% of its five hours. A session stays on one seat; when that seat is used up it moves to the next seat, and the move retells the whole conversation to a new process once, which costs a full cache write (up to 835K tokens for a long session; on the first night one seat's five hours went in under 40 minutes this way). Never point an already-running session at the gateway, and prefer a new claude-gw session to resuming a long one.
 
 Known gaps: Gemini through the gateway fails with Claude Code's tools (the Zed plugin sends `AUTO` where Zed wants `auto`); use agy for Gemini. A non-Claude id makes Claude Code assume a 200K window.
 
