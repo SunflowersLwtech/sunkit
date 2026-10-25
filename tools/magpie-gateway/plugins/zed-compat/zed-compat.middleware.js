@@ -18,7 +18,31 @@
 //   400 Zed: failed to parse Anthropic request: unknown variant `tool_addition`
 // Each added tool's definition goes into the request's `tools` instead, and the block is dropped.
 //
+// Zed's ToolResultContent also refuses shapes a long Claude Code history is full of
+// (measured 2026-10-25 on the N150 secretary's 280K-token session: 102 string, 2 tool_reference,
+// 2 image results):
+//   400 Zed: failed to parse Anthropic request: data did not match any variant of untagged
+//   enum ToolResultContent
+// A result's content becomes text blocks only: strings are wrapped, tool_reference and other
+// non-text blocks become their JSON, images become a placeholder (Zed would need vision anyway).
+//
 //   {"accounts": ["zed"], "off": false}
+
+const asText = (x) => ({ type: "text", text: typeof x === "string" ? x : JSON.stringify(x) })
+
+function toolResultContent(c) {
+  if (c === undefined) return undefined
+  if (typeof c === "string") return [{ type: "text", text: c }]
+  if (!Array.isArray(c) || c.length === 0) return undefined
+  if (c.every((b) => b && b.type === "text" && typeof b.text === "string")) return undefined
+  const out = []
+  for (const b of c) {
+    if (b && b.type === "text" && typeof b.text === "string") out.push(b)
+    else if (b && b.type === "image") out.push({ type: "text", text: "[image omitted: zed tool_result]" })
+    else out.push(asText(b))
+  }
+  return out
+}
 
 export function onProvider(body, ctx) {
   const o = ctx.options || {}
@@ -50,6 +74,16 @@ export function onProvider(body, ctx) {
       if (m && typeof m.content === "string") {
         m.content = [{ type: "text", text: m.content }]
         changed = true
+      }
+      if (m && Array.isArray(m.content)) {
+        for (const b of m.content) {
+          if (!b || b.type !== "tool_result") continue
+          const nc = toolResultContent(b.content)
+          if (nc !== undefined) {
+            b.content = nc
+            changed = true
+          }
+        }
       }
     }
   }
