@@ -1,0 +1,26 @@
+{
+  "capture": "dshow",
+  "ffmpeg_exe": "/mnt/c/path/to/ffmpeg/bin/ffmpeg.exe",
+  "video_prefer": ["OsmoAction5pro", "Osmo"],
+  "audio_prefer": ["OsmoAction5pro", "Microphone Array"],
+  "allowed_cidrs": ["100.64.0.0/10", "fd7a:115c:a1e0::/48"],
+  "asr_dir": "/home/you/room-companion/models/sense-voice",
+  "vad_model": "/home/you/room-companion/models/silero_vad.onnx",
+  "llama": {
+    "exe": "/mnt/c/Users/you/room-companion/llama/bin/llama-server.exe",
+    "model": "C:\\Users\\you\\room-companion\\models\\Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    "mmproj": "C:\\Users\\you\\room-companion\\models\\mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+    "port": 8791,
+    "ctx": 4096,
+    "key_file_win": "C:\\Users\\you\\room-companion\\llama\\api.key",
+    "key_file": "/mnt/c/Users/you/room-companion/llama/api.key",
+    "extra_args": ["--load-mode", "none"]
+  },
+  "tts": {
+    "model_dir": "/home/you/room-companion/models/tts/vits-melo-tts-zh_en",
+    "win_dir": "C:\\Users\\you\\room-companion\\tts",
+    "win_dir_wsl": "/mnt/c/Users/you/room-companion/tts"
+  },
+  "policy": {"quiet_hours": ["23:00", "08:00"], "summary_at": "08:30", "max_per_day": 6, "mode": "balanced"},
+  "notifier": {"type": "log"}
+}

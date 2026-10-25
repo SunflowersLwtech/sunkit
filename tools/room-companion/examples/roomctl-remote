@@ -1,0 +1,14 @@
+#!/bin/sh
+# Control room-companion over the network from a chat bot or another machine.
+#   roomctl "关视频" | roomctl "隐私模式" | roomctl "开AI" | roomctl "安静模式" | roomctl "不用" | roomctl status
+# The key is read from auth.hdr next to this script (mode 600), never passed on the command line.
+set -eu
+D=$(cd "$(dirname "$0")" && pwd)
+URL=${ROOM_COMPANION_URL:?set ROOM_COMPANION_URL, e.g. http://<pc-tailnet-ip>:8790}
+if [ $# -eq 0 ] || [ "$1" = "status" ] || [ "$1" = "状态" ]; then
+  curl -s -m 20 -H @"$D/auth.hdr" "$URL/api/status" | python3 -c 'import json,sys; s=json.load(sys.stdin); p=s.get("policy") or {}; print(s["summary"]); print("AI 看到的：" + (p.get("scene_text") or "还不知道") + "；今天提醒 %s/%s 条" % (p.get("delivered_today"), p.get("max_per_day")))'
+  exit 0
+fi
+body=$(printf '%s' "$*" | python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read(), "source": "远程"}, ensure_ascii=False))')
+printf '%s' "$body" | curl -s -m 40 -H @"$D/auth.hdr" -H 'X-Room-AI: 1' -H 'Content-Type: application/json' --data-binary @- "$URL/api/command" \
+  | python3 -c 'import json,sys; r=json.load(sys.stdin); print(("OK " if r.get("ok") else "没成功 ") + r.get("message", ""))'
