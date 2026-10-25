@@ -54,3 +54,37 @@ test("tool_addition blocks become tools in the request", () => {
   assert.deepEqual(b.messages.map((m) => m.role), ["user", "user"])
   assert.deepEqual(b.messages[1].content, [{ type: "text", text: "go" }])
 })
+
+// the N150 secretary's history, measured 2026-10-25: Zed's ToolResultContent refused all of these
+test("tool_result content becomes text blocks only", () => {
+  const b = onProvider({
+    model: "claude-sonnet-5-5",
+    messages: [
+      { role: "user", content: [
+        { type: "tool_result", tool_use_id: "t1", content: "md-panel-2026-10-22.md\nmobile-view…" },
+        { type: "tool_result", tool_use_id: "t2", content: "" },
+        { type: "tool_result", tool_use_id: "t3", content: [{ type: "text", text: "already text" }] },
+        { type: "tool_result", tool_use_id: "t4", content: [
+          { type: "tool_reference", tool_name: "mcp__x__search" }, { type: "text", text: "ok" },
+        ] },
+        { type: "tool_result", tool_use_id: "t5", content: [{ type: "image", source: { type: "base64", data: "iVBOR…" } }] },
+      ] },
+    ],
+  }, zed)
+  const rs = b.messages[0].content
+  assert.deepEqual(rs[0].content, [{ type: "text", text: "md-panel-2026-10-22.md\nmobile-view…" }])
+  assert.deepEqual(rs[1].content, [{ type: "text", text: "" }])
+  assert.deepEqual(rs[2].content, [{ type: "text", text: "already text" }])
+  assert.deepEqual(rs[3].content, [
+    { type: "text", text: JSON.stringify({ type: "tool_reference", tool_name: "mcp__x__search" }) },
+    { type: "text", text: "ok" },
+  ])
+  assert.deepEqual(rs[4].content, [{ type: "text", text: "[image omitted: zed tool_result]" }])
+})
+
+test("all-text tool_result blocks are left alone", () => {
+  const body = { messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [{ type: "text", text: "x" }] }] }] }
+  const before = structuredClone(body)
+  assert.equal(onProvider(body, zed), undefined)
+  assert.deepEqual(body, before)
+})
