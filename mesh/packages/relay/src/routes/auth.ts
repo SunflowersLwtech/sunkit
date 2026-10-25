@@ -49,7 +49,7 @@ export function authRoute(deps: Deps) {
     `).get(codeHash) as PairRow | undefined
     if (!row) return c.json({ error: 'invalid_code' }, 400)
     if (row.consumed_at !== null) return c.json({ error: 'code_consumed' }, 400)
-    if (new Date(row.expires_at).getTime() < Date.now()) return c.json({ error: 'code_expired' }, 400)
+    if (new Date(row.expires_at).getTime() < deps.now().getTime()) return c.json({ error: 'code_expired' }, 400)
 
     const raw = generateRawToken()
     const tokenId = `tk_${ulid()}`
