@@ -555,14 +555,30 @@ class Bridge:
         poller = asyncio.create_task(self.poll_forever())
         backoff = 1.0
         try:
+            refused = None  # a token HipiMind refused (4401); waiting for `pair` to write a new one
+            waiting_logged = False
             while not self.stopped.is_set():
                 token = read_secret(self.cfg["token_file"])
-                if not token:
-                    self.stop_reason = "no device token; run the pair command first"
-                    log.error(self.stop_reason)
-                    break
+                if not token or token == refused:
+                    if not self.cfg.get("wait_for_token"):
+                        self.stop_reason = "no device token; run the pair command first"
+                        log.error(self.stop_reason)
+                        break
+                    if not waiting_logged:
+                        log.warning("waiting for a device token (run the pair command; no restart needed)")
+                        waiting_logged = True
+                    try:
+                        await asyncio.wait_for(self.stopped.wait(), self.cfg.get("token_poll_seconds", 30))
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+                waiting_logged = False
                 started = self.clock()
                 code = await self.session(token)
+                if code == 4401 and self.cfg.get("wait_for_token"):
+                    refused = token
+                    log.error("HipiMind refused the device token (%s)", PERMANENT_CLOSE[4401])
+                    continue
                 if code in PERMANENT_CLOSE:
                     self.stop_reason = f"{code}: {PERMANENT_CLOSE[code]}"
                     log.error("HipiMind closed the connection for good (%s)", self.stop_reason)
@@ -849,7 +865,8 @@ class InProcess:
     """The connector running inside room-companion, on its own thread and event loop."""
 
     def __init__(self, app, hcfg: dict):
-        self.bridge = Bridge(load_config_dict(dict(hcfg)), device=AppDevice(app))
+        # inside the app, a missing or revoked token is waited out: `pair` writes a new one, no restart
+        self.bridge = Bridge(load_config_dict({"wait_for_token": True, **hcfg}), device=AppDevice(app))
         self.thread = threading.Thread(target=self._run, name="hipimind", daemon=True)
         self.reason = None
 

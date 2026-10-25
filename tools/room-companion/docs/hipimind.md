@@ -46,7 +46,9 @@ pip install 'room-companion[hipimind]'          # adds websockets (and pillow, f
    token file, exchanges the code for a device token, and writes the token to `token_file` with
    mode 600. The token is never printed. Pair again (with a new code) if you remove the device on
    the website or lose the file.
-3. Restart room-companion. The website shows the device online within a few seconds.
+3. If room-companion is already running with a `hipimind` section, it notices the new token
+   within 30 seconds and connects; no restart is needed. Otherwise add the section and restart it.
+   The website shows the device online within a few seconds of connecting.
 
 ## 3. Configure
 
@@ -237,11 +239,11 @@ events and live video; model choice and Test connection need the in-process conn
 
 | log line / website | what it means |
 |---|---|
-| `stopped: 4401: the device token is unknown or revoked` | the device was removed on the website, or the token file is wrong: pair again |
+| `HipiMind refused the device token` (in the app) / `stopped: 4401 …` (sidecar) | the device was removed on the website, or the token file is wrong: pair again. Inside the app the connector waits for the new token and reconnects by itself; the sidecar exits |
 | `4403 … Room is not enabled for this account` | HipiMind Room is not open to your account yet |
 | `4409 … another connection for this device replaced this one` | two copies run with the same token; stop one |
 | `reconnecting in N s` | normal after a network drop or a HipiMind restart; it backs off up to 60 s |
-| `no device token; run the pair command first` | `token_file` is missing or empty |
+| `waiting for a device token` (in the app) / `no device token; run the pair command first` (sidecar) | `token_file` is missing or empty: run `pair` |
 | website: device offline | the app is not running, the network is down, or the token was revoked |
 | website: live view stays black | video is off, the camera is missing, or the frames are larger than the limit (lower `live.max_width`) |
 | a slot shows `error` | press **Test connection** for the reason |

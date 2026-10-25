@@ -503,6 +503,43 @@ class InProcessTest(unittest.IsolatedAsyncioTestCase):
                          "frames kept coming with the video switch off")
 
 
+@unittest.skipIf(websockets is None, "websockets not installed")
+class TokenWaitTest(unittest.IsolatedAsyncioTestCase):
+    async def test_in_the_app_a_missing_or_revoked_token_is_waited_out_until_pair_writes_a_new_one(self):
+        d = tempfile.mkdtemp()
+        token_file = os.path.join(d, "token")
+        local = FakeLocal()
+        hub = FakeHipiMind(close_with=4401)
+        await hub.start()
+        cfg = hm.load_config_dict({"ws_url": hub.url, "token_file": token_file, "local_api": local.url,
+                                   "poll_seconds": 0.1, "wait_for_token": True, "token_poll_seconds": 0.2})
+        bridge = hm.Bridge(cfg)
+        task = asyncio.create_task(bridge.run_forever())
+        try:
+            await asyncio.sleep(0.6)
+            self.assertEqual(hub.connections, 0, "connected without a token")
+            self.assertFalse(task.done(), "gave up instead of waiting for a token")
+            hm.write_secret(token_file, TOKEN)            # pair
+            for _ in range(40):
+                if hub.connections:
+                    break
+                await asyncio.sleep(0.1)
+            self.assertEqual(hub.connections, 1)
+            await asyncio.sleep(0.8)                       # refused with 4401: the same token is not retried
+            self.assertEqual(hub.connections, 1, "the refused token was tried again")
+            self.assertFalse(task.done())
+            hub.close_with = None
+            hm.write_secret(token_file, "hmr_dev_" + "N" * 43)   # pair again
+            await hub.next(lambda m: isinstance(m, dict) and m.get("type") == "hello"
+                           and hub.connections == 2, timeout=5)
+            self.assertEqual(hub.auth_headers[-1], "Bearer hmr_dev_" + "N" * 43)
+        finally:
+            bridge.stop()
+            await asyncio.wait_for(task, 5)
+            await hub.stop()
+            local.close()
+
+
 class PairTest(unittest.TestCase):
     def test_pair_saves_the_token_readable_only_by_this_user_and_never_prints_it(self):
         token = "hmr_dev_" + "P" * 43
