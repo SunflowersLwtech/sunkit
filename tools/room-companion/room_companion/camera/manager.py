@@ -313,7 +313,7 @@ class CameraManager:
         v = self.video
         vstate = getattr(v, "state", "off")
         if vstate == "running":
-            if self.gave_up or self.fallback:
+            if self.gave_up:  # came back after recovery had given up (e.g. someone tapped "Webcam")
                 self.events.add("camera_back", control=self.control)
             self.gave_up, self.backoff, self.next_try_at = False, 60.0, 0.0
             return

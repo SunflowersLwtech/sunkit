@@ -26,5 +26,11 @@
     "missing_notes": {"Your Bluetooth Speaker": "音箱没连上（打开音箱，它会自己连上这台电脑）"}
   },
   "policy": {"quiet_hours": ["23:00", "08:00"], "summary_at": "08:30", "max_per_day": 6, "mode": "balanced"},
-  "notifier": {"type": "log"}
+  "notifier": {"type": "log"},
+  "camera": {"driver": "auto", "allow_unofficial": false, "ble": {"device": null},
+             "recover": {"auto_webcam": true, "wake": true}},
+  "camera_host": {
+    "python": "/mnt/c/Users/you/room-companion/blevenv/Scripts/python.exe",
+    "helper_dir": "/mnt/c/Users/you/room-companion/ble"
+  }
 }

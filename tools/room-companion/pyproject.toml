@@ -15,6 +15,8 @@ motion = ["pillow"]
 all = ["sherpa-onnx>=1.13", "numpy", "pillow"]
 # the HipiMind connector (websockets) and scaling live frames (pillow)
 hipimind = ["websockets>=13", "pillow"]
+# Bluetooth camera drivers, wherever the Bluetooth adapter is (on Windows: in a Windows venv, not in WSL)
+ble = ["bleak>=1.1"]
 
 [project.scripts]
 room-companion = "room_companion.__main__:main"
@@ -25,7 +27,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["room_companion", "room_companion.notifiers"]
+packages = ["room_companion", "room_companion.notifiers", "room_companion.camera"]
 
 [tool.setuptools.package-data]
 room_companion = ["winplay.ps1"]

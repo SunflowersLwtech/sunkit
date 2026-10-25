@@ -127,12 +127,78 @@ the start of a sentence also count, because recognizers often mishear the first 
 
 Any UVC webcam works. Tested with a DJI Osmo Action 5 Pro in its official USB webcam mode (it
 enumerates as `05c6:8004`, MJPEG/H.264 up to 1920x1080 at 30 fps, with a USB audio interface; a DJI
-Mic Mini paired to the camera comes through that interface). The camera has to be switched into
-webcam mode on its own screen, and again after it loses power; when video is on but the camera has
-been missing for 3 minutes, a notification asks for that. Only the official webcam mode is used
-here. For remote control of the camera itself, DJI publishes an official Bluetooth protocol demo
-([dji-sdk/Osmo-GPS-Controller-Demo](https://github.com/dji-sdk/Osmo-GPS-Controller-Demo)); it does
-not offer webcam or streaming control, so it is not needed for this.
+Mic Mini paired to the camera comes through that interface).
+
+The weak spot of that camera as an always-on webcam: after it loses power or restarts, it waits for
+someone to tap "Webcam" on its screen. Camera drivers fill that gap. Video always comes over USB;
+the Bluetooth drivers control the camera and bring it back into webcam mode by themselves.
+
+| Driver | What it does | Needs | Official? |
+|---|---|---|---|
+| `uvc` | Video and sound from the camera's USB webcam mode. Nothing else | A USB cable | Yes (DJI's webcam mode) |
+| `dji-ble-official` | No video. Controls the camera: wake/sleep, switch modes (including back to webcam), stop recording, read battery and temperature | Bluetooth on this computer; one tap on the camera to allow it the first time | Yes: DJI's published remote protocol |
+| `dji-duml` | No video. DJI's internal protocol as the community decoded it: switch the camera back to webcam mode, read the battery | Bluetooth; one tap on the camera the first time | **No.** Not supported by DJI; a firmware update can break it |
+| `auto` (default) | Video over USB. When the webcam has been missing for 20 s with video on: the official protocol tries first; the community protocol tries next, only if you allowed it | — | — |
+
+- **The community protocol only takes part when the user turns it on** (`allow_unofficial`). Choosing
+  `dji-duml` without it is refused (`unofficial_not_allowed`). Settings pages show one line next to
+  it: it is reverse-engineered, not supported by DJI, and may stop working after a firmware update.
+  Nothing is blocked beyond that.
+- A driver that fails hands over to the next one. The status says which one is in use and why an
+  earlier one was skipped (`control`, `fallback`, each driver's `last_error`), and the event log
+  keeps every step (`camera_step`, `camera_recover`). If every allowed driver fails, the "please tap
+  Webcam" notification says what was tried, and retries back off from 1 to 15 minutes.
+- The first Bluetooth connection has to be allowed on the camera's screen (once per protocol). The
+  `pair` action, or "配对蓝牙" on the web page, starts it and waits 30 s for the tap. Automatic
+  recovery never waits for a person: an unpaired camera fails fast with a message that says so.
+- A sleeping camera stops advertising; the official wake-up broadcast reaches it if it has slept for
+  less than 30 minutes (Windows only for now). A camera that is switched off cannot be woken over
+  Bluetooth.
+- Control and video only. The drivers never update or modify firmware, never sign in to a DJI
+  account and never touch activation (a camera has to be activated once with DJI Mimo, as DJI
+  requires). Recording to the camera's card is not offered (only stopping it), because the privacy
+  switches promise that no video is stored.
+
+**Settings.** `camera` in `config.json` sets the default; a choice made on a settings page goes to
+`state/camera.json` (mode 600) and wins over the file:
+
+```json
+"camera": {"driver": "auto", "allow_unofficial": false, "ble": {"device": null},
+           "recover": {"auto_webcam": true, "wake": true}},
+"camera_host": {"python": "/mnt/c/Users/you/room-companion/blevenv/Scripts/python.exe",
+                "helper_dir": "/mnt/c/Users/you/room-companion/ble"}
+```
+
+`camera_host` is per machine. On Linux it can be left out (the helper runs with this Python and needs
+`bleak`). In WSL, Bluetooth stays with Windows: create a venv with Windows Python, `pip install bleak`,
+and the app copies `ble_helper.py`, `rsdk.py` and `duml.py` into `helper_dir` and starts the helper
+from there, like the Windows ffmpeg. The camera's Bluetooth address and the pairing identifiers stay
+in `state/camera_ble.json` (mode 600); they are never shown in the status.
+
+**API.** `GET /api/camera` (status, the driver list with plain-language text, the current config),
+`POST /api/camera` (a config object), `POST /api/camera/action {"action": "pair" | "recover" | "wake"
+| "sleep" | "stop_recording"}`. For a remote settings page the app exposes `camera_drivers()`,
+`camera_status()`, `set_camera_config(cfg) -> (ok, error)` and `camera_action(name) -> (ok, detail)`;
+the status object holds `driver`, `active`, `control`, `fallback`, `state`, `name`, `detail` and
+`drivers.<id>.available/last_error`, never an address.
+
+**Where the protocols come from** (licenses and activity checked on 2026-10-25 with `gh api`):
+
+| Project | License | Action 5 Pro | Used here |
+|---|---|---|---|
+| [dji-sdk/Osmo-GPS-Controller-Demo](https://github.com/dji-sdk/Osmo-GPS-Controller-Demo) | Protocol documents: DJI EULA; demo code: MIT | Listed by DJI (device id `0xFF44`) | `rsdk.py` is written from the protocol description; no text or code copied |
+| [RB14/dji-vcam](https://github.com/RB14/dji-vcam) | MIT | Developed and tested on it (Windows) | DUML frame codec adapted (see THIRD_PARTY_NOTICES.md); command bytes from its protocol notes |
+| [KonradIT/osmosis](https://github.com/KonradIT/osmosis) | MIT | Media offload verified | Pairing sequence, via dji-vcam's notes |
+| [eerimoq/moblin](https://github.com/eerimoq/moblin) | MIT | Has Action 5 Pro specific code | First open implementation of the camera's Bluetooth commands, via dji-vcam's notes |
+| [datagutt/node-osmo](https://github.com/datagutt/node-osmo) | MIT | "Action 3/4/5" | Read for reference only |
+| [xaionaro-go/djictl](https://github.com/xaionaro-go/djictl) | CC0-1.0 | Not stated | Read for reference only |
+| [rhoenschrat/DJI-Remote](https://github.com/rhoenschrat/DJI-Remote) | MIT | Listed as supported | Read for reference only (ESP32 remote on the official protocol) |
+| [luisreysan/osmocam](https://github.com/luisreysan/osmocam) | MIT | "Should work, not tried yet" | Not used (Wi-Fi live view; this tool keeps video on USB) |
+
+Not used: [o-gs/dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools) (GPL-3.0, firmware
+tooling), [AlliotTech/action-control](https://github.com/AlliotTech/action-control) (needs a camera
+with root access), and remotes without a license file.
+Thanks to all of them, and to DJI for publishing its remote protocol.
 
 ## Running it
 
@@ -248,8 +314,9 @@ From `tools/room-companion`:
 python -m unittest discover -s tests -t .
 ```
 
-84 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
-device and make no network request. To be sure, run them with the network cut. Loopback has to be up,
+They use fake ffmpeg/recorder scripts, a fake model server, a fake notifier and a fake DJI camera
+behind the real Bluetooth helper process (`tests/fake_dji.py`); they open no device, use no radio and
+make no network request. To be sure, run them with the network cut. Loopback has to be up,
 because the web tests talk to a server on 127.0.0.1:
 
 ```
