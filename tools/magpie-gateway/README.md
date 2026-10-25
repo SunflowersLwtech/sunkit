@@ -40,6 +40,7 @@ $M claude-code install --yes && $M claude-code runs 18
 for p in kiro workbuddy trae zed grok; do $M plugin add @magpie-community/opencode-$p-auth; done
 $M plugin add /plugins/kiro-harness.middleware.js
 $M plugin add /plugins/zed-compat.middleware.js
+$M plugin add /plugins/long-off-seats.middleware.js
 ```
 
 ## Routing groups
@@ -52,6 +53,9 @@ The group ids are Claude's own model names. A request for `claude-opus-5-5` reac
 | `claude-sonnet-5-5` | `claude/claude-sonnet-5-5` → `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
 | `claude-haiku-5-5` | `claude/claude-haiku-5-5` → `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
 | `claude-fable-5-1` | `group/claude-opus-5-5` |
+| `long-opus` | `kiro/claude-opus-5.5` → `group/long-sonnet` |
+| `long-sonnet` | `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
+| `long-haiku` | `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
 | `frontier` | `zed/gpt-6.1-sol` → `grok/grok-4.7` → `zed/gpt-6-sol` → `trae-global/gpt-6.1-sol` → Kimi K3.1 Pro, GLM-5.3, DeepSeek V4 Pro (WorkBuddy, Trae CN) → `trae-cn/qwen3.8-max` → `workbuddy/minimax-m3` → `trae-cn/Doubao-Seed-2.1-Pro` → the OpenCode Go copies |
 
 Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto`, and the `claude` provider (the subscription bridge) exposes only Opus, Sonnet and Haiku 5.5 (`magpie provider models claude claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5`), never Fable.
@@ -60,7 +64,9 @@ Within `claude/*`, magpie picks the seat by its Smart routing (the seat with roo
 
 Measured on the first night (2026-10-25 21:00 to 10-26 01:12): about ten long sessions that had been running on the non-Claude members moved onto a seat as soon as one had room, and each move retold the conversation (up to 1481 messages, 835K tokens written to the cache in one request). weiliu@ went from 0 to used up in 39 minutes (283 gateway requests, 3.41M cache-write tokens), gmail in 34 minutes after six sessions moved onto it within ten seconds (3.25M). New sessions that start on a seat and stay there don't pay this: a five-turn session stayed on one seat with cache writes of 140 to 1,368 tokens a turn.
 
-Rollback: `magpie group set claude-opus-5-5 models=kiro/claude-opus-5.5,group/claude-sonnet-5-5`, the same for the Sonnet and Haiku groups without their `claude/*` member, then `magpie provider models claude none`.
+So since 2026-10-26 the seats take short conversations only. `plugins/long-off-seats` sends a request for one of the Claude groups that it estimates at 200K tokens or more to that group's copy without the seats (`long-opus`, `long-sonnet`, `long-haiku`, the chains the Claude groups had before the seats); a shorter one keeps the seats first. A new Claude Code session starts at about 55K-66K, and every costly move that night was 239K or more. A conversation that grows past 200K on a seat leaves it for the copy, and when every member of the copy is out of its allowance it waits rather than coming back to a seat. As a second fence the three seat models are told to take 200K (`magpie model context claude/claude-opus-5-5 200k`, the same for Sonnet and Haiku), so magpie leaves them out of a longer request; that alone isn't enough, since magpie asks a member it left out as too small after all when every member with room is out of its allowance (a 406K-token request reached a seat that way in testing).
+
+Rollback: `magpie group set claude-opus-5-5 models=kiro/claude-opus-5.5,group/claude-sonnet-5-5`, the same for the Sonnet and Haiku groups without their `claude/*` member, then `magpie provider models claude none`. For the length fence alone: `magpie plugin off /plugins/long-off-seats.middleware.js` and `magpie model context claude/<model> --reset`.
 
 Checked on 2026-10-25 with a three-turn Claude Code session through the gateway: Read and Bash on the client machine, recalling the previous turn with no tool, then a subagent. The hostname and a nonce that exists only in a local file came back right, and the transcript has structured `tool_use` and no `<invoke>` text. `zed/claude-sonnet-5-5` passes with `zed-compat`. A Copilot student account answers only `copilot/auto`; any named model gets 400 "The requested model is not supported".
 
@@ -85,4 +91,5 @@ vk run -r "K=个人/magpie 网关 (llm-gateway)/MAGPIE_KEY_<MACHINE>" -- sh -c '
 Each one changes only the requests sent to its own provider.
 
 - `plugins/kiro-harness`: rewrites Claude Code's identity line into `<harness_instructions>`, because Kiro's own prompt already names the model Kiro. It also drops the billing line, which changes every request and spoils Kiro's prompt cache. Tests: `node --test plugins/kiro-harness/kiro-harness.test.mjs`.
+- `plugins/long-off-seats` (onRequest, before routing): a request for `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5` or `claude-haiku-5-5` (bare, `group/…` or `[1m]`) estimated at `threshold` tokens or more (200000) goes to `group/long-opus`, `group/long-sonnet` or `group/long-haiku`; a model named with its provider is left as asked. The estimate walks every string in the body, ASCII at 3.5 characters a token, any other character a token, an image 1,600, and stops at the threshold; on two captured Claude Code requests it gave 62K and 79K where the bridge counted about 66K-71K, in about a millisecond. Tests: `node --test plugins/long-off-seats/long-off-seats.test.mjs`.
 - `plugins/zed-compat`: drops `context_management` (Zed rejects `clear_thinking_20251015`), wraps a plain-string message into a text block, and moves the tools of `tool_addition` blocks (Claude Code loading deferred tools mid-conversation, sent when it knows the model id, as it does for the `claude-*` groups) into the request's `tools`. Tests: `node --test plugins/zed-compat/zed-compat.test.mjs`.
