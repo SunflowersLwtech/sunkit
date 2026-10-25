@@ -18,7 +18,7 @@ claude-gw -p "…" --model grok/grok-4.7
 
 **Why not the global default** (2026-10-24 incident): magpie answers a Claude subscription with a Claude Code process on the server, which shares the conversation only through a run of its own. Three things send a turn to a run that has not seen the conversation: a session that was already running before the switch, a move to another seat when one hits its limit, and a run evicted for idling or by a gateway restart. Each time, magpie tells the whole conversation to a new run as one block of text ("a new Claude Code is told the whole conversation: 1422 messages"). The model then writes tool calls as plain text, reads the server's container as its own environment, and loses the session's structure. Each retelling also writes the whole history to the cache again, up to about 920K tokens for one turn. A brand-new short session works; so does `claude -p`.
 
-So the routing groups below contain stateless providers only. The Claude seats stay signed in for explicit `claude/claude-opus-5-5` one-shot calls.
+So keep interactive sessions that are already running off the gateway. Since the evening of 2026-10-25, by the owner's decision, the Opus, Sonnet and Haiku groups try the three Claude Team seats first (`claude/claude-opus-5-5` and so on). `stays=session` keeps a conversation on the seat that first answered it, so a gateway session is retold only when its seat reaches its cap and it moves to the next seat, once per move. Each seat is capped at 95% of its windows (`magpie provider account-cap claude "<email> · DuoCode" 95`), the threshold seat-guard and the dispatcher use, so the gateway leaves the last 5% to sessions signed in to that seat directly.
 
 ## Server
 
@@ -48,13 +48,19 @@ The group ids are Claude's own model names. A request for `claude-opus-5-5` reac
 
 | group | members, in order |
 |---|---|
-| `claude-opus-5-5` | `kiro/claude-opus-5.5` → `group/claude-sonnet-5-5` |
-| `claude-sonnet-5-5` | `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
-| `claude-haiku-5-5` | `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
+| `claude-opus-5-5` | `claude/claude-opus-5-5` (the three seats) → `kiro/claude-opus-5.5` → `group/claude-sonnet-5-5` |
+| `claude-sonnet-5-5` | `claude/claude-sonnet-5-5` → `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
+| `claude-haiku-5-5` | `claude/claude-haiku-5-5` → `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
 | `claude-fable-5-1` | `group/claude-opus-5-5` |
 | `frontier` | `zed/gpt-6.1-sol` → `grok/grok-4.7` → `zed/gpt-6-sol` → `trae-global/gpt-6.1-sol` → Kimi K3.1 Pro, GLM-5.3, DeepSeek V4 Pro (WorkBuddy, Trae CN) → `trae-cn/qwen3.8-max` → `workbuddy/minimax-m3` → `trae-cn/Doubao-Seed-2.1-Pro` → the OpenCode Go copies |
 
-Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto` and the `claude` provider (the subscription bridge) exposes no model, so neither appears in a found `auto/<model>` group either.
+Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto`, and the `claude` provider (the subscription bridge) exposes only Opus, Sonnet and Haiku 5.5 (`magpie provider models claude claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5`), never Fable.
+
+Within `claude/*`, magpie picks the seat by its Smart routing (the seat with room that renews soonest). A 429 "usage limit reached", or a seat's reading at its cap, rests that seat and the same request goes to the next seat at once; with all three resting the group moves on to its next member. Readings of the two seats Claude Code isn't signed in to come only from the answers they give, so they can be hours old until a request lands there. `X-Magpie-Account: <email> · DuoCode` pins a request to one seat for a test.
+
+Measured on the first night (2026-10-25 21:00 to 10-26 01:12): about ten long sessions that had been running on the non-Claude members moved onto a seat as soon as one had room, and each move retold the conversation (up to 1481 messages, 835K tokens written to the cache in one request). weiliu@ went from 0 to used up in 39 minutes (283 gateway requests, 3.41M cache-write tokens), gmail in 34 minutes after six sessions moved onto it within ten seconds (3.25M). New sessions that start on a seat and stay there don't pay this: a five-turn session stayed on one seat with cache writes of 140 to 1,368 tokens a turn.
+
+Rollback: `magpie group set claude-opus-5-5 models=kiro/claude-opus-5.5,group/claude-sonnet-5-5`, the same for the Sonnet and Haiku groups without their `claude/*` member, then `magpie provider models claude none`.
 
 Checked on 2026-10-25 with a three-turn Claude Code session through the gateway: Read and Bash on the client machine, recalling the previous turn with no tool, then a subagent. The hostname and a nonce that exists only in a local file came back right, and the transcript has structured `tool_use` and no `<invoke>` text. `zed/claude-sonnet-5-5` passes with `zed-compat`. A Copilot student account answers only `copilot/auto`; any named model gets 400 "The requested model is not supported".
 
