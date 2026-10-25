@@ -399,11 +399,33 @@ class InProcessTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_hello_offers_models_and_reports_all_three_slots(self):
         self.assertEqual(self.hello["device"]["capabilities"],
-                         ["video", "audio", "ai", "live", "reminder_config", "model_config", "model_test", "announce"])
+                         ["video", "audio", "ai", "live", "reminder_config", "model_config", "model_test",
+                          "camera_config", "camera_action", "announce"])
+        self.assertEqual([d["id"] for d in self.hello["device"]["camera_drivers"]],
+                         ["auto", "uvc", "dji-ble-official", "dji-duml"])
+        self.assertEqual(self.hello["state"]["camera"]["driver"], "auto")
         self.assertEqual(set(self.hello["state"]["models"]), {"vision", "stt", "tts"})
         self.assertEqual(self.hello["state"]["models"]["vision"]["source"], "engine")
         self.assertEqual(self.hello["state"]["reminders"]["quiet_hours"], {"start": "23:00", "end": "08:00"})
         self.assertNotIn(TRANSCRIPT_SENTINEL, self.hub.all_text())
+
+    async def test_a_slow_camera_action_does_not_hold_up_video_off(self):
+        started = threading.Event()
+
+        def slow_action(action):
+            started.set()
+            time.sleep(3)
+            return True, "done"
+        self.app.camera_action = slow_action
+        await self.hub.socket.send(json.dumps({"type": "camera_action", "req": "c1", "action": "pair"}))
+        await asyncio.to_thread(started.wait, 5)
+        t0 = time.monotonic()
+        await self.hub.socket.send(json.dumps({"type": "set", "req": "s9", "switches": {"video": False}, "source": "web"}))
+        ack = await self.ack("s9")
+        self.assertTrue(ack["ok"])
+        self.assertLess(time.monotonic() - t0, 2.0, "video off waited behind the camera action")
+        cam = await self.ack("c1")
+        self.assertTrue(cam["ok"])
 
     async def test_set_reaches_the_app_and_its_own_confirmation_still_goes_out(self):
         await self.hub.socket.send(json.dumps({"type": "set", "req": "s1", "switches": {"ai": True}, "source": "web"}))

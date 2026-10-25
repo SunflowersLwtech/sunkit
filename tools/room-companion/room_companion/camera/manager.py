@@ -38,7 +38,9 @@ class StepFailed(Exception):
 
 
 def _failure(e: Exception) -> StepFailed:
-    return e if isinstance(e, StepFailed) else StepFailed("helper", detail=str(e)[:150])
+    """Helper/bridge errors become one fixed text: their raw text can hold local paths, and the status
+    leaves the machine. The raw text goes to the local event log only."""
+    return e if isinstance(e, StepFailed) else StepFailed("helper")
 
 
 def _write_private(path: str, obj: dict):
@@ -211,6 +213,9 @@ class CameraManager:
         self.host = cfg.get("camera_host") or {}
         self.recover_after_s = float(self.host.get("recover_after_s", 20))
         self.uvc_wait_s = float(self.host.get("uvc_wait_s", 25))
+        # an action someone waits for (a web page, the HipiMind page: 95 s behind Cloudflare's 100 s)
+        self.action_budget_s = float(self.host.get("action_budget_s", 85))
+        self.driver_min_s = float(self.host.get("driver_min_s", 40))  # do not start a driver with less left
         self.file_config = self._file_config()
         self.config = self._load_choice()
         self.ble_state = _read_json(self.ble_path)
@@ -219,7 +224,10 @@ class CameraManager:
         self.drivers = {"dji-ble-official": OfficialBle(self), "dji-duml": DumlBle(self)}
         self.available = {i: i == "uvc" for i in DRIVER_IDS if i != "auto"}
         self.errors: dict[str, StepFailed | None] = {i: None for i in self.available}
-        self._ble_checked = False
+        self._ble_ok = None           # None: not checked yet; True/False: last check
+        self._ble_checked_at = 0.0
+        self._check_lock = threading.Lock()
+        self._busy_lock = threading.Lock()
         self.control = None
         self.reasons: list[tuple[str, StepFailed]] = []  # why earlier drivers were passed over, last round
         self._used = None
@@ -256,8 +264,8 @@ class CameraManager:
             msg = t("unofficial_needed", self.lang(), warning=UNOFFICIAL_WARNINGS.get(self.lang(), UNOFFICIAL_WARNINGS["zh"])) \
                 if e.code == "unofficial_not_allowed" else str(e)
             return False, e.code, msg
-        if not self.ble_available() and new["driver"] in ("dji-ble-official", "dji-duml"):
-            return False, "driver_unavailable", t("no_helper", self.lang())
+        if self._ble_ok is False and new["driver"] in ("dji-ble-official", "dji-duml"):
+            return False, "driver_unavailable", t("no_helper", self.lang())  # a failed check, not one in progress
         try:
             _write_private(self.choice_path, new)
         except OSError as e:
@@ -278,27 +286,45 @@ class CameraManager:
 
     def start(self):
         """Check the Bluetooth helper in the background (starting it can take a few seconds)."""
+        self._check_in_background()
+
+    def _check_in_background(self):
         threading.Thread(target=self.ble_available, name="camera-check", daemon=True).start()
+
+    def _claim(self, what: str) -> bool:
+        with self._busy_lock:
+            if self.busy:
+                return False
+            self.busy = what
+            return True
 
     def shutdown(self):
         if self._bridge is not None:
             self._bridge.stop()
 
     def ble_available(self) -> bool:
-        if not self._ble_checked:
-            self._ble_checked = True
+        """Whether the Bluetooth helper works here. Waits for a check already running; a failed check is
+        tried again after a minute (Bluetooth may come up after the app, Windows Python may be slow)."""
+        with self._check_lock:
+            if self._ble_ok or (self._ble_ok is False and self.monotonic() - self._ble_checked_at < 60):
+                return bool(self._ble_ok)
             ok, err = False, None
             if self.host.get("bluetooth", True) is False:
                 err = StepFailed("bt_off")
             else:
                 try:
-                    ok = bool(self.bridge.call("check", timeout=30).get("ok"))
+                    r = self.bridge.call("check", timeout=30)
+                    ok = bool(r.get("ok"))
                     err = None if ok else StepFailed("helper_down")
+                    if not ok:
+                        self.events.add("camera_helper", ok=False, detail=str(r.get("error"))[:200])
                 except BridgeError as e:
                     err = _failure(e)
+                    self.events.add("camera_helper", ok=False, detail=str(e)[:200])
             for i in ("dji-ble-official", "dji-duml"):
                 self.available[i], self.errors[i] = ok, err
-        return self.available["dji-ble-official"]
+            self._ble_ok, self._ble_checked_at = ok, self.monotonic()
+            return ok
 
     def _on_event(self, ev: dict):
         kind = ev.get("ev")
@@ -338,19 +364,24 @@ class CameraManager:
             return
         if self.busy or now < self.next_try_at or now - v.waiting_since < self.recover_after_s:
             return
+        if control_chain(self.config) and not self._ble_ok and not self._check_lock.locked() and \
+                (self._ble_ok is None or self.monotonic() - self._ble_checked_at >= 60):
+            self._check_in_background()  # a failed check is retried, never blocking this loop
         if not self.config["recover"]["auto_webcam"] or not self.chain():
-            if self._ble_checked:
+            if self._ble_ok is not None:
                 self.gave_up = True
             return
-        self.busy = "recover"
+        if not self._claim("recover"):
+            return
         threading.Thread(target=self._recover_bg, name="camera-recover", daemon=True).start()
 
     def chain(self) -> list[str]:
         ch = control_chain(self.config)
         return [c for c in ch if self.available[c]]
 
-    def _uvc_back(self) -> bool:
-        return wait_until(lambda: self.video.find_device() is not None, self.uvc_wait_s, step=2.0, sleep=self.sleep,
+    def _uvc_back(self, deadline: float | None = None) -> bool:
+        wait = self.uvc_wait_s if deadline is None else max(0.0, min(self.uvc_wait_s, deadline - self.monotonic() - 1))
+        return wait_until(lambda: self.video.find_device() is not None, wait, step=2.0, sleep=self.sleep,
                           clock=self.monotonic)
 
     def _recover_bg(self):
@@ -377,19 +408,29 @@ class CameraManager:
             text += t("then_use", lang, label=label(used, lang))
         return text[:200]
 
-    def recover(self) -> tuple[bool, str]:
-        """Try each allowed driver until the webcam is back. Returns (ok, plain-language detail)."""
+    def recover(self, deadline: float | None = None) -> tuple[bool, str]:
+        """Try each allowed driver until the webcam is back. Returns (ok, plain-language detail).
+        `deadline` (monotonic) bounds a run someone is waiting for; a remote page gives up after 95 s."""
         with self._lock:
             reasons = []
-            for did in self.chain():
+            for did in control_chain(self.config):
+                # read the settings again before each driver: the user may have withdrawn
+                # "allow unofficial" (or changed driver) while an earlier one was still trying
+                if did not in self.chain():
+                    continue
+                if deadline is not None and deadline - self.monotonic() < self.driver_min_s:
+                    reasons.append((did, StepFailed("no_time")))
+                    break
                 drv = self.drivers[did]
                 t0 = self.clock()
                 try:
                     drv.recover()
-                    if not self._uvc_back():
+                    if not self._uvc_back(deadline):
                         raise StepFailed("uvc_not_back")
                 except (StepFailed, BridgeError) as e:
                     f = _failure(e)
+                    if isinstance(e, BridgeError):
+                        self.events.add("camera_helper", ok=False, detail=str(e)[:200])
                     reasons.append((did, f))
                     self.errors[did] = f
                     self.attempts.append({"at": t0, "driver": did, "ok": False, "detail": f.text(self.lang())[:120]})
@@ -420,25 +461,30 @@ class CameraManager:
             return False, f"unknown action {name}"
         if not self.ble_available():
             return False, t("no_helper", lang)
-        if self.busy:
+        if not self._claim(name):
             return False, t("busy", lang, what=self.busy)
-        self.busy = name
+        deadline = self.monotonic() + self.action_budget_s
         try:
             if name == "recover":
-                return self.recover()
+                return self.recover(deadline)
             if name == "wake":
                 if not self.ble_state.get("addr"):
                     return False, t("no_addr", lang)
                 r = self.bridge.call("wake_adv", timeout=20, addr=self.ble_state["addr"], seconds=2)
                 self.note("dji-ble-official", "wake", r)
                 return bool(r.get("ok")), t("wake_sent" if r.get("ok") else "wake_failed", lang)
-            chain = self.chain() if self.config["driver"] == "auto" else [self.config["driver"]]
-            chain = [c for c in chain if c in self.drivers and self.available.get(c)]
+            chain = control_chain(self.config)
             if name == "pair":
                 done = []
                 for did in chain:
+                    if did not in self.chain():  # permission withdrawn while the previous one paired
+                        continue
+                    # finding and connecting take up to ~20 s; what is left is the time to tap
+                    wait = min(25.0, deadline - self.monotonic() - 22)
+                    if wait < 8:
+                        return bool(done), t("no_time", lang) + ((" " + t("paired", lang, labels="、".join(done))) if done else "")
                     try:
-                        self.drivers[did].pair(wait=30)
+                        self.drivers[did].pair(wait=wait)
                         self.errors[did] = None
                         done.append(label(did, lang))
                     except (StepFailed, BridgeError) as e:

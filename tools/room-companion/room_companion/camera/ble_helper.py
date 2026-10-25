@@ -40,7 +40,9 @@ class Out:
         self.lock = threading.Lock()
 
     def send(self, obj: dict):
-        line = json.dumps(obj, ensure_ascii=False)
+        # ASCII only: Windows Python writes piped stdout in the system code page, which cannot hold
+        # every character (a localized error message would kill the helper)
+        line = json.dumps(obj, ensure_ascii=True)
         with self.lock:
             self.stream.write(line + "\n")
             self.stream.flush()
@@ -83,7 +85,10 @@ class BleakTransport:
 
     async def arm(self):
         """Osmosis/dji-vcam write 01 00 to fff4's value before DUML pairing; harmless otherwise."""
-        await self.client.write_gatt_char(CHAR_NOTIFY, b"\x01\x00", response=True)
+        try:
+            await self.client.write_gatt_char(CHAR_NOTIFY, b"\x01\x00", response=True)
+        except Exception:  # some stacks refuse a write on a notify-only characteristic; pairing still works
+            pass
 
     async def write(self, data: bytes):
         await self.client.write_gatt_char(CHAR_WRITE, data, response=False)
@@ -182,7 +187,8 @@ class Helper:
             return
         if f.key == (0x0D, 0x02) and f.sender == duml.ADDR_BATTERY:
             self.out.send({"ev": "battery", "percent": duml.parse_battery(f.payload)})
-        self._resolve("duml", f)
+        if not self._resolve("duml", f) and f.is_response:
+            self.out.send({"ev": "log", "stray": f.describe()})
 
     def _on_rsdk(self, f: rsdk.Frame):
         if f.key == (0x1D, 0x02) and not f.is_response:
@@ -225,8 +231,10 @@ class Helper:
     async def duml_request(self, receiver, cmd_set, cmd_id, payload=b"", timeout=2.0, seq=None, flags=duml.FLAG_REQUEST):
         seq = self._next_seq() if seq is None else seq
         frame = duml.Frame(duml.ADDR_APP, receiver, seq, flags, cmd_set, cmd_id, payload)
-        # one request in flight at a time, so a response with the same command answers it
-        waiting = asyncio.ensure_future(self._wait("duml", lambda x: x.key == frame.key and x.is_response, timeout))
+        # the camera echoes the sequence: a late answer to an earlier request (same command, sent to
+        # another module) must not be taken as this one's
+        waiting = asyncio.ensure_future(self._wait(
+            "duml", lambda x: x.key == frame.key and x.is_response and x.seq == seq, timeout))
         await asyncio.sleep(0)
         await self._write(frame.encode())
         return await waiting

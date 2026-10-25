@@ -25,6 +25,11 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+try:
+    from . import rsdk
+except ImportError:  # run as a script next to rsdk.py
+    import rsdk  # type: ignore
+
 SOF = 0x55
 HEADER_LEN = 11
 OVERHEAD = 13
@@ -200,9 +205,14 @@ class Demux:
             if sof == SOF and (total < OVERHEAD or crc8(self._buf[:3]) != self._buf[3]):
                 del self._buf[0]
                 continue
-            if sof == 0xAA and total < 18:
-                del self._buf[0]
-                continue
+            if sof == 0xAA:
+                # check the official header's CRC16 before trusting its length: a stray 0xAA would
+                # otherwise hold back everything after it while waiting for up to 1023 bytes
+                if len(self._buf) < 12:
+                    break
+                if total < 18 or rsdk.crc16(bytes(self._buf[:10])) != struct.unpack_from("<H", self._buf, 10)[0]:
+                    del self._buf[0]
+                    continue
             if len(self._buf) < total:
                 break
             out.append(("duml" if sof == SOF else "rsdk", bytes(self._buf[:total])))

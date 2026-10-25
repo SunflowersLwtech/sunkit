@@ -847,7 +847,9 @@ class Bridge:
         self.stop_reason: str | None = None
         self._last_status_error = None
         # Commands run off the receive loop, so pings and cloud answers keep flowing while one works:
-        # set/config/live/camera_action in order on one lane, Test connection on its own (at most 2).
+        # set/config/live in order on one lane, Test connection on its own (at most 2), and camera
+        # actions on their own (one at a time): pairing waits for a tap and recovery can take a minute,
+        # and a "video off" must never queue behind that.
         self.control_q: asyncio.Queue | None = None
         self.side_tasks: set[asyncio.Task] = set()
         self.test_slots: asyncio.Semaphore | None = None
@@ -858,6 +860,7 @@ class Bridge:
         self._session_token: str | None = None
         self._closed_for_token: str | None = None
         self._inband_close: int | None = None
+        self.camera_slot: asyncio.Semaphore | None = None
 
     def lang(self) -> str:
         if self.language in LANGUAGES:
@@ -1077,6 +1080,7 @@ class Bridge:
         sender = watcher = None
         self.control_q = asyncio.Queue()
         self.test_slots = asyncio.Semaphore(2)
+        self.camera_slot = asyncio.Semaphore(1)
         worker = asyncio.create_task(self._control_worker(self.control_q))
         try:
             if self.state is None:
@@ -1184,11 +1188,15 @@ class Bridge:
             if isinstance(code, int) and not isinstance(code, bool) and 1000 <= code <= 4999:
                 self._inband_close = code
                 log.info("HipiMind is closing the connection (%s: %s)", code, str(msg.get("reason") or "")[:120])
-        elif t in ("set", "config", "live", "camera_action"):
+        elif t in ("set", "config", "live"):
             if self.control_q is not None:
                 self.control_q.put_nowait(msg)
             else:
                 await self._run_command(msg)
+        elif t == "camera_action":
+            task = asyncio.create_task(self._run_camera_action(msg))
+            self.side_tasks.add(task)
+            task.add_done_callback(self.side_tasks.discard)
         elif t == "test_model":
             now = time.monotonic()
             self.test_times = [x for x in self.test_times if now - x < 60]
@@ -1285,6 +1293,12 @@ class Bridge:
             return await refuse(code, ANNOUNCE_REFUSALS.get(code, ANNOUNCE_REFUSALS["busy"]))
         await self._send_json({"type": "ack", "req": req, "ok": True,
                                "result": {"id": str(res.get("id") or req)[:64]}})
+
+    async def _run_camera_action(self, msg: dict):
+        if self.camera_slot is None:
+            return await self._run_command(msg)
+        async with self.camera_slot:
+            await self._run_command(msg)
 
     async def _run_test(self, msg: dict):
         try:

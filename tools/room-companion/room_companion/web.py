@@ -463,7 +463,7 @@ async function camSave(ch){const body=Object.assign({},camCfg,ch);
  const r=await fetch("/api/camera",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify(body)});
  const j=await r.json(); $("cammsg").textContent=j.ok?"已保存":"没保存："+(j.error&&j.error.message||r.status); camRefresh()}
 $("camunoff").onchange=()=>{const on=$("camunoff").checked; camSave(on?{allow_unofficial:true}:{allow_unofficial:false,driver:camCfg.driver==="dji-duml"?"auto":camCfg.driver})};
-async function camAct(a,btn){btn.disabled=true;$("cammsg").textContent=a==="pair"?"正在配对：相机屏幕弹出请求时点允许（最多等 30 秒）":"正在让相机切回网络摄像头…";
+async function camAct(a,btn){btn.disabled=true;$("cammsg").textContent=a==="pair"?"正在配对：相机屏幕弹出请求时点允许（每个协议等 25 秒，勾了社区协议会弹两次）":"正在让相机切回网络摄像头…";
  try{const r=await fetch("/api/camera/action",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify({action:a})});
  const j=await r.json(); $("cammsg").textContent=j.detail||""}finally{btn.disabled=false;camRefresh()}}
 $("campair").onclick=()=>camAct("pair",$("campair")); $("camrecover").onclick=()=>camAct("recover",$("camrecover"));

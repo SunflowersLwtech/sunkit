@@ -29,13 +29,13 @@ CATALOG = [
 ]
 CATALOG_EN = [
     {"id": "auto", "label": "Automatic (recommended)",
-     "does": "Video over the USB webcam; when the camera drops out, the official protocol switches it back, then the community one if you allowed it",
+     "does": "Video over USB; if the camera drops out, the official protocol (then the community one, if allowed) brings it back",
      "needs": "A USB cable; Bluetooth for automatic recovery", "unofficial": False},
     {"id": "uvc", "label": "USB webcam (official)",
      "does": "Video and sound from DJI's official webcam mode over USB; after a power cut or restart someone taps Webcam on the camera",
      "needs": "A USB cable", "unofficial": False},
     {"id": "dji-ble-official", "label": "DJI official Bluetooth protocol",
-     "does": "No video; controls the camera: wake and sleep, switch modes (including back to webcam), stop recording, battery and temperature",
+     "does": "No video; controls the camera: wake, sleep, switch modes (including back to webcam), stop recording, battery, heat",
      "needs": "Bluetooth on this computer and one tap to allow it on the camera; video still over USB", "unofficial": False},
     {"id": "dji-duml", "label": "Community protocol (unofficial)",
      "does": "DJI's internal protocol as the community decoded it: switches the camera back to webcam mode, reads the battery",

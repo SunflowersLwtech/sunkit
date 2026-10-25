@@ -38,6 +38,7 @@ TEXTS = {
         "d_error": "采集相机画面出错了，详情看本机的房间AI 网页",
         "sep": "；",
         "unofficial_needed": "选社区逆向协议要先勾选「允许非官方协议」：{warning}",
+        "no_time": "这次没时间再试下一条了（网页最多等约 90 秒），可以再点一次",
     },
     "en": {
         "not_found": "Bluetooth cannot find the camera (switched off, flat battery, or asleep for over 30 minutes)",
@@ -75,6 +76,7 @@ TEXTS = {
         "d_error": "Capturing from the camera failed; details are on this machine's own page",
         "sep": "; ",
         "unofficial_needed": "Tick \"allow the unofficial protocol\" before choosing the community protocol: {warning}",
+        "no_time": "No time left to try the next one (the page waits about 90 s); press it again",
     },
 }
 

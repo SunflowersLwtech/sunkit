@@ -149,7 +149,8 @@ the Bluetooth drivers control the camera and bring it back into webcam mode by t
   keeps every step (`camera_step`, `camera_recover`). If every allowed driver fails, the "please tap
   Webcam" notification says what was tried, and retries back off from 1 to 15 minutes.
 - The first Bluetooth connection has to be allowed on the camera's screen (once per protocol). The
-  `pair` action, or "配对蓝牙" on the web page, starts it and waits 30 s for the tap. Automatic
+  `pair` action, or "配对蓝牙" on the web page, starts it and waits 25 s per protocol for the tap (the
+  official one first, then the community one if allowed: two prompts, up to about 90 s). Automatic
   recovery never waits for a person: an unpaired camera fails fast with a message that says so.
 - A sleeping camera stops advertising; the official wake-up broadcast reaches it if it has slept for
   less than 30 minutes (Windows only for now). A camera that is switched off cannot be woken over

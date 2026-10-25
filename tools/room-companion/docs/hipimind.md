@@ -312,8 +312,8 @@ The page lists the drivers from `hello.device.camera_drivers` (`auto`, `uvc`, `d
 `{"driver", "allow_unofficial", "ble": {"device"}, "recover": {"auto_webcam", "wake"}, "options"?}`.
 The device keeps it in `state/camera.json` (it wins over the config file) and answers
 `unofficial_not_allowed` if `dji-duml` comes without `allow_unofficial`. **Pair** and **Switch back
-now** send `camera_action` (`pair`, `recover`, `wake`); pairing waits up to 30 s for a tap on the
-camera. HipiMind never talks to the camera. See the README's "Cameras" section for what each driver
+now** send `camera_action` (`pair`, `recover`, `wake`); pairing waits 25 s per protocol for a tap on
+the camera (two prompts when the community protocol is allowed), so the ack can take up to about 90 s. HipiMind never talks to the camera. See the README's "Cameras" section for what each driver
 does.
 
 ## 6. Sidecar mode

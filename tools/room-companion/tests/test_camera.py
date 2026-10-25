@@ -50,14 +50,30 @@ class FakeVideo:
 
 
 class CodecTest(unittest.TestCase):
-    def test_official_frame_matches_dji_example(self):
-        # DJI's published example: switch to Hyperlapse, sequence 5
-        want = bytes.fromhex("aa1b00010000000005" "0057ee1d04000033ff0a01473936f4fae1d0")
-        self.assertEqual(rsdk.Frame(0x01, 5, 0x1D, 0x04, rsdk.mode_switch(0x0A)).encode(), want)
+    def test_official_frames_match_published_vectors(self):
+        # vectors from RB14/dji-vcam docs/camera-controls.md (MIT): switch to Video, subscribe status
+        want = bytes.fromhex("aa1b000100000000110058ee1d04000033ff0101473936fce45f4e")
+        self.assertEqual(rsdk.Frame(0x01, 0x11, 0x1D, 0x04, rsdk.mode_switch(0x01)).encode(), want)
+        self.assertEqual(rsdk.Frame(0x01, 0x10, 0x1D, 0x05, rsdk.status_subscribe(3)).encode().hex(),
+                         "aa1800010000000010004d8e1d05031400000000d2a49342")
         f = rsdk.decode(want)
-        self.assertEqual((f.cmd_set, f.cmd_id, f.seq), (0x1D, 0x04, 5))
+        self.assertEqual((f.cmd_set, f.cmd_id, f.seq), (0x1D, 0x04, 0x11))
         with self.assertRaises(ValueError):
             rsdk.decode(want[:-1] + b"\x00")
+
+    def test_stray_aa_byte_does_not_hold_back_frames(self):
+        good = duml.Frame(2, 1, 7, 0xC0, 2, 0xE1, b"\x00").encode()
+        d = duml.Demux()
+        got = d.feed(b"\xaa\xff\x03" + bytes(12) + good)
+        self.assertEqual([k for k, _ in got], ["duml"])
+
+    def test_helper_output_is_ascii(self):
+        import io
+        from room_companion.camera.ble_helper import Out
+        buf = io.StringIO()
+        Out(buf).send({"detail": "相机拒绝了"})
+        self.assertTrue(buf.getvalue().isascii())
+        self.assertEqual(json.loads(buf.getvalue())["detail"], "相机拒绝了")
 
     def test_duml_frames_match_captures(self):
         for hx, args in {
@@ -113,12 +129,19 @@ class ConfigTest(unittest.TestCase):
             catalog.normalize({"driver": "rtsp"})
 
     def test_catalog_texts_fit_the_shared_limits(self):
-        ids = [d["id"] for d in catalog.CATALOG]
-        self.assertEqual(ids, list(catalog.DRIVER_IDS))
-        for d in catalog.CATALOG:
-            for k in ("label", "does", "needs"):
-                self.assertLessEqual(len(d[k]), 120, (d["id"], k))
-        self.assertEqual([d["id"] for d in catalog.CATALOG if d["unofficial"]], ["dji-duml"])
+        for lang in ("zh", "en"):
+            cat = catalog.catalog_for(lang)
+            self.assertEqual([d["id"] for d in cat], list(catalog.DRIVER_IDS))
+            for d in cat:
+                for k in ("label", "does", "needs"):
+                    self.assertLessEqual(len(d[k]), 120, (lang, d["id"], k))
+            self.assertEqual([d["id"] for d in cat if d["unofficial"]], ["dji-duml"])
+
+    def test_only_a_real_true_allows_the_unofficial_driver(self):
+        for v in ("false", "true", 1, "yes", None):
+            with self.assertRaises(catalog.ConfigError, msg=repr(v)):
+                catalog.normalize({"driver": "dji-duml", "allow_unofficial": v})
+            self.assertFalse(catalog.normalize({"allow_unofficial": v})["allow_unofficial"], repr(v))
 
 
 class RecoveryTest(unittest.TestCase):
@@ -215,6 +238,31 @@ class RecoveryTest(unittest.TestCase):
         self.assertTrue(ok, detail)
         self.assertIn("wake", [e.get("step") for e in events.items])
 
+    def test_unpaired_community_protocol_needs_a_tap_too(self):
+        m, events, sent = self.make({"rsdk_paired": True, "rsdk_uvc_ret": 2, "mode": 0x01},
+                                    camera={"allow_unofficial": True})
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertEqual(m.errors["dji-duml"].key, "duml_need_tap")
+        self.assertEqual(self.fake_mode(), 0x01)
+
+    def test_a_late_answer_from_another_module_is_not_taken(self):
+        m, events, sent = self.make({"rsdk_paired": True, "rsdk_uvc_ret": 2, "duml_paired": True,
+                                     "duml_late_01": True, "mode": 0x01}, camera={"allow_unofficial": True})
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertEqual(m.errors["dji-duml"].key, "duml_uvc_refused")
+
+    def test_failures_never_carry_the_address(self):
+        m, events, sent = self.make({"found": False, "mode": 0x01})
+        m.remember(addr=FAKE_ADDR)
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertIn("wake", [e.get("step") for e in events.items])
+        text = json.dumps([m.status(), m.detail_status(), events.items, detail], ensure_ascii=False)
+        self.assertNotIn(FAKE_ADDR, text)
+        self.assertEqual(m.errors["dji-ble-official"].key, "not_found")
+
     def test_choice_is_saved_private_and_validated(self):
         m, events, sent = self.make({"rsdk_paired": True})
         ok, code, msg = m.set_config({"driver": "dji-duml"})
@@ -233,6 +281,86 @@ class RecoveryTest(unittest.TestCase):
         text = json.dumps([m.status(), m.detail_status(), events.items], ensure_ascii=False)
         self.assertNotIn(FAKE_ADDR, text)
         self.assertNotIn(m.ble_state["sender_mac"], text)
+
+
+class StubBridge:
+    def __init__(self, check=(True,), raise_on=None):
+        self.checks = list(check)
+        self.raise_on = raise_on
+        self.calls = []
+
+    def call(self, cmd, timeout=30, **kw):
+        self.calls.append(cmd)
+        if cmd == self.raise_on:
+            from room_companion.camera.bridge import BridgeError
+            raise BridgeError("cannot start the Bluetooth helper: /mnt/c/Users/SOMEONE/room/python.exe")
+        if cmd == "check":
+            return {"ok": self.checks.pop(0) if len(self.checks) > 1 else self.checks[0]}
+        return {"ok": False, "error": "not_found"}
+
+    def stop(self):
+        pass
+
+
+class ManagerRulesTest(unittest.TestCase):
+    def make(self, bridge, camera=None, clock=None):
+        d = tempfile.mkdtemp()
+        video = FakeVideo(os.path.join(d, "none.json"))
+        kw = {"monotonic": clock} if clock else {}
+        return CameraManager({"data_dir": d, "camera": camera, "camera_host": {"uvc_wait_s": 0}}, video, Events(),
+                             bridge=bridge, sleep=lambda s: None, **kw)
+
+    def test_withdrawn_permission_stops_the_community_protocol_mid_recovery(self):
+        m = self.make(StubBridge(), camera={"allow_unofficial": True})
+        self.assertTrue(m.ble_available())
+        ran = []
+
+        def official():
+            ran.append("official")
+            ok, code, msg = m.set_config({"allow_unofficial": False})  # the user unticks it meanwhile
+            ran.append(("set", ok))
+            raise __import__("room_companion.camera.manager", fromlist=["x"]).StepFailed("rsdk_uvc_refused", ret=2)
+        m.drivers["dji-ble-official"].recover = official
+        m.drivers["dji-duml"].recover = lambda: ran.append("duml RAN")
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertEqual(ran, ["official", ("set", True)])
+
+    def test_a_failed_helper_check_is_retried_and_its_text_stays_local(self):
+        now = [1000.0]
+        b = StubBridge(raise_on="check")
+        m = self.make(b, clock=lambda: now[0])
+        self.assertFalse(m.ble_available())
+        st = json.dumps(m.status(), ensure_ascii=False)
+        self.assertNotIn("SOMEONE", st)
+        self.assertIn("SOMEONE", json.dumps(m.events.items))  # the local event log keeps the detail
+        b.raise_on = None
+        self.assertFalse(m.ble_available())   # within a minute: not asked again
+        now[0] += 61
+        self.assertTrue(m.ble_available())
+        self.assertEqual(b.calls.count("check"), 1 + 1)  # the raising call is recorded before it raises
+
+    def test_a_choice_is_accepted_while_the_check_is_still_unknown(self):
+        m = self.make(StubBridge(check=(False,)))
+        ok, code, msg = m.set_config({"driver": "dji-ble-official"})
+        self.assertTrue(ok, msg)
+        m._ble_ok, m._ble_checked_at = False, m.monotonic()
+        ok, code, msg = m.set_config({"driver": "dji-ble-official"})
+        self.assertEqual(code, "driver_unavailable")
+
+    def test_tick_does_not_start_a_second_job(self):
+        m = self.make(StubBridge())
+        self.assertTrue(m.ble_available())
+        m.video.waiting_since = 1.0
+        started = []
+        m._recover_bg = lambda: started.append(1)
+        m.busy = "pair"
+        m.tick(10_000.0)
+        self.assertEqual((started, m.busy), ([], "pair"))
+        m.busy = None
+        m.tick(10_000.0)
+        time.sleep(0.2)
+        self.assertEqual(started, [1])
 
 
 class TickTest(unittest.TestCase):
@@ -310,3 +438,84 @@ class SharedSchemaTest(unittest.TestCase):
         ok, code, msg = m.set_config({"driver": "dji-duml"})
         self.assertEqual(code, "unofficial_not_allowed")
         self.assertIn("not supported by DJI", msg)
+
+
+class TapReminderTest(unittest.TestCase):
+    """The "please tap Webcam" message waits until the Bluetooth drivers have had their go."""
+
+    def test_reminder_waits_for_the_drivers_then_says_what_was_tried(self):
+        from room_companion.app import App
+        from tests.test_pipelines import FakeNotifier
+        from room_companion.app import DEFAULTS
+        d = tempfile.mkdtemp()
+        notifier = FakeNotifier()
+        video = FakeVideo(os.path.join(d, "none.json"))
+        video.waiting_since = 1000.0
+        cam = CameraManager({"data_dir": d}, video, Events(), bridge=StubBridge(), sleep=lambda s: None)
+        app = App(dict(DEFAULTS, data_dir=d, port=0), video=video, audio=object(), notifier=notifier, camera=cam)
+        app.switches.set({"video": True}, "t")
+        self.assertTrue(cam.ble_available())
+        app._camera_tap_check(1000.0 + 600)
+        self.assertEqual([m for m in notifier.messages if "网络摄像头" in m], [], "asked a person before the drivers tried")
+        cam.recover()  # the official driver cannot find the camera
+        self.assertTrue(cam.gave_up)
+        app._camera_tap_check(1000.0 + 600)
+        msgs = [m for m in notifier.messages if "网络摄像头" in m]
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("已经试过自动切回", msgs[0])
+        self.assertIn("蓝牙找不到相机", msgs[0])
+
+
+class ActionBudgetTest(unittest.TestCase):
+    """A remote page waits 95 s for an action; the device must answer well inside that."""
+
+    def make(self, camera=None):
+        now = [0.0]
+        d = tempfile.mkdtemp()
+        video = FakeVideo(os.path.join(d, "none.json"))
+        m = CameraManager({"data_dir": d, "camera": camera}, video, Events(), bridge=StubBridge(),
+                          sleep=lambda s: now.__setitem__(0, now[0] + s), monotonic=lambda: now[0])
+        self.assertTrue(m.ble_available())
+        return m, now
+
+    def test_recover_stops_before_the_page_gives_up(self):
+        m, now = self.make(camera={"allow_unofficial": True})
+        from room_companion.camera.manager import StepFailed
+
+        def slow():
+            now[0] += 60  # a slow official attempt: scan, wake, scan again
+            raise StepFailed("rsdk_uvc_refused", ret=2)
+        ran = []
+        m.drivers["dji-ble-official"].recover = slow
+        m.drivers["dji-duml"].recover = lambda: ran.append("duml")
+        ok, detail = m.action("recover")
+        self.assertFalse(ok)
+        self.assertEqual(ran, [])
+        self.assertLess(now[0], 90)
+        self.assertIn("没时间", detail)
+
+    def test_pair_wait_shrinks_to_fit(self):
+        m, now = self.make(camera={"allow_unofficial": True})
+        waits = []
+
+        def pair(wait):
+            waits.append(wait)
+            now[0] += 22 + wait  # nobody taps
+            from room_companion.camera.manager import StepFailed
+            if len(waits) == 1:
+                return  # the official one got its tap
+            raise StepFailed("duml_need_tap")
+        m.drivers["dji-ble-official"].pair = pair
+        m.drivers["dji-duml"].pair = pair
+        ok, detail = m.action("pair")
+        self.assertEqual(waits[0], 25.0)
+        self.assertLessEqual(waits[1], 85 - 47 - 22)
+        self.assertLess(now[0], 90)
+
+    def test_a_second_action_while_busy_is_refused(self):
+        m, now = self.make()
+        m.busy = "recover"
+        ok, detail = m.action("pair")
+        self.assertFalse(ok)
+        self.assertIn("正在忙", detail)
+        self.assertEqual(m.busy, "recover")

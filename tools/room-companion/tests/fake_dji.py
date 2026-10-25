@@ -140,6 +140,13 @@ class FakeTransport:
                         req = duml.Frame(duml.ADDR_WIFI, duml.ADDR_APP, self.seq, duml.FLAG_REQUEST, 0x07, 0x46, b"\x01")
                         self.on_data(req.encode())
                     asyncio.get_running_loop().call_later(0.3, approved)
+        elif f.key == (0x02, 0xE1) and self.c.get("duml_late_01"):
+            # the camera module answers "00" too late (after the app gave up on it) and changes nothing;
+            # the other module refuses, a little slowly
+            if f.receiver == duml.ADDR_CAMERA:
+                self._push(f.reply(b"\x00").encode(), delay=3.5)
+            else:
+                self._push(f.reply(b"\xe0").encode(), delay=1.0)
         elif f.key == (0x02, 0xE1):
             if f.payload[:1] == b"\x23" and not self.c.get("duml_uvc", True):
                 reply = b"\xe0"
