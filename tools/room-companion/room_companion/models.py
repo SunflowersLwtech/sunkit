@@ -46,16 +46,68 @@ TEST_JPEG = base64.b64decode(
     "oooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA/9k=")
 
 
+BAD_BASE_URL = "the server address must be http:// or https:// with a host name, no user name or password, no #"
+
+
+def clean_base_url(url) -> str | None:
+    """The base URL if it is a plain http(s) address with a host, else None.
+
+    The address comes from the HipiMind page, so it must not be able to make this device read a
+    local file (file://), use another protocol, or carry credentials in the URL.
+    """
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or not url.strip() or len(url) > 300:
+        return None
+    url = url.strip()
+    try:
+        u = urlsplit(url)
+        port = u.port  # noqa: F841 - raises on a malformed port
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not u.hostname or "@" in u.netloc or "#" in url:
+        return None
+    if any(c.isspace() for c in url):
+        return None
+    return url.rstrip("/")
+
+
+def safe_url(url) -> str:
+    """A URL fit for a log line or an error shown on the page: no user name or password."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        u = urlsplit(str(url))
+    except ValueError:
+        return "(bad address)"
+    host = u.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        netloc = host + (f":{u.port}" if u.port else "")
+    except ValueError:
+        netloc = host
+    return urlunsplit((u.scheme, netloc, u.path, "", ""))
+
+
 def normalize_slot(d) -> dict:
-    """A ModelSlot with only the fields this module reads; an unknown source reads as "engine"."""
+    """A ModelSlot with only the fields this module reads; an unknown source reads as "engine".
+
+    A base URL that is not a plain http(s) address is dropped and the slot remembers why, so
+    "Test connection" can say so instead of reading whatever the address points at.
+    """
     d = d if isinstance(d, dict) else {}
     src = d.get("source") if d.get("source") in SOURCES else "engine"
     out = {"source": src}
     if src == "openai":
-        for k in ("base_url", "model", "voice", "api_key_file", "language"):
+        for k in ("model", "voice", "api_key_file", "language"):
             v = d.get(k)
             if isinstance(v, str) and v.strip():
-                out[k] = v.strip().rstrip("/") if k == "base_url" else v.strip()
+                out[k] = v.strip()
+        if d.get("base_url") is not None:
+            base = clean_base_url(d.get("base_url"))
+            if base:
+                out["base_url"] = base
+            else:
+                out["base_url_error"] = BAD_BASE_URL
     return out
 
 
@@ -89,25 +141,41 @@ class ModelSettings:
         self.keys_path = os.path.join(state_dir, "model_keys.json")
         self._lock = threading.Lock()
         self.runtime = _read_json(self.path)
-        self._keys = {k: v for k, v in _read_json(self.keys_path).items() if isinstance(v, str)}
+        # {slot: {"base_url": ..., "key": ...}}: a key belongs to the server it was typed for, so moving
+        # the slot to another address (from the page, or a stolen session) never takes the key along.
+        self._keys = {}
+        for k, v in _read_json(self.keys_path).items():
+            if isinstance(v, dict) and isinstance(v.get("key"), str) and isinstance(v.get("base_url"), str):
+                self._keys[k] = {"base_url": v["base_url"], "key": v["key"]}
+            elif isinstance(v, str) and k in SLOTS:  # the first format: bound to the server in force now
+                base = self._slot_unlocked(k).get("base_url")
+                if base:
+                    self._keys[k] = {"base_url": base, "key": v}
+
+    def _slot_unlocked(self, name: str) -> dict:
+        if name in self.runtime:
+            return normalize_slot(self.runtime[name])
+        return normalize_slot(self.static.get(name))
 
     def slot(self, name: str) -> dict:
         with self._lock:
-            if name in self.runtime:
-                return normalize_slot(self.runtime[name])
-            return normalize_slot(self.static.get(name))
+            return self._slot_unlocked(name)
 
     def preset(self):
         with self._lock:
             p = self.runtime.get("preset", self.static.get("preset"))
             return p if isinstance(p, str) else None
 
-    def key(self, name: str):
+    def key(self, name: str, base_url: str | None = None):
+        """The key for this slot's server (or for `base_url`), only if it was entered for that server."""
         with self._lock:
-            k = self._keys.get(name)
-        if k:
-            return k
-        f = self.slot(name).get("api_key_file")
+            slot = self._slot_unlocked(name)
+            target = base_url if base_url is not None else slot.get("base_url")
+            saved = self._keys.get(name)
+            from_static = name not in self.runtime
+        if saved and target and saved["base_url"] == target:
+            return saved["key"]
+        f = slot.get("api_key_file") if from_static and base_url in (None, slot.get("base_url")) else None
         if f:
             try:
                 with open(os.path.expanduser(f), "r", encoding="utf-8") as fh:
@@ -137,8 +205,9 @@ class ModelSettings:
             if keys:
                 for name, v in keys.items():
                     if name in SLOTS and isinstance(v, str):
-                        if v:
-                            self._keys[name] = v
+                        base = self._slot_unlocked(name).get("base_url")
+                        if v and base:
+                            self._keys[name] = {"base_url": base, "key": v}
                         else:
                             self._keys.pop(name, None)
                         if name not in changed:
@@ -156,21 +225,72 @@ class ModelCallError(Exception):
 
 
 def _host_of(url: str) -> str:
+    """host[:port] of a URL, never the user name or password in it."""
     try:
         from urllib.parse import urlsplit
         u = urlsplit(url)
-        return u.netloc or url
+        host = u.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        try:
+            return (host + (f":{u.port}" if u.port else "")) or "(no host)"
+        except ValueError:
+            return host or "(no host)"
     except ValueError:
-        return url
+        return "(bad address)"
 
 
-def http_call(url: str, data: bytes, headers: dict, timeout: float, urlopen=urllib.request.urlopen,
-              model: str | None = None):
-    """POST and return (status, content-type, body); errors become ModelCallError with a protocol code."""
+#: Largest answer read from a model server, by kind: an endless body must not exhaust memory.
+MAX_JSON_BYTES = 2_000_000
+MAX_AUDIO_BYTES = 8_000_000
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Model servers answer in place; a redirect (possibly to another scheme or host) is refused."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def _default_urlopen(req, timeout):
+    return _opener.open(req, timeout=timeout)
+
+
+def _read_capped(r, max_bytes: int, deadline: float, url: str) -> bytes:
+    chunks, total = [], 0
+    while True:
+        if time.monotonic() > deadline:
+            raise ModelCallError("timeout", f"{_host_of(url)} took too long to send its answer")
+        chunk = r.read(65536)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > max_bytes:
+            raise ModelCallError("bad_response", f"the answer from {_host_of(url)} is too large "
+                                                 f"(over {max_bytes // 1_000_000} MB)")
+        chunks.append(chunk)
+
+
+def http_call(url: str, data: bytes, headers: dict, timeout: float, urlopen=None,
+              model: str | None = None, max_bytes: int = MAX_JSON_BYTES):
+    """POST and return (status, content-type, body); errors become ModelCallError with a protocol code.
+
+    Only http(s) URLs; redirects are not followed; the answer is read in chunks up to `max_bytes`,
+    and the whole request (connect, send, read) must finish within about twice `timeout`.
+    """
+    if clean_base_url(url) is None:
+        raise ModelCallError("connect_failed", BAD_BASE_URL)
+    urlopen = urlopen or _default_urlopen
+    deadline = time.monotonic() + 2 * timeout
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urlopen(req, timeout=timeout) as r:
-            return r.status, r.headers.get("Content-Type", ""), r.read()
+            return r.status, r.headers.get("Content-Type", ""), _read_capped(r, max_bytes, deadline, url)
+    except ModelCallError:
+        raise
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8", "replace")[:300]
@@ -181,9 +301,11 @@ def http_call(url: str, data: bytes, headers: dict, timeout: float, urlopen=urll
         if e.code == 404:
             if "model" in body.lower() and model:
                 raise ModelCallError("model_not_found", f"{_host_of(url)} does not know the model {model!r}") from None
-            raise ModelCallError("not_found", f"HTTP 404 from {url} (does the base URL end in /v1?)") from None
+            raise ModelCallError("not_found", f"HTTP 404 from {safe_url(url)} (does the base URL end in /v1?)") from None
         if "model" in body.lower() and ("not found" in body.lower() or "does not exist" in body.lower()) and model:
             raise ModelCallError("model_not_found", f"{_host_of(url)} does not know the model {model!r}") from None
+        if 300 <= e.code < 400:
+            raise ModelCallError("bad_response", f"{_host_of(url)} answered with a redirect (not followed)") from None
         raise ModelCallError("bad_response", f"HTTP {e.code} from {_host_of(url)}") from None
     except (socket.timeout, TimeoutError):
         raise ModelCallError("timeout", f"{_host_of(url)} did not answer within {int(timeout)} s") from None
@@ -219,7 +341,7 @@ def extract_json(content):
     return None
 
 
-def chat_image(base_url, model, key, jpeg: bytes, prompt: str, timeout, urlopen=urllib.request.urlopen,
+def chat_image(base_url, model, key, jpeg: bytes, prompt: str, timeout, urlopen=None,
                schema: dict | None = None) -> tuple[str, dict]:
     """One chat/completions call with a JPEG; returns (content, full response)."""
     body = {"messages": [{"role": "user", "content": [
@@ -263,7 +385,7 @@ def pcm16_wav(samples, rate=16000) -> bytes:
     return buf.getvalue()
 
 
-def transcribe_wav(base_url, model, key, wav: bytes, timeout, urlopen=urllib.request.urlopen,
+def transcribe_wav(base_url, model, key, wav: bytes, timeout, urlopen=None,
                    language: str | None = None) -> str:
     boundary = "----room-companion-" + uuid.uuid4().hex
     parts = []
@@ -287,10 +409,11 @@ def transcribe_wav(base_url, model, key, wav: bytes, timeout, urlopen=urllib.req
     raise ModelCallError("bad_response", "the answer has no transcription text")
 
 
-def speech_wav(base_url, model, key, text: str, voice: str | None, timeout, urlopen=urllib.request.urlopen) -> bytes:
+def speech_wav(base_url, model, key, text: str, voice: str | None, timeout, urlopen=None) -> bytes:
     body = {"model": model or "tts-1", "input": text, "voice": voice or "alloy", "response_format": "wav"}
     _, ctype, raw = http_call(base_url.rstrip("/") + "/audio/speech", json.dumps(body).encode(),
-                              {"Content-Type": "application/json", **_auth(key)}, timeout, urlopen, model)
+                              {"Content-Type": "application/json", **_auth(key)}, timeout, urlopen, model,
+                              max_bytes=MAX_AUDIO_BYTES)
     if not raw or ctype.startswith("application/json"):
         raise ModelCallError("bad_response", "the answer is not audio")
     return raw
@@ -318,7 +441,7 @@ class WavAudio:
 class OpenAIVision:
     """AI gate client for an OpenAI-compatible vision server: one frame in, one scene observation out."""
 
-    def __init__(self, slot: dict, key_fn, urlopen=urllib.request.urlopen, timeout=90):
+    def __init__(self, slot: dict, key_fn, urlopen=None, timeout=90):
         self.slot, self.key_fn, self.urlopen, self.timeout = slot, key_fn, urlopen, timeout
         self.last_seconds, self.errors, self.last_error, self.ok = None, 0, None, None
 
@@ -347,6 +470,60 @@ class OpenAIVision:
         return obs
 
 
+CLOUD_IMAGE_SIDE = 768
+CLOUD_IMAGE_BYTES = 300_000
+CLOUD_AUDIO_SECONDS = 30
+
+
+def fit_cloud_image(jpeg: bytes) -> bytes | None:
+    """A frame as HipiMind's cloud vision takes it: at most 768 px on the long side and 300 KB.
+
+    Without Pillow a frame already within 300 KB goes as it is; a bigger one cannot be sent.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return jpeg if len(jpeg) <= CLOUD_IMAGE_BYTES else None
+    try:
+        im = Image.open(io.BytesIO(jpeg))
+        im.load()
+    except Exception:
+        # not something Pillow can read: it goes as it is if small enough, and HipiMind judges it
+        return jpeg if len(jpeg) <= CLOUD_IMAGE_BYTES else None
+    try:
+        with im:
+            im = im.convert("RGB")
+            if max(im.size) > CLOUD_IMAGE_SIDE:
+                im.thumbnail((CLOUD_IMAGE_SIDE, CLOUD_IMAGE_SIDE))
+            for q in (80, 65, 50, 35):
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=q)
+                if buf.tell() <= CLOUD_IMAGE_BYTES:
+                    return buf.getvalue()
+    except Exception:
+        return None
+    return None
+
+
+def cut_wav(wav: bytes, seconds: float = CLOUD_AUDIO_SECONDS) -> bytes:
+    """The first `seconds` of a WAV (HipiMind's cloud speech-to-text takes at most 30 s)."""
+    try:
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            rate, width, ch = w.getframerate(), w.getsampwidth(), w.getnchannels()
+            if w.getnframes() <= rate * seconds:
+                return wav
+            frames = w.readframes(int(rate * seconds))
+    except (wave.Error, EOFError):
+        return wav
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as out:
+        out.setnchannels(ch)
+        out.setsampwidth(width)
+        out.setframerate(rate)
+        out.writeframes(frames)
+    return buf.getvalue()
+
+
 class CloudVision:
     """AI gate client that asks HipiMind's cloud vision model through the connector."""
 
@@ -362,7 +539,13 @@ class CloudVision:
         if kind != "frame" or self.cloud is None:
             return None
         prompt = PROMPT + " 只输出一个 JSON 对象，字段：person, scene（" + "/".join(SCENES) + "）, hot_oil, on_phone_call, note。"
-        res = self.cloud("infer", prompt=prompt, images=[base64.b64encode(payload["jpeg"]).decode()], kind="scene")
+        image = fit_cloud_image(payload["jpeg"])
+        if image is None:
+            self.errors += 1
+            self.ok = False
+            self.last_error = "frame too large for the cloud (install Pillow to scale it)"
+            return None
+        res = self.cloud("infer", prompt=prompt, images=[base64.b64encode(image).decode()], kind="scene")
         if not res.get("ok"):
             self.errors += 1
             self.ok = False
@@ -407,18 +590,26 @@ class RemoteSpeech:
 
 
 class RemoteTTS:
-    """Looks like sherpa's OfflineTts to the Speaker: generate(text) -> .samples/.sample_rate."""
+    """Looks like sherpa's OfflineTts to the Speaker: generate(text) -> .samples/.sample_rate.
 
-    def __init__(self, synth):
-        self.synth = synth
+    Like remote speech-to-text, it is used only while `allowed()` (the AI switch) is true.
+    """
+
+    def __init__(self, synth, allowed=lambda: True):
+        self.synth, self.allowed = synth, allowed
+        self.dropped = 0
 
     def generate(self, text, sid=0, speed=1.0):
+        if not self.allowed():
+            self.dropped += 1
+            raise ModelCallError("unsupported", "AI is off: nothing goes to a remote speech model")
         return WavAudio(self.synth(text))
 
 
 def cloud_transcriber(cloud, language=None):
     def go(wav: bytes) -> str:
-        res = cloud("transcribe", audio=base64.b64encode(wav).decode(), language=language)
+        # an utterance longer than 30 s is cut, not split: the cloud hears its first 30 s
+        res = cloud("transcribe", audio=base64.b64encode(cut_wav(wav)).decode(), language=language)
         if not res.get("ok"):
             raise ModelCallError((res.get("error") or {}).get("code") or "unavailable", "cloud speech-to-text refused")
         return str(res.get("text") or "").strip()
@@ -436,8 +627,21 @@ def cloud_synth(cloud, language=None):
 
 # ---------------------------------------------------------------- "Test connection"
 
+#: The error codes "Test connection" may answer with (HipiMind's protocol, §5.1).
+TEST_CODES = ("connect_failed", "timeout", "unauthorized", "not_found", "model_not_found", "bad_response",
+              "engine_unavailable", "unsupported")
+#: HipiMind cloud refusals mapped onto them; the message keeps the cloud's own code.
+CLOUD_TEST_CODES = {"plan_required": "unsupported", "not_enabled": "unsupported"}
+
+
+def _test_code(code: str) -> str:
+    if code in TEST_CODES:
+        return code
+    return CLOUD_TEST_CODES.get(code, "connect_failed")
+
+
 def test_slot(slot_name: str, slot: dict, key: str | None, cloud=None, engine_check=None,
-              urlopen=urllib.request.urlopen, timeout=TEST_TIMEOUT_S) -> dict:
+              urlopen=None, timeout=TEST_TIMEOUT_S) -> dict:
     """One small real request with exactly this setting. Returns {"ok", "result"|"error"}; never raises."""
     slot = normalize_slot(slot)
     src = slot["source"]
@@ -462,12 +666,16 @@ def test_slot(slot_name: str, slot: dict, key: str | None, cloud=None, engine_ch
                 res = cloud("speak", text="test")
             if not res.get("ok"):
                 err = res.get("error") or {}
-                raise ModelCallError(err.get("code") or "unavailable", err.get("message") or "HipiMind cloud refused")
+                code = str(err.get("code") or "unavailable")
+                raise ModelCallError(_test_code(code), f"HipiMind cloud: {code} — "
+                                                       f"{err.get('message') or 'refused'}")
             return {"ok": True, "result": {"model": "hipimind-cloud", "latency_ms": int((time.time() - t0) * 1000),
                                            "detail": "HipiMind cloud answered"}}
         base, model = slot.get("base_url"), slot.get("model")
+        if slot.get("base_url_error"):
+            raise ModelCallError("connect_failed", slot["base_url_error"])
         if not base:
-            raise ModelCallError("bad_request", "a base URL is needed")
+            raise ModelCallError("connect_failed", "a server address (base URL) is needed")
         if slot_name == "vision":
             content, resp = chat_image(base, model, key, TEST_JPEG, "Reply with OK", timeout, urlopen)
             usage = (resp.get("usage") or {}).get("completion_tokens")
@@ -481,6 +689,6 @@ def test_slot(slot_name: str, slot: dict, key: str | None, cloud=None, engine_ch
             detail, name = f"HTTP 200, {len(wav)} bytes of audio", model
         return {"ok": True, "result": {"model": name, "latency_ms": int((time.time() - t0) * 1000), "detail": detail}}
     except ModelCallError as e:
-        return {"ok": False, "error": {"code": e.code, "message": e.message[:300]}}
+        return {"ok": False, "error": {"code": _test_code(e.code), "message": e.message[:300]}}
     except Exception as e:  # a test must never take the device down
         return {"ok": False, "error": {"code": "bad_response", "message": type(e).__name__}}

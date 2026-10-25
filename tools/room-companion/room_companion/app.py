@@ -15,7 +15,8 @@ from .ai import AIGate
 from .audio import AudioPipeline
 from .events import EventLog
 from .models import (SLOTS, TEST_JPEG, CloudVision, ModelCallError, ModelSettings, OpenAIVision, RemoteSpeech,
-                     RemoteTTS, chat_image, cloud_synth, cloud_transcriber, speech_wav, test_slot, transcribe_wav)
+                     RemoteTTS, chat_image, clean_base_url, cloud_synth, cloud_transcriber, speech_wav, test_slot,
+                     transcribe_wav)
 from .notifiers import make_notifier
 from .policy import CATEGORIES, Policy, parse_policy_command
 from .switches import KEYS, LABELS, Switches, SwitchWriteError, describe
@@ -191,7 +192,7 @@ class App:
             self.model_server, self.ai.client = self._engine_server, self._engine_ai
         elif src == "openai":
             self._park_engine()
-            self.ai.client = OpenAIVision(slot, lambda: self.models.key("vision"))
+            self.ai.client = OpenAIVision(slot, lambda: self.models.key("vision")) if slot.get("base_url") else None
         elif src == "cloud":
             self._park_engine()
             self.ai.client = CloudVision(self._cloud_call)
@@ -216,6 +217,8 @@ class App:
         if src == "off":
             return vad
         if src == "openai":
+            if not slot.get("base_url"):
+                return vad  # no usable server address: hear nothing rather than send anywhere
             def transcribe(wav, slot=slot):
                 return transcribe_wav(slot["base_url"], slot.get("model"), self.models.key("stt"), wav, 30,
                                       language=slot.get("language"))
@@ -227,17 +230,28 @@ class App:
     def _make_tts(self):
         slot = self.models.slot("tts")
         src = slot["source"]
+        # Like remote speech-to-text: text leaves for a remote speech model only while the AI switch is on.
+        ai_on = lambda: bool(self.switches.get("ai"))  # noqa: E731
         if src == "openai":
+            if not slot.get("base_url"):
+                raise ModelCallError("connect_failed", slot.get("base_url_error") or "no server address for speech")
             return RemoteTTS(lambda text, slot=slot: speech_wav(slot["base_url"], slot.get("model"),
-                                                                self.models.key("tts"), text, slot.get("voice"), 30))
+                                                                self.models.key("tts"), text, slot.get("voice"), 30),
+                             allowed=ai_on)
         if src == "cloud":
-            return RemoteTTS(cloud_synth(self._cloud_call))
+            return RemoteTTS(cloud_synth(self._cloud_call), allowed=ai_on)
         if src == "off":
             raise ModelCallError("unsupported", "speech is off")
         return self.speaker._default_tts()
 
     def _can_speak(self) -> bool:
-        return self.speaker is not None and self.models.slot("tts")["source"] != "off"
+        if self.speaker is None:
+            return False
+        src = self.models.slot("tts")["source"]
+        if src == "off":
+            return False
+        # a remote speech model hears nothing while the AI switch is off; the built-in engine may still speak
+        return src == "engine" or bool(self.switches.get("ai"))
 
     def apply_models(self, models: dict, keys: dict | None = None) -> list[str]:
         """A run-time model choice (from the HipiMind page). Returns the slots that changed."""
@@ -276,6 +290,8 @@ class App:
         src = slot["source"]
         if src == "off":
             return "off"
+        if src == "openai" and not slot.get("base_url"):
+            return "error"
         if name == "vision":
             if src == "engine":
                 if self._engine_server is not None:
@@ -349,9 +365,9 @@ class App:
         if name not in SLOTS:
             return {"ok": False, "error": {"code": "bad_request", "message": "unknown slot"}}
         if key is None:
-            saved = self.models.slot(name)
-            if saved.get("base_url") and saved.get("base_url") == str((slot or {}).get("base_url", "")).rstrip("/"):
-                key = self.models.key(name)  # testing the saved server: use the saved key
+            base = clean_base_url((slot or {}).get("base_url"))
+            if base:
+                key = self.models.key(name, base_url=base)  # only a key that was entered for this very server
         return test_slot(name, slot, key, cloud=self._cloud_call, engine_check=self._engine_check)
 
     # ---- reminder settings changed at run time ----
@@ -563,7 +579,10 @@ class App:
             parts.append(self.speaker.describe())
         return "；".join(parts)
 
-    def status(self) -> dict:
+    def status(self, evidence: bool = True) -> dict:
+        """Everything the local page shows. `evidence=False` skips the Windows evidence (process lists,
+        camera/microphone usage), which starts helper processes: the HipiMind connector polls every
+        second and needs none of it."""
         snap = self.switches.snapshot()
         return {
             "switches": {k: snap[k] for k in KEYS},
@@ -580,7 +599,7 @@ class App:
             "speaker": self.speaker.status() if self.speaker is not None else None,
             "broadcast": self.broadcast_status(),
             "models": self.models_state(),
-            "windows": self.windows_evidence() if self.evidence is not None else None,
+            "windows": self.windows_evidence() if evidence and self.evidence is not None else None,
             "interop": self.interop.status() if self.interop is not None else None,
             "feishu": {"configured": getattr(self.notifier, "configured", False),
                        "sent": getattr(self.notifier, "sent", 0),

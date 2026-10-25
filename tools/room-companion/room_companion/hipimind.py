@@ -13,8 +13,10 @@ What leaves this machine, and only to the owner's HipiMind account:
 - the current scene label and its one-line note ("what the AI sees", text only);
 - reminder categories, switch changes, scene changes and a few notices;
 - JPEG frames, only while the owner has the HipiMind page open and asked for live video.
-Never sent: transcripts, audio, the local event log as such, process ids, device
-names, logs. The device token and any model key are never logged.
+Never sent: transcripts, audio, the local event log as such, process ids, device or speaker
+names, client addresses, capture error output, logs. The summary is written here from the
+switch/capture/model facts, never copied from the local status text. The device token and any
+model key are never logged.
 
     python -m room_companion pair --code K7QM-2WXH --name Bedroom      # in-process: uses the app's config
     python -m room_companion.hipimind pair --server https://api.hipimind.com --code K7QM-2WXH --name Bedroom
@@ -38,6 +40,8 @@ import urllib.request
 import uuid
 from datetime import datetime
 
+from .models import clean_base_url
+
 log = logging.getLogger("room_companion.hipimind")
 
 PROTOCOL_VERSION = 1
@@ -56,6 +60,10 @@ SCENE_LABELS = {"laundry": "洗衣服", "cooking": "做饭", "coding": "写代�
                 "sofa_phone": "沙发上玩手机", "sleeping": "睡觉", "other": "其他", "empty": "没人"}
 CATEGORY_LABELS = {"久坐": "久坐提醒", "路由器": "改路由器前备份", "手机": "沙发上看手机", "晾衣服": "晾衣服",
                    "厨房": "做完饭关火通风", "运动后": "运动后补水拉伸"}
+# Spec defaults (HipiMind docs §2) for when a server sends no limits.
+DEFAULT_FRAME_MAX_BYTES = 150_000
+DEFAULT_LIVE_MAX_FPS = 3
+DEFAULT_MESSAGE_MAX_BYTES = 65_536
 NOTICE_TEXT = {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
                "gpu_too_hot": "The local model is paused for 30 minutes to cool down"}
 
@@ -160,8 +168,15 @@ def pair(server: str, code: str, name: str, token_file: str, platform: str | Non
     if not isinstance(token, str) or not token:
         raise PairError(0, "bad_response", "the server did not return a device token")
     write_secret(token_file, token)
-    return {"device_id": data.get("device_id"), "ws_url": data.get("ws_url"),
+    account = data.get("account") if isinstance(data.get("account"), str) else None
+    return {"device_id": data.get("device_id"), "ws_url": data.get("ws_url"), "account": account,
             "token_file": os.path.expanduser(token_file)}
+
+
+def paired_message(res: dict) -> str:
+    """What `pair` prints: which account the camera joined (so a person can see they paired to their own)."""
+    who = f"Paired to {res['account']}" if res.get("account") else "Paired"
+    return f"{who}: device {res['device_id']}; token saved to {res['token_file']} (readable only by you)"
 
 
 class PairError(RuntimeError):
@@ -229,7 +244,10 @@ class AppDevice:
         self.app = app
 
     def status(self) -> dict:
-        st = self.app.status()
+        try:
+            st = self.app.status(evidence=False)  # no Windows helper processes every second
+        except TypeError:
+            st = self.app.status()
         st["events"] = self.app.events.latest(30)
         pol = st.get("policy")
         if isinstance(pol, dict):
@@ -248,7 +266,8 @@ class AppDevice:
             self.app.set_switches(changes, source)
         except (ValueError, SwitchWriteError) as e:
             return 500, {"ok": False, "message": str(e)[:200]}
-        self.app.wait_settled()
+        # HipiMind waits 8 s for the ack: answer with what is true after at most 5 s of settling
+        self.app.wait_settled(timeout=5.0)
         return 200, {"ok": True}
 
     def command(self, text: str, source: str) -> tuple[int, dict]:
@@ -269,6 +288,17 @@ class AppDevice:
 
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
+
+    # camera drivers (when the app has them): config.camera and camera_action
+    @property
+    def camera_capable(self) -> bool:
+        return hasattr(self.app, "set_camera_config")
+
+    def set_camera_config(self, cfg: dict):
+        return self.app.set_camera_config(cfg)
+
+    def camera_action(self, action: str):
+        return self.app.camera_action(action)
 
 
 LocalAPI.models_capable = False
@@ -302,8 +332,9 @@ def _models_state(st: dict) -> dict:
             if isinstance(m.get("name"), str):
                 e["name"] = m["name"][:80]
             if e["source"] == "openai":
-                if isinstance(m.get("base_url"), str):
-                    e["base_url"] = m["base_url"][:200]
+                base = clean_base_url(m.get("base_url"))
+                if base:
+                    e["base_url"] = base[:200]  # never a user name or password, never a non-http address
                 e["has_key"] = m.get("has_key") is True
             out[slot] = e
         return out
@@ -354,17 +385,54 @@ def map_state(st: dict) -> dict:
             if at:
                 entry["at"] = at
             out["scene"] = entry
-    if isinstance(st.get("summary"), str):
-        out["summary"] = st["summary"][:300]
+    # Built here from the facts above, never copied from the local status text: that names hardware
+    # (speaker and microphone names) and carries capture error output.
+    out["summary"] = summarize(out)
     return out
+
+
+def summarize(state: dict) -> str:
+    """One plain sentence from the allow-listed state: switches, capture and model readiness only."""
+    sw = state.get("switches") or {}
+    cap = state.get("capture") or {}
+    words = {"running": "in use", "off": "released", "starting": "starting", "waiting_device": "no device",
+             "error": "problem"}
+    parts = []
+    for key, name in (("video", "Video"), ("audio", "Sound")):
+        c = cap.get(key)
+        parts.append(f"{name} {'on' if sw.get(key) else 'off'}" + (f" ({words[c]})" if c in words else ""))
+    if not sw.get("ai"):
+        parts.append("AI off (nothing goes to any model)")
+    else:
+        vision = (state.get("models") or {}).get("vision") or {}
+        where = {"engine": "on this device", "openai": "on your server", "cloud": "HipiMind cloud"}.get(
+            vision.get("source"), "")
+        ready = vision.get("state")
+        parts.append("AI on" + (f", vision {where}" if where else "") + (f" ({ready})" if ready in MODEL_STATES else ""))
+    return "; ".join(parts)[:300]
+
+
+def _source_label(source) -> str:
+    """Where a switch change came from, as a fixed word: never a client address or a host name."""
+    s = str(source or "")
+    low = s.lower()
+    if low.startswith("hipimind"):
+        return "HipiMind"
+    if "网页" in s or "web" in low or "browser" in low:
+        return "web (local)"
+    if "语音" in s or "voice" in low:
+        return "voice"
+    if "飞书" in s or "feishu" in low or "lark" in low:
+        return "feishu"
+    return "device"
 
 
 def _switch_text(changes: dict, source) -> str:
     names = {"video": "Video", "audio": "Audio", "ai": "AI"}
     parts = [f"{names[k]} {'on' if v else 'off'}" for k, v in changes.items() if k in names]
     text = ", ".join(parts) or "Switches unchanged"
-    if isinstance(source, str) and source:
-        text += f" ({source[:60]})"
+    if source:
+        text += f" ({_source_label(source)})"
     return text
 
 
@@ -435,12 +503,38 @@ class EventDiffer:
 
 # ---------------------------------------------------------------- frames
 
+def jpeg_size(data: bytes) -> tuple[int, int] | None:
+    """(width, height) from a JPEG's frame header, without an image library; None if not found."""
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    i, n = 2, len(data)
+    while i + 9 < n:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        length = int.from_bytes(data[i + 2:i + 4], "big")
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+        i += 2 + length
+    return None
+
+
 def fit_frame(jpeg: bytes, max_width: int, quality: int, max_bytes: int) -> bytes | None:
-    """Downscale to max_width (Pillow, if installed) and keep under max_bytes; None if it cannot fit."""
+    """Downscale to max_width (Pillow, if installed) and keep under max_bytes; None if it cannot fit.
+
+    Without Pillow nothing can be scaled: a frame goes only if it is already within both limits.
+    """
     try:
         from PIL import Image
     except ImportError:
-        return jpeg if len(jpeg) <= max_bytes else None
+        size = jpeg_size(jpeg)
+        if size is None or size[0] > max_width or len(jpeg) > max_bytes:
+            return None
+        return jpeg
     try:
         im = Image.open(io.BytesIO(jpeg))
         if im.width > max_width:
@@ -487,6 +581,11 @@ class Bridge:
         self.stopped = asyncio.Event()
         self.stop_reason: str | None = None
         self._last_status_error = None
+        # Commands run off the receive loop, so pings and cloud answers keep flowing while one works:
+        # set/config/live/camera_action in order on one lane, Test connection on its own (at most 2).
+        self.control_q: asyncio.Queue | None = None
+        self.side_tasks: set[asyncio.Task] = set()
+        self.test_slots: asyncio.Semaphore | None = None
 
     # ---- local side ----
     @property
@@ -497,7 +596,16 @@ class Bridge:
         caps = ["video", "audio", "ai", "live", "reminder_config"]
         if self.models_capable:
             caps += ["model_config", "model_test"]
+        if getattr(self.device, "camera_capable", False):
+            caps += ["camera_config", "camera_action"]
         return caps
+
+    def _limit(self, name: str, default: int) -> int:
+        try:
+            v = int(self.limits.get(name))
+            return v if v > 0 else default
+        except (TypeError, ValueError):
+            return default
 
     async def poll_once(self):
         try:
@@ -531,14 +639,21 @@ class Bridge:
                 pass
 
     # ---- connection ----
-    async def _send_json(self, obj: dict):
+    async def _send_json(self, obj: dict) -> bool:
         ws = self.ws
         if ws is None:
-            return
+            return False
+        raw = json.dumps(obj, ensure_ascii=False)
+        cap = (self._limit("cloud_message_max_bytes", self._limit("message_max_bytes", DEFAULT_MESSAGE_MAX_BYTES))
+               if obj.get("type") in CLOUD_KINDS else self._limit("message_max_bytes", DEFAULT_MESSAGE_MAX_BYTES))
+        if len(raw) > cap:  # the server would close the socket (4413); refuse here instead
+            log.warning("not sending a %s message of %d characters (limit %d)", obj.get("type"), len(raw), cap)
+            return False
         try:
-            await ws.send(json.dumps(obj, ensure_ascii=False))
+            await ws.send(raw)
+            return True
         except Exception:
-            pass
+            return False
 
     def _open(self, token: str):
         if self._connect is not None:
@@ -627,6 +742,9 @@ class Bridge:
             return None
         self.ws, self.ready = ws, False
         sender = watcher = None
+        self.control_q = asyncio.Queue()
+        self.test_slots = asyncio.Semaphore(2)
+        worker = asyncio.create_task(self._control_worker(self.control_q))
         try:
             if self.state is None:
                 await self.poll_once()
@@ -658,9 +776,10 @@ class Bridge:
             if not hasattr(e, "rcvd") and not hasattr(e, "code"):
                 log.warning("connection error (%s)", type(e).__name__)
         finally:
-            for task in (sender, watcher):
+            for task in (sender, watcher, worker, *self.side_tasks):
                 if task is not None:
                     task.cancel()
+            self.side_tasks.clear()
             self.ws, self.ready = None, False
             await self._stop_live()
             for fut in self.cloud_waiters.values():
@@ -688,6 +807,8 @@ class Bridge:
 
     # ---- messages ----
     async def handle(self, msg: dict):
+        """Called from the receive loop: anything that can take time is handed to a lane, so this
+        returns at once and pings and cloud answers are never stuck behind a command."""
         t = msg.get("type")
         if t == "welcome":
             self.device_id = msg.get("device_id")
@@ -697,24 +818,65 @@ class Bridge:
             self.state_changed.set()
             for ev in list(self.unacked.values()):
                 await self._send_json(ev)
+            if isinstance(msg.get("config"), dict) and self.control_q is not None:
+                # what the owner changed while this device was offline
+                self.control_q.put_nowait({"type": "_welcome_config", "config": msg["config"]})
         elif t == "ping":
             await self._send_json({"type": "pong", "t": msg.get("t")})
         elif t == "event_ack":
             self.unacked.pop(msg.get("id"), None)
-        elif t == "set":
-            await self.on_set(msg)
-        elif t == "config":
-            await self.on_config(msg)
+        elif t in ("set", "config", "live", "camera_action"):
+            if self.control_q is not None:
+                self.control_q.put_nowait(msg)
+            else:
+                await self._run_command(msg)
         elif t == "test_model":
-            await self.on_test_model(msg)
-        elif t == "live":
-            await self.on_live(msg)
+            task = asyncio.create_task(self._run_test(msg))
+            self.side_tasks.add(task)
+            task.add_done_callback(self.side_tasks.discard)
         elif isinstance(t, str) and t.endswith("_result") and t[:-7] in CLOUD_KINDS:
             fut = self.cloud_waiters.pop(msg.get("req"), None)
             if fut is not None and not fut.done():
                 fut.set_result(msg)
         elif t == "error":
             log.warning("HipiMind reported an error: %s", str(msg.get("code"))[:60])
+
+    async def _control_worker(self, q: asyncio.Queue):
+        while True:
+            msg = await q.get()
+            await self._run_command(msg)
+
+    async def _run_command(self, msg: dict):
+        """One command; any failure is answered with ack ok:false, never by dropping the connection."""
+        t = msg.get("type")
+        try:
+            if t == "set":
+                await self.on_set(msg)
+            elif t == "config":
+                await self.on_config(msg)
+            elif t == "live":
+                await self.on_live(msg)
+            elif t == "camera_action":
+                await self.on_camera_action(msg)
+            elif t == "_welcome_config":
+                ok, err, ignored = await self._apply_config(msg["config"], None, from_welcome=True)
+                if not ok:
+                    log.warning("could not apply the saved settings from HipiMind (%s)", (err or {}).get("code"))
+        except Exception as e:
+            log.warning("a %s command failed (%s)", t, type(e).__name__)
+            if t != "_welcome_config":
+                await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
+                                       "error": {"code": "bad_request", "message": f"could not apply ({type(e).__name__})"}})
+
+    async def _run_test(self, msg: dict):
+        try:
+            async with self.test_slots:
+                await self.on_test_model(msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
+                                   "error": {"code": "bad_response", "message": type(e).__name__}})
 
     async def _ack(self, req, ok: bool, error: dict | None = None, **extra):
         await self.poll_once()
@@ -743,36 +905,72 @@ class Bridge:
 
     async def on_config(self, msg: dict):
         cfg = msg.get("config") if isinstance(msg.get("config"), dict) else {}
+        keys = msg.get("model_keys") if isinstance(msg.get("model_keys"), dict) else None
+        ok, err, ignored = await self._apply_config(cfg, keys)
+        if ok:
+            await self._ack(msg.get("req"), True, ignored=ignored)
+        else:
+            await self._ack(msg.get("req"), False, err)
+
+    async def _apply_config(self, cfg: dict, keys: dict | None, from_welcome: bool = False):
+        """Apply a Config (from a `config` command, or the one in `welcome`). Returns (ok, error, ignored).
+
+        From `welcome`, a missing or null part means "not set on the page" and leaves the device's own
+        setting alone: the welcome can set quiet hours, never clear the ones in the device's config.
+        """
         ignored = []
-        rem = cfg.get("reminders") if isinstance(cfg.get("reminders"), dict) else {}
+        rem = dict(cfg.get("reminders")) if isinstance(cfg.get("reminders"), dict) else {}
+        if from_welcome and rem.get("quiet_hours") is None:
+            rem.pop("quiet_hours", None)
         level = rem.get("level")
         if level is not None:
-            if level not in MODE_COMMAND:
-                return await self._ack(msg.get("req"), False, {"code": "bad_request", "message": "unknown level"})
+            if not isinstance(level, str) or level not in MODE_COMMAND:
+                return False, {"code": "bad_request", "message": "unknown level"}, ignored
             current = ((self.state or {}).get("reminders") or {}).get("level")
             if level != current:
                 code, body = await asyncio.to_thread(self.device.command, MODE_COMMAND[level], "HipiMind")
                 if code != 200:
-                    return await self._ack(msg.get("req"), False,
-                                           {"code": "local_error", "message": str(body.get("message") or code)[:200]})
+                    return False, {"code": "local_error", "message": str(body.get("message") or code)[:200]}, ignored
         if "quiet_hours" in rem:
             if hasattr(self.device, "set_quiet_hours"):
                 try:
                     await asyncio.to_thread(self.device.set_quiet_hours, rem["quiet_hours"])
                 except (ValueError, TypeError, AttributeError):
-                    return await self._ack(msg.get("req"), False,
-                                           {"code": "bad_request", "message": "quiet hours must be HH:MM"})
+                    return False, {"code": "bad_request", "message": "quiet hours must be HH:MM"}, ignored
             else:
                 ignored.append("reminders.quiet_hours")
         models = cfg.get("models") if isinstance(cfg.get("models"), dict) else None
-        keys = msg.get("model_keys") if isinstance(msg.get("model_keys"), dict) else None
         if models is not None or keys:
             if self.models_capable:
                 changed = await asyncio.to_thread(self.device.apply_models, models or {}, keys)
                 log.info("models changed for %s", ",".join(changed) or "nothing")
             else:
                 ignored.append("models")
-        await self._ack(msg.get("req"), True, ignored=ignored)
+        camera = cfg.get("camera") if isinstance(cfg.get("camera"), dict) else None
+        if camera is not None:
+            if getattr(self.device, "camera_capable", False):
+                res = await asyncio.to_thread(self.device.set_camera_config, camera)
+                if isinstance(res, tuple) and len(res) == 2 and not res[0]:
+                    return False, res[1] if isinstance(res[1], dict) else {"code": "bad_request",
+                                                                            "message": "camera setting refused"}, ignored
+            else:
+                ignored.append("camera")
+        await self.poll_once()
+        return True, None, ignored
+
+    async def on_camera_action(self, msg: dict):
+        action = msg.get("action")
+        if not getattr(self.device, "camera_capable", False):
+            return await self._ack(msg.get("req"), False, {"code": "unsupported", "message": "no camera drivers"})
+        if action not in ("pair", "recover", "wake"):
+            return await self._ack(msg.get("req"), False, {"code": "bad_request", "message": "unknown action"})
+        ok, detail = await asyncio.to_thread(self.device.camera_action, action)
+        if ok:
+            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": True,
+                                   "result": {"detail": str(detail or "")[:200]}})
+        else:
+            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
+                                   "error": {"code": "driver_unavailable", "message": str(detail or "")[:200]}})
 
     async def on_test_model(self, msg: dict):
         if not self.models_capable:
@@ -791,12 +989,20 @@ class Bridge:
         await self._stop_live()
         if msg.get("on") is True:
             conf = self.cfg.get("live") or {}
-            fps = min(float(msg.get("fps") or 1), float(conf.get("max_fps", 2)),
-                      float(self.limits.get("live_max_fps", 5)))
-            width = int(min(int(msg.get("max_width") or 960), int(conf.get("max_width", 960))))
+            try:
+                want_fps = float(msg.get("fps") or 1)
+                want_width = int(msg.get("max_width") or 960)
+                if want_fps <= 0 or want_width <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return await self._ack(msg.get("req"), False, {"code": "bad_request",
+                                                               "message": "fps and max_width must be positive numbers"})
+            fps = min(want_fps, float(conf.get("max_fps", DEFAULT_LIVE_MAX_FPS)),
+                      float(self._limit("live_max_fps", DEFAULT_LIVE_MAX_FPS)))
+            width = min(want_width, int(conf.get("max_width", 960)))
             self.live_params = {"on": True, "fps": max(0.1, fps), "width": width,
                                 "quality": int(conf.get("jpeg_quality", 70)),
-                                "max_bytes": int(self.limits.get("frame_max_bytes", 300_000))}
+                                "max_bytes": self._limit("frame_max_bytes", DEFAULT_FRAME_MAX_BYTES)}
             self.live_task = asyncio.create_task(self._live_loop())
         await self._ack(msg.get("req"), True)
 
@@ -840,10 +1046,16 @@ class Bridge:
             return {"ok": False, "error": {"code": "rate_limited", "message": "too many cloud requests this minute"}}
         times.append(now)
         req = "r-" + uuid.uuid4().hex[:12]
+        body = {k: v for k, v in (payload or {}).items() if v is not None}
+        message = {"type": kind, "req": req, **body}
+        cap = self._limit("cloud_message_max_bytes", self._limit("message_max_bytes", DEFAULT_MESSAGE_MAX_BYTES))
+        if len(json.dumps(message, ensure_ascii=False)) > cap:
+            times.pop()
+            return {"ok": False, "error": {"code": "bad_request",
+                                           "message": f"the request is larger than HipiMind accepts ({cap} characters)"}}
         fut = asyncio.get_running_loop().create_future()
         self.cloud_waiters[req] = fut
-        body = {k: v for k, v in (payload or {}).items() if v is not None}
-        await self._send_json({"type": kind, "req": req, **body})
+        await self._send_json(message)
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
@@ -903,7 +1115,7 @@ def pair_from_app_config(argv, app_cfg: dict) -> int:
     except PairError as e:
         print(f"pairing failed: {e.code}: {e.message}", file=sys.stderr)
         return 2
-    print(f"paired: device {res['device_id']}; token saved to {res['token_file']} (readable only by you)")
+    print(paired_message(res))
     if not app_cfg.get("hipimind"):
         print('add a "hipimind" section to the config so the app connects (see docs/hipimind.md)', file=sys.stderr)
     return 0
@@ -934,7 +1146,7 @@ def main(argv=None) -> int:
         except PairError as e:
             print(f"pairing failed: {e.code}: {e.message}", file=sys.stderr)
             return 2
-        print(f"paired: device {res['device_id']}; token saved to {res['token_file']} (readable only by you)")
+        print(paired_message(res))
         return 0
     cfg = load_config(args.config)
     bridge = Bridge(cfg)

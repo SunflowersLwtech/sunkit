@@ -611,7 +611,8 @@ class PairTest(unittest.TestCase):
 class MappingTest(unittest.TestCase):
     def test_missing_fields_do_not_break_the_mapping_and_unknown_states_read_as_error(self):
         self.assertEqual(hm.map_state({}), {"switches": {"video": False, "audio": False, "ai": False},
-                                            "models": {"vision": {"source": "off", "state": "off"}}})
+                                            "models": {"vision": {"source": "off", "state": "off"}},
+                                            "summary": "Video off; Sound off; AI off (nothing goes to any model)"})
         st = hm.map_state({"switches": {"video": "yes", "ai": True}, "video": {"state": "exploded"}})
         self.assertEqual(st["switches"], {"video": False, "audio": False, "ai": True})
         self.assertEqual(st["capture"], {"video": "error"})

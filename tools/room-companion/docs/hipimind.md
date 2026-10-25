@@ -13,15 +13,19 @@ The wire protocol is HipiMind's "connect your own room device" contract:
 
 Only to your HipiMind account:
 
-- the three switches, and whether the camera, microphone and each model are running;
+- the three switches, and whether the camera, microphone and each model are running, plus a one-line
+  summary the connector writes from those same facts (never the local status text, which names
+  hardware and carries capture errors);
 - the current scene label and its short note ("what the AI sees" — text, never an image);
 - reminder categories, switch changes, scene changes (at most one every 10 minutes) and a few
-  notices (camera missing, model paused for heat);
+  notices (camera missing, model paused for heat). A switch change says where it came from with a
+  fixed word — `HipiMind`, `web (local)`, `voice`, `feishu` or `device` — never an address;
 - the model settings you chose (server address and model name; **never a key**);
 - JPEG frames, **only while you have the HipiMind page open and asked for live video**;
   HipiMind forwards them to your browser and keeps nothing.
 
-Never sent: transcripts, audio, the local event log as such, process ids, device names, logs.
+Never sent: transcripts, audio, the local event log as such, process ids, device or speaker names,
+client addresses, capture error output, logs, user names or passwords in a server address.
 A slot you set to `cloud` sends that job's input (a frame, an utterance, a reminder's text) to
 HipiMind's model; see "Models" below.
 
@@ -44,7 +48,8 @@ pip install 'room-companion[hipimind]'          # adds websockets (and pillow, f
 
    This reads the `hipimind` section of room-companion's config (below) for the server and the
    token file, exchanges the code for a device token, and writes the token to `token_file` with
-   mode 600. The token is never printed. Pair again (with a new code) if you remove the device on
+   mode 600. The token is never printed. It prints which account the camera joined
+   (`Paired to a***e@example.com`): if that is not your account, remove the device on the website. Pair again (with a new code) if you remove the device on
    the website or lose the file.
 3. If room-companion is already running with a `hipimind` section, it notices the new token
    within 30 seconds and connects; no restart is needed. Otherwise add the section and restart it.
@@ -121,7 +126,13 @@ no change: the connector runs inside the app. Check it with `journalctl --user -
 Each job has its own model, chosen in the `models` section of the config or on the HipiMind page
 (**Models**). A choice made on the page wins over the config file and is kept in
 `<data_dir>/state/models.json`; keys typed on the page are kept in `<data_dir>/state/model_keys.json`.
-Both files are mode 600 and HipiMind does not keep the keys.
+Both files are mode 600 and HipiMind does not keep the keys. A key belongs to the server address
+it was typed for: moving a slot to another address does not take the key along (type it again
+for the new server); moving back to the first address uses it again.
+
+Changes made on the page while the device was offline arrive when it reconnects (the server sends
+them in `welcome`). From `welcome`, a part that is missing or `null` leaves the device's own
+setting alone — it can set quiet hours, never clear the ones in the config file.
 
 | slot | does | `openai` source calls |
 |---|---|---|
@@ -138,9 +149,17 @@ Both files are mode 600 and HipiMind does not keep the keys.
 
 Rules that do not change with the source:
 
-- **Nothing goes to any model while the AI switch is off.** For `stt` this means: with `openai`
-  or `cloud`, utterances are sent only while AI is on (voice commands need AI on). With `engine`,
-  speech is recognized locally whatever the AI switch says, as before.
+- **Nothing goes to any remote model while the AI switch is off.** For `stt` and `tts` with
+  `openai` or `cloud`, nothing is sent while AI is off: no utterances, and no text to speak
+  (spoken reminders and replies stay silent; notifications still go out). With `engine`, speech
+  is recognized and spoken locally whatever the AI switch says, as before.
+- A base URL must be a plain `http://` or `https://` address with a host name — no other scheme,
+  no user name or password in it, no `#`. Redirects are not followed, an answer is read up to
+  2 MB (8 MB for speech audio), and each request must finish within about twice its timeout.
+- `cloud` requests fit HipiMind's limits: a frame is scaled to at most 768 px on the long side
+  and 300 KB (Pillow needed for frames bigger than that), and an utterance longer than 30 s is
+  cut to its first 30 s. A request that would still be too large is refused on the device,
+  never sent (the server would close the connection).
 - A failing model never takes room-companion down: vision answers nothing, speech is dropped, and
   the slot shows `error` on the website.
 
@@ -167,7 +186,9 @@ silence for speech-to-text, the word "test" for speech. For `engine` it checks t
 and makes a real call when the engine is already running. The answer is the model's name and the
 time it took, or one of: `connect_failed`, `timeout` (15 s), `unauthorized` (wrong or missing key),
 `not_found` (usually a base URL without `/v1`), `model_not_found`, `bad_response`,
-`engine_unavailable`.
+`engine_unavailable`, `unsupported`. A `cloud` refusal is reported as `unsupported` (not on your
+plan or not enabled) or `connect_failed` (allowance used, rate limited, unavailable), with
+HipiMind's own code in the message.
 
 ## 5. Connect your own model
 

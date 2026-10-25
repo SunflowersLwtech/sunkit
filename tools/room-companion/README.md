@@ -210,9 +210,10 @@ the HipiMind page):
 `openai` means any OpenAI-compatible server this machine reaches: Ollama, vLLM, LM Studio,
 `llama-server` elsewhere, a speech server such as Speaches, or a hosted provider with a key
 (`api_key_file`). `cloud` uses HipiMind's models through the HipiMind connector, and `off` turns
-the job off. Nothing goes to any model while the AI switch is off; with `stt` on `openai` or
-`cloud` that includes speech, so voice commands then need AI on. With no `models` section every
-slot is `engine` and nothing changes. Details, config examples and the recommended downloads with
+the job off. Nothing goes to any remote model while the AI switch is off; with `stt` or `tts` on
+`openai` or `cloud` that includes speech, so voice commands and spoken reminders then need AI on.
+A base URL must be a plain `http(s)://` address (no credentials, no `#`), and a key stays with the
+address it was typed for. With no `models` section every slot is `engine` and nothing changes. Details, config examples and the recommended downloads with
 their checksums: [docs/hipimind.md](docs/hipimind.md#4-models).
 
 ```json
@@ -232,6 +233,7 @@ job with a **Test connection** button — over one outgoing WebSocket (no port f
 ```
 pip install ".[hipimind]"
 python -m room_companion pair --code K7QM-2WXH --name Bedroom   # code from hipimind.com/room
+# prints "Paired to a***e@example.com": check it is your account
 ```
 
 then add `"hipimind": {"token_file": "…"}` to the config and restart. What is sent (and what never
