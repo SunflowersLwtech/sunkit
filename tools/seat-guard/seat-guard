@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""seat-guard — when the Claude seat this machine is on runs out, move every session to another seat.
+
+For Claude Code that keeps its sign-in in <config dir>/.credentials.json (Linux, containers, WSL). macOS keeps
+it in the keychain: use cc-switch there. magpie's own used-up switch can't do this for Claude Code that talks
+to Anthropic directly: magpie reads only the account Claude Code is signed in to, so it never knows what a
+spare seat has left. This asks Anthropic's /api/oauth/usage for every seat, as cc-switch does.
+
+  seat-guard status [--json]          the active seat and every saved seat, with 5h/7d use
+  seat-guard tick [--dry-run]         the rule, from cron every 2 minutes: when the active seat's 5-hour window is
+                                      at HIGH (95%) or more, or its 7-day at 99%, switch to the saved seat with the
+                                      least 5-hour use, if that is under LOW (80%)
+  seat-guard switch <email>           switch now
+  seat-guard import <dir>             save the sign-in `CLAUDE_CONFIG_DIR=<dir> claude auth login` made, then
+                                      delete <dir>'s copy of it
+  seat-guard import-magpie [<file>]   save the spare Claude seats in a magpie logins.json, and take them out of it
+
+How a switch lands (cc-switch's mechanism, measured on Claude Code 2.1.301): before each API request a running
+Claude Code checks whether .credentials.json changed (its mtime), so running and future sessions move on their
+next request. A request in flight finishes on the old seat; a turn that already stopped on "usage limit reached"
+needs any next message.
+
+Refresh tokens are single-use, so each seat's token family sits in exactly one place: the active seat in
+.credentials.json, the others in <config dir>/.seat-guard/<email>.json. A switch saves the outgoing seat's
+current tokens to its file first, under Claude Code's own refresh and storage locks, then loads the incoming
+one. A saved seat whose access token has expired is refreshed here, its only holder. Each machine signs in to
+each seat on its own; never copy a family between machines.
+"""
+import argparse, contextlib, json, os, sys, time, urllib.error, urllib.request
+
+CONFIG_DIR = os.path.abspath(os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"))
+CREDS = os.path.join(CONFIG_DIR, ".credentials.json")
+GLOBAL = os.path.join(CONFIG_DIR, ".claude.json") if os.environ.get("CLAUDE_CONFIG_DIR") \
+    else os.path.expanduser("~/.claude.json")
+SLOTS = os.path.join(CONFIG_DIR, ".seat-guard")
+STATE = os.path.join(SLOTS, "state.json")
+LOG = os.path.join(SLOTS, "seat-guard.log")
+USAGE_URL = os.environ.get("SEAT_GUARD_USAGE_URL") or "https://api.anthropic.com/api/oauth/usage"
+TOKEN_URL = os.environ.get("SEAT_GUARD_TOKEN_URL") or "https://platform.claude.com/v1/oauth/token"
+CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+HIGH = float(os.environ.get("SEAT_GUARD_HIGH") or 95)
+LOW = float(os.environ.get("SEAT_GUARD_LOW") or 80)
+WEEK_HIGH = 99.0
+MIN_GAP_S = 300
+
+
+class Fail(Exception):
+    pass
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def log(msg):
+    os.makedirs(SLOTS, mode=0o700, exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(time.strftime("%Y-%m-%dT%H:%M:%S%z ") + msg + "\n")
+
+
+def read_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return default
+
+
+def write_json(path, obj, mode=0o600):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = f"{path}.seat-guard-{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=1 if path == STATE else None, ensure_ascii=False)
+    try:
+        os.replace(tmp, path)
+    except OSError as e:
+        # a file bind-mounted on its own into a container (/root/.claude.json) can't be renamed over: EBUSY.
+        # Write it in place instead.
+        if e.errno not in (16, 18) or not os.path.exists(path):
+            os.remove(tmp)
+            raise
+        with open(tmp, encoding="utf-8") as src, open(path, "r+", encoding="utf-8") as dst:
+            data = src.read()
+            dst.seek(0)
+            dst.write(data)
+            dst.truncate()
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.remove(tmp)
+    if read_json(path) != obj:
+        raise Fail(f"read-back of {path} does not match")
+
+
+@contextlib.contextmanager
+def dir_lock(path, stale_s, wait_s=90):
+    """proper-lockfile compatible, as Claude Code takes them: a directory, stale when its mtime is old"""
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            os.mkdir(path)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.stat(path).st_mtime > stale_s:
+                    os.rmdir(path)
+                    log(f"broke stale lock {path}")
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.time() > deadline:
+                raise Fail(f"lock busy: {path}")
+            time.sleep(0.2)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.rmdir(path)
+
+
+@contextlib.contextmanager
+def claude_locks():
+    # the same lock directories, in the same order, as Claude Code's own refresh and credential writes
+    with dir_lock(os.path.join(CONFIG_DIR, ".oauth_refresh.lock"), 60), \
+         dir_lock(os.path.join(CONFIG_DIR, ".storage-write.lock"), 15):
+        yield
+
+
+def slot_path(email):
+    return os.path.join(SLOTS, "".join(c if c.isalnum() or c in "@.-_" else "_" for c in email) + ".json")
+
+
+def active_email():
+    acct = (read_json(GLOBAL, {}) or {}).get("oauthAccount") or {}
+    return acct.get("emailAddress"), acct
+
+
+def set_oauth_account(acct):
+    """oauthAccount, what /status shows and which seat Claude Code takes itself to be on"""
+    if not acct:
+        return
+    g = read_json(GLOBAL)
+    if g is None:
+        raise Fail(f"cannot read {GLOBAL}")
+    g["oauthAccount"] = acct
+    write_json(GLOBAL, g)
+
+
+def saved_seats():
+    out = {}
+    if os.path.isdir(SLOTS):
+        for n in sorted(os.listdir(SLOTS)):
+            if n.endswith(".json") and n != "state.json":
+                s = read_json(os.path.join(SLOTS, n))
+                if s and s.get("email"):
+                    out[s["email"]] = s
+    return out
+
+
+def http_json(url, data=None, headers=None, timeout=20):
+    body = json.dumps(data).encode() if data is not None else None
+    h = {"User-Agent": "seat-guard", **(headers or {})}
+    if body is not None:
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=body, headers=h, method="POST" if body is not None else "GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def refresh(o):
+    data = {"grant_type": "refresh_token", "refresh_token": o["refreshToken"], "client_id": CLIENT_ID}
+    if o.get("scopes"):
+        data["scope"] = " ".join(o["scopes"])
+    try:
+        r = http_json(TOKEN_URL, data)
+    except urllib.error.HTTPError as e:
+        raise Fail(f"refresh refused ({e.code}); this seat needs a new sign-in")
+    o["accessToken"] = r["access_token"]
+    o["refreshToken"] = r.get("refresh_token") or o["refreshToken"]
+    o["expiresAt"] = now_ms() + int(r.get("expires_in") or 3600) * 1000
+    if r.get("scope"):
+        o["scopes"] = r["scope"].split()
+    return o
+
+
+def usage(o):
+    if not o.get("accessToken") or (o.get("expiresAt") or 0) < now_ms() + 60000:
+        return None
+    try:
+        raw = http_json(USAGE_URL, headers={"Authorization": "Bearer " + o["accessToken"],
+                                            "anthropic-beta": "oauth-2025-04-20"})
+    except Exception:
+        return None
+    out = {}
+    for k in ("five_hour", "seven_day"):
+        v = raw.get(k)
+        out[k] = round(float(v["utilization"]), 1) if isinstance(v, dict) and v.get("utilization") is not None else None
+    return out
+
+
+def saved_usage(email):
+    """a saved seat's use; its access token is refreshed first when it has expired (this file is its only holder)"""
+    with dir_lock(slot_path(email) + ".lock", 60):
+        seat = read_json(slot_path(email))
+        o = seat["claudeAiOauth"]
+        if (o.get("expiresAt") or 0) < now_ms() + 120000:
+            refresh(o)
+            seat["refreshed_at"] = now_ms()
+            write_json(slot_path(email), seat)
+            log(f"refreshed saved seat {email}")
+    return usage(o)
+
+
+PROFILE_URL = os.environ.get("SEAT_GUARD_PROFILE_URL") or "https://api.anthropic.com/api/oauth/profile"
+
+
+def whoami(o):
+    """(email, oauthAccount built from the profile) for access token o, from Anthropic; (None, None) if unreadable.
+    The oauthAccount label in .claude.json is not trusted for this: a running Claude Code can write its old label
+    back after a switch, and a family saved under the wrong name would overwrite another seat's."""
+    if not o.get("accessToken") or (o.get("expiresAt") or 0) < now_ms() + 60000:
+        return None, None
+    try:
+        d = http_json(PROFILE_URL, headers={"Authorization": "Bearer " + o["accessToken"],
+                                            "anthropic-beta": "oauth-2025-04-20"})
+    except Exception:
+        return None, None
+    a, org = d.get("account") or {}, d.get("organization") or {}
+    if not a.get("email"):
+        return None, None
+    return a["email"], {"accountUuid": a.get("uuid"), "emailAddress": a["email"], "displayName": a.get("display_name"),
+                        "fullName": a.get("full_name"), "accountCreatedAt": a.get("created_at"),
+                        "organizationUuid": org.get("uuid"), "organizationName": org.get("name"),
+                        "organizationType": org.get("organization_type"), "billingType": org.get("billing_type"),
+                        "hasExtraUsageEnabled": org.get("has_extra_usage_enabled"), "seatTier": org.get("seat_tier"),
+                        "subscriptionCreatedAt": org.get("subscription_created_at"),
+                        "organizationRateLimitTier": org.get("rate_limit_tier"),
+                        "ccOnboardingFlags": org.get("cc_onboarding_flags") or {}, "profileFetchedAt": now_ms()}
+
+
+def load_state():
+    return read_json(STATE, {"history": []})
+
+
+def switch(target, reason):
+    if target not in saved_seats():
+        raise Fail(f"no saved seat {target}; saved: {', '.join(saved_seats()) or 'none'}")
+    with claude_locks(), dir_lock(slot_path(target) + ".lock", 60):
+        blob = read_json(CREDS)
+        cur = (blob or {}).get("claudeAiOauth") or {}
+        label, label_acct = active_email()
+        cur_email, prof_acct = whoami(cur)
+        if not cur.get("refreshToken") or not cur_email:
+            raise Fail("can't tell from Anthropic whose the active sign-in is; not touching it")
+        cur_acct = label_acct if label == cur_email else prof_acct
+        if cur_email == target:
+            if label != cur_email:
+                set_oauth_account(prof_acct)
+            return f"already on {target}"
+        incoming = read_json(slot_path(target))
+        if not (incoming.get("claudeAiOauth") or {}).get("refreshToken"):
+            raise Fail(f"saved seat {target} has no tokens")
+        if not (incoming.get("oauthAccount") or {}).get("emailAddress"):
+            raise Fail(f"saved seat {target} has no oauthAccount; not switching to it")
+        global_before = read_json(GLOBAL)
+        # the outgoing family goes to its own file before anything else is written
+        write_json(slot_path(cur_email), {"email": cur_email, "oauthAccount": cur_acct,
+                                           "claudeAiOauth": cur, "saved_at": now_ms()})
+        new_blob = dict(blob)
+        new_blob["claudeAiOauth"] = incoming["claudeAiOauth"]   # mcpOAuth and the rest stay
+        try:
+            set_oauth_account(incoming["oauthAccount"])
+            write_json(CREDS, new_blob)
+        except Exception:
+            # back to where it was: the outgoing seat stays active, its saved copy is dropped again
+            with contextlib.suppress(Exception):
+                write_json(CREDS, blob)
+            with contextlib.suppress(Exception):
+                if global_before is not None:
+                    write_json(GLOBAL, global_before)
+            with contextlib.suppress(Exception):
+                os.remove(slot_path(cur_email))
+            raise
+        os.remove(slot_path(target))   # its family lives in .credentials.json alone now
+    st = load_state()
+    st["history"] = (st.get("history") or [])[-49:] + [{"at": now_ms(), "from": cur_email, "to": target, "why": reason}]
+    st["last_switch"] = now_ms()
+    write_json(STATE, st)
+    log(f"switch {cur_email} -> {target}: {reason}")
+    return f"switched {cur_email} -> {target} ({reason})"
+
+
+def tick(dry):
+    cur = (read_json(CREDS) or {}).get("claudeAiOauth") or {}
+    label, _ = active_email()
+    cur_email, prof_acct = whoami(cur)
+    if cur_email and label != cur_email:
+        with claude_locks():
+            set_oauth_account(prof_acct)
+        log(f"oauthAccount said {label} but the active token is {cur_email}; label fixed")
+    cur_email = cur_email or label
+    u = usage(cur)
+    if u is None:
+        return f"active {cur_email}: use not readable now; nothing to do"
+    five, week = u["five_hour"] or 0, u["seven_day"] or 0
+    if five < HIGH and week < WEEK_HIGH:
+        return f"active {cur_email}: 5h {u['five_hour']}% 7d {u['seven_day']}%"
+    if now_ms() - (load_state().get("last_switch") or 0) < MIN_GAP_S * 1000:
+        return f"active {cur_email} at 5h {five}%, switched less than {MIN_GAP_S}s ago"
+    best = None
+    for email in saved_seats():
+        if email == cur_email:
+            continue
+        try:
+            su = saved_usage(email)
+        except Fail as e:
+            log(f"skip {email}: {e}")
+            continue
+        if su is None:
+            continue
+        five_s = su["five_hour"] or 0
+        if five_s < LOW and (su["seven_day"] or 0) < WEEK_HIGH and (best is None or five_s < best[1]):
+            best = (email, five_s)
+    if not best:
+        log(f"active {cur_email} at 5h {five}%; no saved seat under {LOW}%")
+        return f"active {cur_email} at 5h {five}%; no saved seat under {LOW}%"
+    reason = f"{cur_email} at 5h {five}% 7d {u['seven_day']}%, {best[0]} at {best[1]}%"
+    return f"would switch: {reason}" if dry else switch(best[0], reason)
+
+
+def import_dir(src):
+    src = os.path.abspath(os.path.expanduser(src))
+    o = (read_json(os.path.join(src, ".credentials.json")) or {}).get("claudeAiOauth") or {}
+    acct = (read_json(os.path.join(src, ".claude.json")) or {}).get("oauthAccount") or {}
+    email = acct.get("emailAddress")
+    if not o.get("refreshToken") or not email:
+        raise Fail(f"{src} has no finished sign-in")
+    if email == active_email()[0]:
+        raise Fail(f"{email} is the active seat here already")
+    write_json(slot_path(email), {"email": email, "oauthAccount": acct, "claudeAiOauth": o, "saved_at": now_ms()})
+    os.remove(os.path.join(src, ".credentials.json"))   # one holder per family
+    log(f"imported {email} from {src}")
+    return f"saved seat {email}"
+
+
+def import_magpie(path):
+    """the spare Claude seats a magpie keeps in logins.json become saved seats here, and leave that file"""
+    path = os.path.expanduser(path or "~/.config/magpie/logins.json")
+    logins = read_json(path)
+    if not isinstance(logins, list):
+        raise Fail(f"cannot read {path}")
+    active = active_email()[0]
+    kept, done = [], []
+    for l in logins:
+        o = ((l.get("auth") or {}).get("claudeAiOauth")) or {}
+        prof = l.get("profile") or {}
+        email = prof.get("emailAddress")
+        if l.get("agent") != "claude" or not email or email == active or not o.get("refreshToken"):
+            kept.append(l)
+            continue
+        write_json(slot_path(email), {"email": email, "oauthAccount": prof, "claudeAiOauth": o, "saved_at": now_ms()})
+        done.append(email)
+    if done:
+        write_json(path, kept)   # one holder per family: magpie forgets them
+        log(f"imported {', '.join(done)} from {path}")
+    return f"saved seats: {', '.join(done) or 'none'}"
+
+
+def status(as_json):
+    cur_email, _ = active_email()
+    rows = [{"email": cur_email, "active": True, **(usage((read_json(CREDS) or {}).get("claudeAiOauth") or {}) or {})}]
+    for email in saved_seats():
+        try:
+            rows.append({"email": email, "active": False, **(saved_usage(email) or {})})
+        except Fail as e:
+            rows.append({"email": email, "active": False, "error": str(e)})
+    if as_json:
+        return json.dumps({"config_dir": CONFIG_DIR, "high": HIGH, "low": LOW, "seats": rows,
+                           "history": load_state().get("history", [])[-5:]}, ensure_ascii=False)
+    out = [f"{CONFIG_DIR}: switch at 5h ≥ {HIGH:g}% to a seat under {LOW:g}%"]
+    for r in rows:
+        out.append(f"{'●' if r['active'] else '○'} {r['email']}  5h {r.get('five_hour')}%  7d {r.get('seven_day')}%"
+                   + (f"  ({r['error']})" if r.get("error") else ""))
+    return "\n".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="move Claude Code to another seat when the active one runs out")
+    ap.add_argument("cmd", choices=["status", "tick", "switch", "import", "import-magpie"])
+    ap.add_argument("arg", nargs="?")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    try:
+        out = {"status": lambda: status(a.json), "tick": lambda: tick(a.dry_run),
+               "switch": lambda: switch(a.arg or "", "manual"), "import": lambda: import_dir(a.arg or ""),
+               "import-magpie": lambda: import_magpie(a.arg)}[a.cmd]()
+        print(out)
+    except Fail as e:
+        print(f"seat-guard: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

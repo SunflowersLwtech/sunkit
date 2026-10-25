@@ -25,6 +25,7 @@ packaged as a plugin marketplace.
 
 Not a plugin: [tools/session-rescue](tools/session-rescue) holds two standalone Python scripts that get stuck or archived Claude sessions back.
 [tools/magpie-gateway](tools/magpie-gateway) deploys a magpie gateway for Claude Code on a server, with two gateway middlewares and the client scripts. It is also not a plugin.
+[tools/seat-guard](tools/seat-guard) moves a machine's Claude Code to another seat when the one it is on runs out. Not a plugin either.
 
 ## mesh
 
