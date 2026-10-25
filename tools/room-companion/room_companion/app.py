@@ -13,6 +13,8 @@ import uuid
 from . import commands
 from .ai import AIGate
 from .audio import AudioPipeline
+from .camera.catalog import CATALOG as CAMERA_DRIVERS
+from .camera.manager import CameraManager
 from .events import EventLog
 from .models import (SLOTS, TEST_JPEG, CloudVision, ModelCallError, ModelSettings, OpenAIVision, RemoteSpeech,
                      RemoteTTS, chat_image, clean_base_url, cloud_synth, cloud_transcriber, speech_wav, test_slot,
@@ -54,6 +56,8 @@ DEFAULTS = {
     "reply_window_s": 180,
     "policy": {},
     "notifier": {"type": "log"},
+    # camera driver choice (see camera/catalog.py); machine-specific Bluetooth settings go in "camera_host"
+    "camera": {"driver": "auto", "allow_unofficial": False},
 }
 
 
@@ -79,7 +83,7 @@ def load_config(path: str | None = None) -> dict:
 
 class App:
     def __init__(self, cfg: dict, video=None, audio=None, notifier=None, ai_client=None, model_server=None,
-                 speaker=None, evidence=None, gpu_query=None):
+                 speaker=None, evidence=None, gpu_query=None, camera=None):
         self.cfg = cfg
         d = cfg["data_dir"]
         self.switches = Switches(os.path.join(d, "state", "switches.json"))
@@ -118,6 +122,7 @@ class App:
                                             on_device_change=self._on_mic_change,
                                             is_echo=lambda a, b: self.speaker is not None and self.speaker.echo(now=b, since=a),
                                             **akw)
+        self.camera = camera or CameraManager(cfg, self.video, self.events, notify=self.notifier.send)
         if speaker is None and cfg.get("tts"):
             from .speaker import Speaker
             speaker = Speaker({"language": cfg.get("language", "zh"), **cfg["tts"]}, self.events,
@@ -162,6 +167,7 @@ class App:
             self.events.add("interop_broken", detail="no /run/WSL socket can start Windows programs")
         self.video.start()
         self.audio.start()
+        self.camera.start()
         threading.Thread(target=self._observe_loop, name="observer", daemon=True).start()
         self.events.add("service_start", switches={k: self.switches.get(k) for k in KEYS})
         if self.cfg.get("hipimind"):
@@ -176,6 +182,7 @@ class App:
             self.connector.stop()
         self.video.shutdown()
         self.audio.shutdown()
+        self.camera.shutdown()
         if self.model_server is not None:
             self.model_server.stop()
         if self._engine_server is not None and self._engine_server is not self.model_server:
@@ -501,6 +508,8 @@ class App:
             self._gpu_check(now)
             self.model_server.ensure(looking and now >= self.gpu_pause_until)
         self.policy.set_context(ai_on, self.audio.last_speech_at)
+        if self.switches.get("video"):
+            self.camera.tick(now)
         self._camera_tap_check(now)
         model_ready = looking and (self.model_server is None or self.model_server.ready())
         if model_ready and self._due(now):
@@ -537,13 +546,17 @@ class App:
 
     def _camera_tap_check(self, now):
         v = self.video
+        cam = self.camera
+        # while a driver is still trying to bring the camera back, or has not tried yet, do not ask a person
+        waiting_for_drivers = cam.busy is not None or (cam.chain() and not cam.gave_up)
         if self.switches.get("video") and v.state == "waiting_device" and v.waiting_since \
-                and now - v.waiting_since >= self.cfg.get("camera_tap_remind_s", 180):
+                and now - v.waiting_since >= self.cfg.get("camera_tap_remind_s", 180) and not waiting_for_drivers:
             if not self._tap_reminded:
                 self._tap_reminded = True
                 self.events.add("camera_missing_reminder")
+                tried = f"\n已经试过自动切回：{cam.last_failure}" if cam.last_failure else ""
                 self.notifier.send("房间AI：视频开着，但已经几分钟找不到相机了。相机可能断过电，"
-                                   "请在相机屏幕上点一下「网络摄像头」；声音会先用电脑自带的麦克风。")
+                                   "请在相机屏幕上点一下「网络摄像头」；声音会先用电脑自带的麦克风。" + tried)
         elif v.state == "running":
             self._tap_reminded = False
 
@@ -613,6 +626,8 @@ class App:
         v = self.video
         if not s.get("video"):
             parts.append("视频关（摄像头已释放）" if v.proc is None else "视频关（正在停止）")
+        elif v.state == "waiting_device" and self.camera.busy == "recover":
+            parts.append("视频开，相机没接上，正在用蓝牙让它切回网络摄像头")
         else:
             parts.append({"running": "视频开（正在看）", "waiting_device": "视频开，但没接上相机", "off": "视频开（正在启动）"}
                          .get(v.state, f"视频开，但出错：{v.detail[:60]}" if local else "视频开，但出错了（详情看网页）"))
@@ -663,11 +678,33 @@ class App:
             "remote_text": self.remote_models_text(),
             "windows": self.windows_evidence() if evidence and self.evidence is not None else None,
             "interop": self.interop.status() if self.interop is not None else None,
+            "camera": self.camera.status(),
+            "camera_detail": self.camera.detail_status(),
             "feishu": {"configured": getattr(self.notifier, "configured", False),
                        "sent": getattr(self.notifier, "sent", 0),
                        "last_error": getattr(self.notifier, "last_error", None)},
             "uptime_s": int(time.time() - self.started),
         }
+
+    # ---- camera drivers (also the entry points for a remote settings page) ----
+    def camera_drivers(self) -> list:
+        """[{id, label, does, needs, unofficial}] for a driver picker."""
+        return [dict(d) for d in CAMERA_DRIVERS]
+
+    def camera_status(self) -> dict:
+        return self.camera.status()
+
+    def set_camera_config(self, cfg: dict):
+        """Returns (ok, None) or (False, {"code": "unofficial_not_allowed" | "driver_unavailable" | "bad_config"
+        | "save_failed", "message": ...}). A choice made here is kept in state/camera.json and wins over
+        the config file."""
+        ok, code, msg = self.camera.set_config(cfg)
+        return (True, None) if ok else (False, {"code": code, "message": msg})
+
+    def camera_action(self, action: str):
+        """pair | recover | wake | sleep | stop_recording -> (ok, plain-language detail). Blocks up to ~1 min
+        (pairing waits for a tap on the camera)."""
+        return self.camera.action(action)
 
     # ---- commands ----
     def windows_evidence(self) -> dict:

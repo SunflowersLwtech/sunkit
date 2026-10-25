@@ -22,6 +22,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .camera.catalog import UNOFFICIAL_WARNING
 from .switches import SwitchWriteError
 
 COOKIE = "room_k"
@@ -228,6 +229,9 @@ def make_handler(app):
             if u.path.startswith("/api/broadcast/"):
                 r = app.broadcast_result(urllib.parse.unquote(u.path.rsplit("/", 1)[-1]))
                 return self._json(200, r) if r else self._json(404, {"ok": False, "message": "没有这一条"})
+            if u.path == "/api/camera":
+                return self._json(200, {"status": app.camera_status(), "detail": app.camera.detail_status(),
+                                        "drivers": app.camera_drivers(), "unofficial_warning": UNOFFICIAL_WARNING})
             return self._send(404, "text/plain", b"not found")
 
         def do_POST(self):
@@ -264,6 +268,14 @@ def make_handler(app):
                     return self._json(200, app.set_output(str(body.get("choice", "auto")), self._source(body)))
                 except ValueError as e:
                     return self._json(400, {"ok": False, "message": str(e)})
+            if u.path == "/api/camera":
+                ok, err = app.set_camera_config(body.get("camera", body))
+                if not ok:
+                    return self._json(400, {"ok": False, "error": err})
+                return self._json(200, {"ok": True, "status": app.camera_status()})
+            if u.path == "/api/camera/action":
+                ok, detail = app.camera_action(str(body.get("action", "")))
+                return self._json(200 if ok else 409, {"ok": ok, "detail": detail, "status": app.camera_status()})
             if u.path == "/api/selftest/unplug" and self._who() == "local":
                 app.hide_devices(body.get("names", []), body.get("seconds", 60))
                 return self._json(200, {"ok": True})
@@ -342,6 +354,9 @@ textarea{resize:vertical;min-height:64px;margin:6px 0}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .big{border:0;border-radius:12px;background:var(--on);color:#fff;font-size:17px;padding:12px 22px;min-height:48px;cursor:pointer}
 .big:disabled{opacity:.5}
+.drv{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}.drv input{margin-top:5px}
+.drv b{font-weight:600}.drv.dis{opacity:.5}.opt{display:block;margin:8px 0}
+#camcard .row button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:10px;padding:8px 12px;font-size:15px;cursor:pointer}
 </style></head><body><main>
 <h1>房间AI</h1>
 <div class="sw">
@@ -362,6 +377,11 @@ textarea{resize:vertical;min-height:64px;margin:6px 0}
  <div style="margin-top:10px">从哪出声</div><select id="outsel" aria-label="从哪出声"></select>
  <div class="muted" id="outinfo"></div><div id="bc"></div></div>
 <div class="card"><div>最近发生的事（只记摘要，不存画面和录音）</div><ul id="ev"></ul></div>
+<div class="card" id="camcard"><div>相机怎么接</div><div class="muted" id="camnow"></div>
+ <div id="camlist"></div>
+ <label class="opt"><input type="checkbox" id="camunoff"> 允许用社区逆向的协议 <span class="muted" id="camwarn"></span></label>
+ <div class="row"><button id="campair">配对蓝牙</button><button id="camrecover">现在切回网络摄像头</button></div>
+ <div class="muted" id="cammsg"></div></div>
 <p class="muted">语音口令：先说「房间助手」，再说「关视频」「关声音」「关AI」「隐私模式」（三个全关），或「安静模式」（只发通知不出声）、「平衡模式」、「主动模式」。听到提醒后说「不用」今天不再提这类，说「别再提醒这个」以后都不提。声音关着时听不到口令，要用这里或你配置的消息渠道打开。上面「念出来」框里打的字会在房间里念出来；文字命令「播报：要念的话」也一样。念的时候不用开视频或声音，房间里念的话也不会被当成口令。听写交给别的机器（自选服务器或 HipiMind 云）时，语音口令只能关、不能开。</p>
 </main>
 <script>
@@ -373,7 +393,8 @@ const KIND={switch:"开关",video_on:"摄像头开始用",video_off:"摄像头�
  reminder_off:"关掉了一类提醒",model_on:"本地模型启动",model_ready:"本地模型就绪",model_off:"本地模型已停",mic_change:"换了麦克风",
  spoke:"念了一句",summary:"早报",camera_missing_reminder:"提醒点相机",reminder_setting:"提醒设置",
  broadcast:"播报了一句",output_choice:"换了出声设备",interop:"和 Windows 的连接",
- models_changed:"换了模型",voice_command_refused:"远端听写的打开口令，没执行"};
+ models_changed:"换了模型",voice_command_refused:"远端听写的打开口令，没执行",
+ camera_recover:"自动切回网络摄像头",camera_config:"换了相机驱动",camera_back:"相机回来了"};
 const SCN={laundry:"洗衣服",cooking:"做饭",coding:"写代码",router:"配置路由器",yoga:"瑜伽",sofa_phone:"沙发上玩手机",sleeping:"睡觉",other:"其他",empty:"没人"};
 function fmtEv(e){let t=e.ts.slice(11,16)+" "+(KIND[e.kind]||e.kind);
  if(e.kind==="switch"){t+=" · "+e.source+"："+Object.entries(e.changes).map(([k,v])=>({video:"视频",audio:"声音",ai:"AI"}[k])+(v?"开":"关")).join("、")}
@@ -400,7 +421,7 @@ async function refresh(){
  $("ainfo").textContent=s.switches.audio?(a.state==="running"?(a.device+" · "+(ASR[a.asr]||"识别不可用")+" · 已切出 "+a.segments+" 段话"):(a.detail||"正在连接麦克风…")):"声音关着，麦克风没有在用。";
  $("tr").innerHTML=(s.transcripts||[]).slice(-6).reverse().map(t=>"<div class='muted'>"+new Date(t.t*1000).toTimeString().slice(0,5)+" "+t.text.replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]))+"</div>").join("");
  renderOut(s.speaker,s.broadcast);
- $("ev").innerHTML=groupEv(s.events||[]).slice(-12).reverse().map(e=>"<li>"+fmtEv(e).replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]))+"</li>").join("");
+ $("ev").innerHTML=groupEv((s.events||[]).filter(e=>e.kind!=="camera_step")).slice(-12).reverse().map(e=>"<li>"+fmtEv(e).replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]))+"</li>").join("");
  }catch(e){$("summary").textContent="连不上："+e}
 }
 const esc=t=>String(t).replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]));
@@ -424,5 +445,26 @@ for(const k of ["video","audio","ai"]){$("b-"+k).onclick=async()=>{if(!cur)retur
  const b=$("b-"+k); b.disabled=true;
  try{await fetch("/api/switch",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify({[k]:!cur[k]})})}finally{b.disabled=false}
  refresh()}}
-refresh(); setInterval(refresh,2000);
+let camCfg=null;
+function esc(t){return String(t==null?"":t).replace(/[<&"]/g,c=>({"<":"&lt;","&":"&amp;",'"':"&quot;"}[c]))}
+async function camRefresh(){
+ try{const r=await fetch("/api/camera",{cache:"no-store"}); if(!r.ok)return; const c=await r.json();
+ camCfg=c.detail.config; const st=c.status; const allow=camCfg.allow_unofficial;
+ $("camunoff").checked=allow; $("camwarn").textContent=c.unofficial_warning;
+ const now={running:"现在：画面走 USB 网络摄像头",waiting_device:"现在：没找到网络摄像头",off:"现在：视频关着",error:"现在：出错了"}[st.state]||st.state;
+ $("camnow").textContent=now+(st.control?"；自动恢复用的是"+(c.drivers.find(d=>d.id===st.control)||{}).label:"")+(st.detail?"。"+st.detail:"")+(st.fallback?"（"+st.fallback+"）":"");
+ $("camlist").innerHTML=c.drivers.map(d=>{const av=d.id==="auto"||(st.drivers[d.id]||{}).available;const lock=d.unofficial&&!allow;
+  const err=(st.drivers[d.id]||{}).last_error; return "<label class='drv"+(av&&!lock?"":" dis")+"'><input type=radio name=camdrv value='"+d.id+"'"+(camCfg.driver===d.id?" checked":"")+(av&&!lock?"":" disabled")+"><span><b>"+esc(d.label)+"</b><br><span class=muted>"+esc(d.does)+"。需要："+esc(d.needs)+(d.unofficial?"。"+esc(c.unofficial_warning):"")+(err?"<br>上次："+esc(err):"")+(av?"":"<br>这台电脑上用不了")+"</span></span></label>"}).join("");
+ for(const el of document.querySelectorAll("input[name=camdrv]"))el.onchange=()=>camSave({driver:el.value});
+ }catch(e){}
+}
+async function camSave(ch){const body=Object.assign({},camCfg,ch);
+ const r=await fetch("/api/camera",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify(body)});
+ const j=await r.json(); $("cammsg").textContent=j.ok?"已保存":"没保存："+(j.error&&j.error.message||r.status); camRefresh()}
+$("camunoff").onchange=()=>{const on=$("camunoff").checked; camSave(on?{allow_unofficial:true}:{allow_unofficial:false,driver:camCfg.driver==="dji-duml"?"auto":camCfg.driver})};
+async function camAct(a,btn){btn.disabled=true;$("cammsg").textContent=a==="pair"?"正在配对：相机屏幕弹出请求时点允许（最多等 30 秒）":"正在让相机切回网络摄像头…";
+ try{const r=await fetch("/api/camera/action",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify({action:a})});
+ const j=await r.json(); $("cammsg").textContent=j.detail||""}finally{btn.disabled=false;camRefresh()}}
+$("campair").onclick=()=>camAct("pair",$("campair")); $("camrecover").onclick=()=>camAct("recover",$("camrecover"));
+refresh(); setInterval(refresh,2000); camRefresh(); setInterval(camRefresh,10000);
 </script></body></html>"""
