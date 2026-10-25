@@ -5,7 +5,10 @@ person in it is doing (laundry, cooking, coding, working on a router, yoga, phon
 sleeping), and now and then says something useful. Everything runs on your own machine: speech
 recognition and the vision model are local, and nothing (frames, audio, transcripts) is sent to a
 cloud model. Only the short reminder texts and switch confirmations go to the notifier you pick
-(the default only prints them).
+(the default only prints them). That is the default; each model (vision, speech-to-text, speech)
+can instead be any OpenAI-compatible server you choose, or be turned off (see [Models](#models)),
+and the whole thing can be watched and switched from a web page anywhere through HipiMind (see
+[Connect to HipiMind](#connect-to-hipimind)).
 
 Three switches are independent and are the point of the design:
 
@@ -190,6 +193,50 @@ with the key read from a file, never from the command line.
 | Frames sent to the vision model | No | Only for the one local request |
 | Event summaries (`events/*.jsonl`): switch changes, device in use/released, motion start/end, seconds of speech (no words), scene labels, reminder kinds, GPU temperature, text read out loud (length and source, no words) | Yes | 30 days |
 | `state/policy.json`: minutes per scene per day, sleep/wake time, reminder kinds given or turned off | Yes | Minutes: 3 days |
+| `state/models.json`, `state/model_keys.json` (mode 600): model choices and keys made at run time | Yes, only if you choose models at run time | Until changed |
+| `state/overrides.json`: quiet hours set at run time | Yes, only if set at run time | Until changed |
+
+## Models
+
+Three jobs, each with its own source, set in the config's `models` section (or at run time from
+the HipiMind page):
+
+| slot | `engine` (default) | `openai` |
+|---|---|---|
+| `vision` | `llama-server` managed as above | `POST {base_url}/chat/completions` with the frame as an image |
+| `stt` | SenseVoice-Small via sherpa-onnx | `POST {base_url}/audio/transcriptions` (the local VAD still cuts utterances) |
+| `tts` | MeloTTS via sherpa-onnx | `POST {base_url}/audio/speech`, WAV |
+
+`openai` means any OpenAI-compatible server this machine reaches: Ollama, vLLM, LM Studio,
+`llama-server` elsewhere, a speech server such as Speaches, or a hosted provider with a key
+(`api_key_file`). `cloud` uses HipiMind's models through the HipiMind connector, and `off` turns
+the job off. Nothing goes to any model while the AI switch is off; with `stt` on `openai` or
+`cloud` that includes speech, so voice commands then need AI on. With no `models` section every
+slot is `engine` and nothing changes. Details, config examples and the recommended downloads with
+their checksums: [docs/hipimind.md](docs/hipimind.md#4-models).
+
+```json
+"models": {
+  "vision": { "source": "openai", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5vl:3b" },
+  "stt":    { "source": "engine" },
+  "tts":    { "source": "off" }
+}
+```
+
+## Connect to HipiMind
+
+[HipiMind Room](https://hipimind.com/room) puts this on a web page you can open from anywhere —
+switches, a live view while the page is open, "what the AI sees", reminders, and the model for each
+job with a **Test connection** button — over one outgoing WebSocket (no port forwarding).
+
+```
+pip install ".[hipimind]"
+python -m room_companion pair --code K7QM-2WXH --name Bedroom   # code from hipimind.com/room
+```
+
+then add `"hipimind": {"token_file": "…"}` to the config and restart. What is sent (and what never
+is), the config schema, sidecar mode for builds you cannot change, and troubleshooting:
+[docs/hipimind.md](docs/hipimind.md). The protocol: <https://hipimind.com/room/connect>.
 
 ## Tests
 

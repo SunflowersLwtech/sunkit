@@ -10,6 +10,10 @@ from .web import serve
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "pair":
+        # python -m room_companion pair --code K7QM-2WXH [--name Bedroom]: uses the "hipimind" config section
+        from .hipimind import pair_from_app_config
+        sys.exit(pair_from_app_config(sys.argv[2:], load_config()))
     cfg = load_config()
     app = App(cfg)
     app.start()

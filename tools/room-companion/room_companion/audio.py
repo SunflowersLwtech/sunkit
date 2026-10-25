@@ -89,9 +89,10 @@ class SherpaSpeech:
         self._vad_cfg = cfg
         self.window = cfg.silero_vad.window_size
         self.vad = sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
+        # asr_dir=None: cut utterances only; another model transcribes them (models.RemoteSpeech)
         self.rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
             model=f"{asr_dir}/model.int8.onnx", tokens=f"{asr_dir}/tokens.txt",
-            num_threads=threads, use_itn=True, language="auto")
+            num_threads=threads, use_itn=True, language="auto") if asr_dir else None
         self.buf = np.zeros(0, dtype=np.float32)
         self.ready = True
 
@@ -113,6 +114,8 @@ class SherpaSpeech:
         self.buf = self.np.zeros(0, dtype=self.np.float32)
 
     def transcribe(self, seg) -> str:
+        if self.rec is None:
+            return ""
         s = self.rec.create_stream()
         s.accept_waveform(RATE, seg)
         self.rec.decode_stream(s)
