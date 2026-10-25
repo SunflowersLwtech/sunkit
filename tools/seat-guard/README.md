@@ -10,6 +10,15 @@ Part of [sunkit](../../README.md). It is not a plugin. It is a single Python fil
 
 It reads every seat from Anthropic's `/api/oauth/usage`, the same endpoint cc-switch uses. magpie's own "used-up switch" can't do this for Claude Code that talks to Anthropic directly: magpie reads only the seat Claude Code is signed in to (its docs say "A saved Claude account that isn't signed in is never read"), so it never knows what the spare seats have left.
 
+## When every seat is used up
+
+`seat-guard ensure` is for a caller that has just been stopped by "usage limit reached", such as cc-connect. It switches at once, ignoring the 5-minute gap, to any saved seat under HIGH rather than LOW, and prints one JSON line:
+
+- `{"ok": true, "active": …}` (exit 0): the active seat has room, possibly after a switch. Retry on Anthropic.
+- `{"ok": false, "exhausted": true, "resets_at": …}` (exit 3): every seat is used up; `resets_at` is the soonest 5-hour reset. Fall back elsewhere, such as the magpie gateway, until then.
+
+Anthropic often answers 429 for the active seat's usage, because every Claude Code on that seat asks too. `tick` then uses the last reading for up to 15 minutes. `ensure` counts an unreadable active seat as used up, since its caller was just stopped, so it moves on. Run `ensure` only from a caller that hit the limit: run by hand, it moves a seat that may still have room.
+
 ## How a switch lands
 
 Before each API request, a running Claude Code checks whether `.credentials.json` changed (its mtime). Running and future sessions therefore move on their next request. A request already in flight finishes on the old seat. A turn that already stopped on "usage limit reached" needs any next message.
@@ -47,7 +56,7 @@ Running on (2026-10-25):
 
 ## Tests
 
-`python3 -m unittest test_seat_guard` runs 8 tests against a fake Anthropic on localhost:
+`python3 -m unittest test_seat_guard` runs 14 tests against a fake Anthropic on localhost:
 
 - a switch to the emptiest seat, with an expired saved token refreshed first;
 - no second switch within 5 minutes;
@@ -55,4 +64,6 @@ Running on (2026-10-25):
 - an EBUSY global config written in place;
 - a failed credentials write rolled back;
 - a stale label never naming the saved family;
-- `tick` repairing a stale label.
+- `tick` repairing a stale label;
+- `ensure`: every seat used up (exit 3 with the soonest reset), a seat between LOW and HIGH taken, the gap ignored, a seat with room left alone, an unreadable active seat counted as used up;
+- a 429 for the active seat's usage answered from the last reading.
