@@ -13,7 +13,7 @@ import uuid
 from . import commands
 from .ai import AIGate
 from .audio import AudioPipeline
-from .camera.catalog import CATALOG as CAMERA_DRIVERS
+from .camera.catalog import catalog_for
 from .camera.manager import CameraManager
 from .events import EventLog
 from .models import (SLOTS, TEST_JPEG, CloudVision, ModelCallError, ModelSettings, OpenAIVision, RemoteSpeech,
@@ -136,6 +136,7 @@ class App:
         self.language = cfg.get("language") if cfg.get("language") in ("zh", "en") else "zh"
         self._load_overrides()
         self.policy.language = self.language
+        self.camera.lang = lambda: self.language
         self.web_token = env("WEB_TOKEN") or None
         self.started = time.time()
         self.last_obs_at = 0.0
@@ -688,8 +689,8 @@ class App:
 
     # ---- camera drivers (also the entry points for a remote settings page) ----
     def camera_drivers(self) -> list:
-        """[{id, label, does, needs, unofficial}] for a driver picker."""
-        return [dict(d) for d in CAMERA_DRIVERS]
+        """[{id, label, does, needs, unofficial}] for a driver picker, in the owner's language."""
+        return catalog_for(self.language)
 
     def camera_status(self) -> dict:
         return self.camera.status()

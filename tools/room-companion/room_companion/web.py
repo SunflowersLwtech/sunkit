@@ -22,7 +22,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .camera.catalog import UNOFFICIAL_WARNING
+from .camera.catalog import UNOFFICIAL_WARNINGS
 from .switches import SwitchWriteError
 
 COOKIE = "room_k"
@@ -231,7 +231,8 @@ def make_handler(app):
                 return self._json(200, r) if r else self._json(404, {"ok": False, "message": "没有这一条"})
             if u.path == "/api/camera":
                 return self._json(200, {"status": app.camera_status(), "detail": app.camera.detail_status(),
-                                        "drivers": app.camera_drivers(), "unofficial_warning": UNOFFICIAL_WARNING})
+                                        "drivers": app.camera_drivers(),
+                                        "unofficial_warning": UNOFFICIAL_WARNINGS.get(getattr(app, "language", "zh"), UNOFFICIAL_WARNINGS["zh"])})
             return self._send(404, "text/plain", b"not found")
 
         def do_POST(self):

@@ -18,14 +18,27 @@ from collections import deque
 
 from . import duml, rsdk
 from .bridge import BleBridge, BridgeError, wait_until
-from .catalog import CATALOG, DRIVER_IDS, LABELS, ConfigError, control_chain, normalize
+from .catalog import UNOFFICIAL_WARNINGS, DRIVER_IDS, ConfigError, catalog_for, control_chain, label, normalize
+from .texts import t
 
 UVC_MODE = rsdk.MODE_CODES["uvc_webcam"]
 STATES = ("off", "starting", "running", "waiting_device", "error")
 
 
 class StepFailed(Exception):
-    """One driver could not do its part; the message is plain language for the status line."""
+    """One driver could not do its part. Carries a text key so the status can be shown in the owner's
+    language whenever it is read."""
+
+    def __init__(self, key: str, **kw):
+        super().__init__(key)
+        self.key, self.kw = key, kw
+
+    def text(self, lang: str) -> str:
+        return t(self.key, lang, **self.kw)
+
+
+def _failure(e: Exception) -> StepFailed:
+    return e if isinstance(e, StepFailed) else StepFailed("helper", detail=str(e)[:150])
 
 
 def _write_private(path: str, obj: dict):
@@ -67,7 +80,7 @@ class BleControl:
             self.m.sleep(3)
             r = b.call("connect", timeout=60, name=name, scan_seconds=8)
         if not r.get("ok"):
-            raise StepFailed("蓝牙找不到相机（关机了、没电了，或休眠超过 30 分钟）")
+            raise StepFailed("not_found")
         if r.get("addr"):
             self.m.remember(addr=r["addr"])
 
@@ -90,10 +103,10 @@ class OfficialBle(BleControl):
             return
         if r.get("error") == "no_tap":
             self.m.remember(rsdk_paired=False)
-            raise StepFailed("相机还没允许电脑用官方蓝牙连接：第一次要在相机屏幕上点一次允许（设置里点「配对」）")
+            raise StepFailed("rsdk_need_tap")
         if r.get("error") == "rejected":
-            raise StepFailed("相机拒绝了官方蓝牙连接")
-        raise StepFailed(f"官方蓝牙握手没成功（{r.get('error')}）")
+            raise StepFailed("rsdk_rejected")
+        raise StepFailed("rsdk_failed", error=r.get("error"))
 
     def recover(self):
         self._connect(self.m.config["recover"]["wake"])
@@ -108,9 +121,9 @@ class OfficialBle(BleControl):
             self.m.note(self.id, "mode_uvc", r)
             ret = rsdk.ret_code(bytes.fromhex(r["reply"])) if r.get("reply") else None
             if ret is None:
-                raise StepFailed("相机没有回应「切到网络摄像头」")
+                raise StepFailed("no_answer_uvc")
             if ret != 0:
-                raise StepFailed(f"相机不接受用官方蓝牙切到网络摄像头（返回 {ret}）")
+                raise StepFailed("rsdk_uvc_refused", ret=ret)
         finally:
             self._disconnect()
 
@@ -130,11 +143,11 @@ class OfficialBle(BleControl):
             elif action == "stop_recording":
                 r = self.m.bridge.call("rsdk", timeout=15, set=0x1D, cid=0x03, payload=rsdk.record(False).hex(), reply_s=3)
             else:
-                raise StepFailed(f"unknown action {action}")
+                raise ValueError(f"unknown action {action}")
             self.m.note(self.id, action, r)
             ret = rsdk.ret_code(bytes.fromhex(r["reply"])) if r.get("reply") else None
             if ret != 0:
-                raise StepFailed(f"相机没有执行（返回 {ret}）")
+                raise StepFailed("not_done", ret=ret)
         finally:
             self._disconnect()
 
@@ -153,8 +166,8 @@ class DumlBle(BleControl):
             return
         if r.get("error") == "no_tap":
             self.m.remember(duml_paired=False)
-            raise StepFailed("相机还没允许电脑用社区协议连接：第一次要在相机屏幕上点一次允许（设置里点「配对」）")
-        raise StepFailed(f"社区协议配对没成功（{r.get('error')}）")
+            raise StepFailed("duml_need_tap")
+        raise StepFailed("duml_failed", error=r.get("error"))
 
     def recover(self):
         self._connect(self.m.config["recover"]["wake"])
@@ -169,7 +182,7 @@ class DumlBle(BleControl):
                     ok = True
                     break
             if not ok:
-                raise StepFailed("相机没有接受用社区协议切到网络摄像头")
+                raise StepFailed("duml_uvc_refused")
         finally:
             self._disconnect()
 
@@ -191,6 +204,7 @@ class CameraManager:
         self.video = video
         self.events = events
         self.notify = notify or (lambda text: None)
+        self.lang = lambda: "zh"  # the app points this at its own language setting
         self.clock = clock
         self.sleep = sleep
         self.monotonic = monotonic
@@ -203,13 +217,14 @@ class CameraManager:
         self._bridge = bridge
         self.camera_info: dict = {}
         self.drivers = {"dji-ble-official": OfficialBle(self), "dji-duml": DumlBle(self)}
-        self.status_by_driver = {i: {"available": i == "uvc", "last_error": None} for i in DRIVER_IDS if i != "auto"}
+        self.available = {i: i == "uvc" for i in DRIVER_IDS if i != "auto"}
+        self.errors: dict[str, StepFailed | None] = {i: None for i in self.available}
         self._ble_checked = False
         self.control = None
-        self.fallback = None
+        self.reasons: list[tuple[str, StepFailed]] = []  # why earlier drivers were passed over, last round
+        self._used = None
         self.busy = None          # what the manager is doing right now ("recover", "pair"...)
         self.gave_up = False      # recovery tried every allowed driver and the camera is still missing
-        self.last_failure = None
         self.next_try_at = 0.0
         self.backoff = 60.0
         self.attempts = deque(maxlen=12)
@@ -238,9 +253,11 @@ class CameraManager:
         try:
             new = normalize(raw, base=self.config)
         except ConfigError as e:
-            return False, e.code, str(e)
+            msg = t("unofficial_needed", self.lang(), warning=UNOFFICIAL_WARNINGS.get(self.lang(), UNOFFICIAL_WARNINGS["zh"])) \
+                if e.code == "unofficial_not_allowed" else str(e)
+            return False, e.code, msg
         if not self.ble_available() and new["driver"] in ("dji-ble-official", "dji-duml"):
-            return False, "driver_unavailable", "这台电脑上没有可用的蓝牙助手，选不了蓝牙驱动"
+            return False, "driver_unavailable", t("no_helper", self.lang())
         try:
             _write_private(self.choice_path, new)
         except OSError as e:
@@ -272,16 +289,16 @@ class CameraManager:
             self._ble_checked = True
             ok, err = False, None
             if self.host.get("bluetooth", True) is False:
-                err = "这台电脑的配置关掉了蓝牙"
+                err = StepFailed("bt_off")
             else:
                 try:
                     ok = bool(self.bridge.call("check", timeout=30).get("ok"))
-                    err = None if ok else "蓝牙助手起不来"
+                    err = None if ok else StepFailed("helper_down")
                 except BridgeError as e:
-                    err = str(e)[:200]
+                    err = _failure(e)
             for i in ("dji-ble-official", "dji-duml"):
-                self.status_by_driver[i] = {"available": ok, "last_error": err}
-        return self.status_by_driver["dji-ble-official"]["available"]
+                self.available[i], self.errors[i] = ok, err
+        return self.available["dji-ble-official"]
 
     def _on_event(self, ev: dict):
         kind = ev.get("ev")
@@ -330,7 +347,7 @@ class CameraManager:
 
     def chain(self) -> list[str]:
         ch = control_chain(self.config)
-        return [c for c in ch if self.status_by_driver[c]["available"]]
+        return [c for c in ch if self.available[c]]
 
     def _uvc_back(self) -> bool:
         return wait_until(lambda: self.video.find_device() is not None, self.uvc_wait_s, step=2.0, sleep=self.sleep,
@@ -344,6 +361,22 @@ class CameraManager:
         finally:
             self.busy = None
 
+    @property
+    def fallback(self) -> str | None:
+        return self._reasons_text(self.lang()) if self.reasons else None
+
+    @property
+    def last_failure(self) -> str | None:
+        return self.fallback if self.gave_up else None
+
+    def _reasons_text(self, lang: str, used: str | None = None) -> str:
+        sep = t("sep", lang)
+        text = sep.join(f"{label(d, lang)}: {e.text(lang)}" if lang == "en" else f"{label(d, lang)}：{e.text(lang)}"
+                        for d, e in self.reasons)
+        if used:
+            text += t("then_use", lang, label=label(used, lang))
+        return text[:200]
+
     def recover(self) -> tuple[bool, str]:
         """Try each allowed driver until the webcam is back. Returns (ok, plain-language detail)."""
         with self._lock:
@@ -354,109 +387,121 @@ class CameraManager:
                 try:
                     drv.recover()
                     if not self._uvc_back():
-                        raise StepFailed("相机接受了切换，但电脑上还是没出现网络摄像头")
+                        raise StepFailed("uvc_not_back")
                 except (StepFailed, BridgeError) as e:
-                    msg = f"{LABELS[did]}：{e}"
-                    reasons.append(msg)
-                    self.status_by_driver[did]["last_error"] = str(e)[:200]
-                    self.attempts.append({"at": t0, "driver": did, "ok": False, "detail": str(e)[:120]})
-                    self.events.add("camera_recover", driver=did, ok=False, detail=str(e)[:200])
+                    f = _failure(e)
+                    reasons.append((did, f))
+                    self.errors[did] = f
+                    self.attempts.append({"at": t0, "driver": did, "ok": False, "detail": f.text(self.lang())[:120]})
+                    self.events.add("camera_recover", driver=did, ok=False, detail=f.key)
                     continue
-                self.status_by_driver[did]["last_error"] = None
-                self.attempts.append({"at": t0, "driver": did, "ok": True, "detail": "切回网络摄像头"})
+                self.errors[did] = None
+                self.attempts.append({"at": t0, "driver": did, "ok": True, "detail": t("recovered", self.lang(), label=label(did, self.lang()))})
                 self.events.add("camera_recover", driver=did, ok=True, seconds=round(self.clock() - t0, 1))
                 self.control = did
-                self.fallback = ("；".join(reasons) + f" → 改用{LABELS[did]}")[:200] if reasons else None
-                self.gave_up, self.last_failure = False, None
+                self.reasons = reasons
+                self._used = did
+                self.gave_up = False
                 self.backoff, self.next_try_at = 60.0, 0.0
-                self.notify(f"房间AI：相机掉出了网络摄像头模式，已经用{LABELS[did]}把它切回来了。")
-                return True, f"已用{LABELS[did]}切回网络摄像头"
-            self.fallback = "；".join(reasons)[:200] or None
-            self.last_failure = self.fallback
+                lang = self.lang()
+                self.notify(t("recovered_notice", lang, label=label(did, lang)))
+                return True, t("recovered", lang, label=label(did, lang))
+            self.reasons = reasons
+            self._used = None
             self.gave_up = True
             self.next_try_at = self.clock() + self.backoff
             self.backoff = min(self.backoff * 2, 900.0)
-            return False, self.fallback or "没有可用的自动恢复方式"
+            return False, self.fallback or t("nothing_to_try", self.lang())
 
     # ---- actions from a settings page ----
     def action(self, name: str) -> tuple[bool, str]:
+        lang = self.lang()
         if name not in ("pair", "recover", "wake", "sleep", "stop_recording"):
             return False, f"unknown action {name}"
         if not self.ble_available():
-            return False, "这台电脑上没有可用的蓝牙助手"
+            return False, t("no_helper", lang)
         if self.busy:
-            return False, "正在忙：" + self.busy
+            return False, t("busy", lang, what=self.busy)
         self.busy = name
         try:
             if name == "recover":
                 return self.recover()
             if name == "wake":
                 if not self.ble_state.get("addr"):
-                    return False, "还没连过这台相机，不知道唤醒谁"
+                    return False, t("no_addr", lang)
                 r = self.bridge.call("wake_adv", timeout=20, addr=self.ble_state["addr"], seconds=2)
                 self.note("dji-ble-official", "wake", r)
-                return bool(r.get("ok")), "已发出唤醒广播（相机休眠 30 分钟以内才有效）" if r.get("ok") else "唤醒广播没发出去"
-            chain = self.chain() if self.config["driver"] in ("auto",) else [self.config["driver"]]
-            chain = [c for c in chain if c in self.drivers]
+                return bool(r.get("ok")), t("wake_sent" if r.get("ok") else "wake_failed", lang)
+            chain = self.chain() if self.config["driver"] == "auto" else [self.config["driver"]]
+            chain = [c for c in chain if c in self.drivers and self.available.get(c)]
             if name == "pair":
                 done = []
                 for did in chain:
                     try:
                         self.drivers[did].pair(wait=30)
-                        done.append(LABELS[did])
+                        self.errors[did] = None
+                        done.append(label(did, lang))
                     except (StepFailed, BridgeError) as e:
-                        self.status_by_driver[did]["last_error"] = str(e)[:200]
-                        return False, f"{LABELS[did]}：{e}"
-                return bool(done), ("已配对：" + "、".join(done)) if done else "没有要配对的蓝牙驱动"
+                        f = _failure(e)
+                        self.errors[did] = f
+                        return False, f"{label(did, lang)}：{f.text(lang)}"
+                return bool(done), t("paired", lang, labels="、".join(done)) if done else t("nothing_to_pair", lang)
             # sleep / stop_recording: only the official protocol has them
             try:
                 self.drivers["dji-ble-official"].command(name)
-                return True, {"sleep": "相机已休眠", "stop_recording": "已让相机停止录像"}[name]
+                return True, t({"sleep": "slept", "stop_recording": "stopped"}[name], lang)
             except (StepFailed, BridgeError) as e:
-                return False, str(e)
+                return False, _failure(e).text(lang)
         finally:
             self.busy = None
             self.need_tap = None
 
     # ---- status ----
     def status(self) -> dict:
-        """The shared `state.camera` object. No addresses, serials or keys: it is shown in a browser."""
+        """The shared `state.camera` object, in the owner's language. No addresses, serials or keys:
+        it is shown in a browser."""
+        lang = self.lang()
         v = self.video
         state = getattr(v, "state", "off")
         state = state if state in STATES else "error"
-        name = self.ble_state.get("model") or (v.device.name if getattr(v, "device", None) else None)
+        # only the model name from the camera's own protocol (a fixed table); never the capture
+        # device's name or capture error output: this object leaves the machine
+        name = self.ble_state.get("model")
         if state == "running":
             detail = None
         elif self.busy:
-            detail = {"recover": "相机掉线了，正在用蓝牙让它切回网络摄像头", "pair": "正在配对：请在相机屏幕上点允许"}.get(
-                self.busy, "正在操作相机")
+            detail = t({"recover": "d_recovering", "pair": "d_pairing"}.get(self.busy, "d_busy"), lang)
         elif state == "waiting_device" and self.gave_up:
-            detail = ("自动恢复没成功，请在相机屏幕上点一次「网络摄像头」。" + (self.last_failure or ""))[:200]
+            detail = t("d_gave_up", lang, why=self.fallback or "")
         elif state == "waiting_device":
-            detail = "没找到网络摄像头（相机要开机并进入网络摄像头模式）"
+            detail = t("d_missing", lang)
+        elif state == "error":
+            detail = t("d_error", lang)
         else:
-            detail = (getattr(v, "detail", "") or None) and v.detail[:200]
+            detail = None
+        fallback = self._reasons_text(lang, getattr(self, "_used", None)) if self.reasons else None
         return {
             "driver": self.config["driver"],
             "active": "uvc" if state == "running" else None,
             "control": self.control,
-            "fallback": self.fallback,
+            "fallback": fallback,
             "state": state,
             "name": (name or None) and str(name)[:80],
-            "detail": detail,
-            "drivers": {k: dict(v) for k, v in self.status_by_driver.items()},
+            "detail": (detail or None) and str(detail)[:200],
+            "drivers": {k: {"available": self.available[k],
+                            "last_error": self.errors[k].text(lang)[:200] if self.errors[k] else None}
+                        for k in self.available},
         }
 
     def detail_status(self) -> dict:
         """Extra local view for this machine's own page (still no address)."""
-        info = dict(self.camera_info)
         return {
             "config": self.config,
-            "catalog": CATALOG,
+            "catalog": catalog_for(self.lang()),
             "busy": self.busy,
             "need_tap": self.need_tap,
             "paired": {"dji-ble-official": bool(self.ble_state.get("rsdk_paired")),
                        "dji-duml": bool(self.ble_state.get("duml_paired"))},
-            "camera": info,
+            "camera": dict(self.camera_info),
             "attempts": list(self.attempts)[-5:],
         }

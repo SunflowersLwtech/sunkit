@@ -481,6 +481,9 @@ class AppDevice:
     def set_camera_config(self, cfg: dict):
         return self.app.set_camera_config(cfg)
 
+    def camera_drivers(self) -> list:
+        return self.app.camera_drivers()
+
     def camera_action(self, action: str):
         return self.app.camera_action(action)
 
@@ -533,6 +536,51 @@ def _models_state(st: dict) -> dict:
     return {"vision": {"source": "engine"} if ai.get("client") else {"source": "off", "state": "off"}}
 
 
+CAMERA_DRIVER_IDS = ("uvc", "dji-ble-official", "dji-duml")
+CAMERA_STATES = ("off", "starting", "running", "waiting_device", "error")
+
+
+def _text(v, n: int):
+    return v[:n] if isinstance(v, str) and v else None
+
+
+def _camera_state(cam) -> dict | None:
+    """The camera driver status, whitelisted field by field (it is shown in a browser and stored)."""
+    if not isinstance(cam, dict):
+        return None
+    ids = ("auto",) + CAMERA_DRIVER_IDS
+    drivers = {}
+    for k in CAMERA_DRIVER_IDS:
+        d = (cam.get("drivers") or {}).get(k) if isinstance(cam.get("drivers"), dict) else None
+        if isinstance(d, dict):
+            drivers[k] = {"available": d.get("available") is True, "last_error": _text(d.get("last_error"), 200)}
+    return {
+        "driver": cam.get("driver") if cam.get("driver") in ids else "auto",
+        "active": cam.get("active") if cam.get("active") in CAMERA_DRIVER_IDS else None,
+        "control": cam.get("control") if cam.get("control") in CAMERA_DRIVER_IDS else None,
+        "fallback": _text(cam.get("fallback"), 200),
+        "state": cam.get("state") if cam.get("state") in CAMERA_STATES else "error",
+        "name": _text(cam.get("name"), 80),
+        "detail": _text(cam.get("detail"), 200),
+        "drivers": drivers,
+    }
+
+
+def camera_drivers(device) -> list[dict]:
+    """hello.device.camera_drivers: at most 8 entries, each text at most 120 characters."""
+    try:
+        raw = device.camera_drivers()
+    except Exception:
+        return []
+    out = []
+    for d in raw if isinstance(raw, list) else []:
+        if isinstance(d, dict) and d.get("id") in ("auto",) + CAMERA_DRIVER_IDS:
+            out.append({"id": d["id"], "label": _text(d.get("label"), 120) or d["id"],
+                        "does": _text(d.get("does"), 120) or "", "needs": _text(d.get("needs"), 120) or "",
+                        "unofficial": d.get("unofficial") is True})
+    return out[:8]
+
+
 def map_state(st: dict, lang: str = "en") -> dict:
     """room-companion's /api/status -> HipiMind State. Only whitelisted fields are read."""
     sw = st.get("switches") if isinstance(st.get("switches"), dict) else {}
@@ -548,6 +596,9 @@ def map_state(st: dict, lang: str = "en") -> dict:
     if capture:
         out["capture"] = capture
     out["models"] = _models_state(st)
+    cam = _camera_state(st.get("camera"))
+    if cam:
+        out["camera"] = cam
     pol = st.get("policy") if isinstance(st.get("policy"), dict) else {}
     if pol:
         rem = {}
@@ -1030,10 +1081,12 @@ class Bridge:
         try:
             if self.state is None:
                 await self.poll_once()
+            device = {"software": SOFTWARE, "platform": self.cfg.get("platform") or default_platform(),
+                      "capabilities": self.capabilities()}
+            if getattr(self.device, "camera_capable", False):
+                device["camera_drivers"] = camera_drivers(self.device)
             await ws.send(json.dumps({"type": "hello", "v": PROTOCOL_VERSION,
-                                      "device": {"software": SOFTWARE,
-                                                 "platform": self.cfg.get("platform") or default_platform(),
-                                                 "capabilities": self.capabilities()},
+                                      "device": device,
                                       "state": self.state or {"switches": {k: False for k in KEYS}}},
                                      ensure_ascii=False))
             watcher = asyncio.create_task(self._close_when_stopped(ws))

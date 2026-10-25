@@ -266,3 +266,47 @@ class TickTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedSchemaTest(unittest.TestCase):
+    """What a remote settings page gets: hello.device.camera_drivers and state.camera."""
+
+    def test_state_camera_is_whitelisted(self):
+        from room_companion import hipimind as hm
+        cam = {"driver": "auto", "active": "uvc", "control": "dji-ble-official", "fallback": "x" * 500,
+               "state": "running", "name": "Osmo Action 5 Pro", "detail": None, "addr": FAKE_ADDR,
+               "drivers": {"uvc": {"available": True, "last_error": None, "addr": FAKE_ADDR},
+                           "dji-duml": {"available": "yes", "last_error": 7}, "evil": {"available": True}}}
+        out = hm.map_state({"switches": {}, "camera": cam})["camera"]
+        self.assertNotIn(FAKE_ADDR, json.dumps(out))
+        self.assertEqual(set(out), {"driver", "active", "control", "fallback", "state", "name", "detail", "drivers"})
+        self.assertEqual(len(out["fallback"]), 200)
+        self.assertEqual(set(out["drivers"]), {"uvc", "dji-duml"})
+        self.assertEqual(out["drivers"]["dji-duml"], {"available": False, "last_error": None})
+        bad = hm.map_state({"switches": {}, "camera": {"driver": "rtsp", "state": "weird", "control": "x"}})["camera"]
+        self.assertEqual((bad["driver"], bad["state"], bad["control"]), ("auto", "error", None))
+
+    def test_hello_driver_list(self):
+        from room_companion import hipimind as hm
+
+        class Dev:
+            def camera_drivers(self):
+                return catalog.catalog_for("en") + [{"id": "bogus", "label": "x"}]
+        got = hm.camera_drivers(Dev())
+        self.assertEqual([d["id"] for d in got], ["auto", "uvc", "dji-ble-official", "dji-duml"])
+        self.assertTrue(all(len(d[k]) <= 120 for d in got for k in ("label", "does", "needs")))
+        self.assertEqual([d["id"] for d in got if d["unofficial"]], ["dji-duml"])
+
+    def test_status_in_english_and_never_capture_output(self):
+        d = tempfile.mkdtemp()
+        video = FakeVideo(os.path.join(d, "none.json"))
+        video.state, video.detail = "error", "SENTINEL ffmpeg: Could not run graph"
+        video.device = type("D", (), {"name": "SENTINEL-CAM"})()
+        m = CameraManager({"data_dir": d}, video, Events(), bridge=type("B", (), {"call": lambda *a, **k: {"ok": False}, "stop": lambda s: None})())
+        m.lang = lambda: "en"
+        st = m.status()
+        self.assertNotIn("SENTINEL", json.dumps(st))
+        self.assertIn("failed", st["detail"])
+        ok, code, msg = m.set_config({"driver": "dji-duml"})
+        self.assertEqual(code, "unofficial_not_allowed")
+        self.assertIn("not supported by DJI", msg)

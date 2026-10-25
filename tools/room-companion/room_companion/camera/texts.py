@@ -1,0 +1,88 @@
+"""Plain-language camera texts in the owner's language (zh, en)."""
+from __future__ import annotations
+
+TEXTS = {
+    "zh": {
+        "not_found": "蓝牙找不到相机（关机了、没电了，或休眠超过 30 分钟）",
+        "rsdk_need_tap": "相机还没允许电脑用官方蓝牙连接：第一次要在相机屏幕上点一次允许（设置里点「配对」）",
+        "rsdk_rejected": "相机拒绝了官方蓝牙连接",
+        "rsdk_failed": "官方蓝牙握手没成功（{error}）",
+        "no_answer_uvc": "相机没有回应「切到网络摄像头」",
+        "rsdk_uvc_refused": "相机不接受用官方蓝牙切到网络摄像头（返回 {ret}）",
+        "not_done": "相机没有执行（返回 {ret}）",
+        "duml_need_tap": "相机还没允许电脑用社区协议连接：第一次要在相机屏幕上点一次允许（设置里点「配对」）",
+        "duml_failed": "社区协议配对没成功（{error}）",
+        "duml_uvc_refused": "相机没有接受用社区协议切到网络摄像头",
+        "uvc_not_back": "相机接受了切换，但电脑上还是没出现网络摄像头",
+        "helper": "蓝牙助手出错：{detail}",
+        "no_helper": "这台电脑上没有可用的蓝牙助手",
+        "bt_off": "这台电脑的配置关掉了蓝牙",
+        "helper_down": "蓝牙助手起不来",
+        "then_use": " → 改用{label}",
+        "recovered_notice": "房间AI：相机掉出了网络摄像头模式，已经用{label}把它切回来了。",
+        "recovered": "已用{label}切回网络摄像头",
+        "nothing_to_try": "没有可用的自动恢复方式",
+        "busy": "正在忙：{what}",
+        "no_addr": "还没连过这台相机，不知道唤醒谁",
+        "wake_sent": "已发出唤醒广播（相机休眠 30 分钟以内才有效）",
+        "wake_failed": "唤醒广播没发出去",
+        "paired": "已配对：{labels}",
+        "nothing_to_pair": "没有要配对的蓝牙驱动",
+        "slept": "相机已休眠",
+        "stopped": "已让相机停止录像",
+        "d_recovering": "相机掉线了，正在用蓝牙让它切回网络摄像头",
+        "d_pairing": "正在配对：请在相机屏幕上点允许",
+        "d_busy": "正在操作相机",
+        "d_gave_up": "自动恢复没成功，请在相机屏幕上点一次「网络摄像头」。{why}",
+        "d_missing": "没找到网络摄像头（相机要开机并进入网络摄像头模式）",
+        "d_error": "采集相机画面出错了，详情看本机的房间AI 网页",
+        "sep": "；",
+        "unofficial_needed": "选社区逆向协议要先勾选「允许非官方协议」：{warning}",
+    },
+    "en": {
+        "not_found": "Bluetooth cannot find the camera (switched off, flat battery, or asleep for over 30 minutes)",
+        "rsdk_need_tap": "The camera has not allowed this computer on the official protocol yet: tap allow on its screen once (Pair in settings)",
+        "rsdk_rejected": "The camera refused the official connection",
+        "rsdk_failed": "The official handshake failed ({error})",
+        "no_answer_uvc": "The camera did not answer the switch to webcam mode",
+        "rsdk_uvc_refused": "The camera refused the official switch to webcam mode (code {ret})",
+        "not_done": "The camera did not do it (code {ret})",
+        "duml_need_tap": "The camera has not allowed this computer on the community protocol yet: tap allow on its screen once (Pair in settings)",
+        "duml_failed": "Pairing on the community protocol failed ({error})",
+        "duml_uvc_refused": "The camera refused the switch to webcam mode on the community protocol",
+        "uvc_not_back": "The camera took the switch, but no webcam showed up on this computer",
+        "helper": "Bluetooth helper error: {detail}",
+        "no_helper": "No Bluetooth helper is available on this computer",
+        "bt_off": "Bluetooth is turned off in this computer's config",
+        "helper_down": "The Bluetooth helper does not start",
+        "then_use": " → used {label} instead",
+        "recovered_notice": "Room companion: the camera dropped out of webcam mode; {label} switched it back.",
+        "recovered": "Switched back to webcam mode with {label}",
+        "nothing_to_try": "No way to recover automatically",
+        "busy": "Busy: {what}",
+        "no_addr": "No camera has been connected yet, so there is nothing to wake",
+        "wake_sent": "Wake-up broadcast sent (works if the camera has slept for less than 30 minutes)",
+        "wake_failed": "The wake-up broadcast was not sent",
+        "paired": "Paired: {labels}",
+        "nothing_to_pair": "No Bluetooth driver to pair",
+        "slept": "The camera is asleep",
+        "stopped": "The camera stopped recording",
+        "d_recovering": "The camera dropped out; switching it back to webcam mode over Bluetooth",
+        "d_pairing": "Pairing: tap allow on the camera screen",
+        "d_busy": "Working on the camera",
+        "d_gave_up": "Automatic recovery did not work; tap Webcam on the camera screen. {why}",
+        "d_missing": "No webcam found (the camera has to be on and in webcam mode)",
+        "d_error": "Capturing from the camera failed; details are on this machine's own page",
+        "sep": "; ",
+        "unofficial_needed": "Tick \"allow the unofficial protocol\" before choosing the community protocol: {warning}",
+    },
+}
+
+
+def t(key: str, lang: str = "zh", **kw) -> str:
+    table = TEXTS.get(lang) or TEXTS["zh"]
+    s = table.get(key) or TEXTS["zh"].get(key, key)
+    try:
+        return s.format(**kw)
+    except (KeyError, IndexError):
+        return s

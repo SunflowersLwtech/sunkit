@@ -9,6 +9,8 @@ from __future__ import annotations
 DRIVER_IDS = ("auto", "uvc", "dji-ble-official", "dji-duml")
 UNOFFICIAL = {"dji-duml"}
 UNOFFICIAL_WARNING = "这是社区逆向出来的协议，不是 DJI 官方支持的，相机固件更新后可能失效。"
+UNOFFICIAL_WARNINGS = {"zh": UNOFFICIAL_WARNING,
+                       "en": "Reverse-engineered by the community, not supported by DJI; a camera firmware update may break it."}
 
 # id, label, what it does, what it needs (each at most 120 characters), unofficial
 CATALOG = [
@@ -25,7 +27,30 @@ CATALOG = [
      "does": "DJI App 自己用的内部协议，由社区解析：让相机自己切回网络摄像头，读电量",
      "needs": "电脑有蓝牙，第一次要在相机屏幕上点一次允许", "unofficial": True},
 ]
+CATALOG_EN = [
+    {"id": "auto", "label": "Automatic (recommended)",
+     "does": "Video over the USB webcam; when the camera drops out, the official protocol switches it back, then the community one if you allowed it",
+     "needs": "A USB cable; Bluetooth for automatic recovery", "unofficial": False},
+    {"id": "uvc", "label": "USB webcam (official)",
+     "does": "Video and sound from DJI's official webcam mode over USB; after a power cut or restart someone taps Webcam on the camera",
+     "needs": "A USB cable", "unofficial": False},
+    {"id": "dji-ble-official", "label": "DJI official Bluetooth protocol",
+     "does": "No video; controls the camera: wake and sleep, switch modes (including back to webcam), stop recording, battery and temperature",
+     "needs": "Bluetooth on this computer and one tap to allow it on the camera; video still over USB", "unofficial": False},
+    {"id": "dji-duml", "label": "Community protocol (unofficial)",
+     "does": "DJI's internal protocol as the community decoded it: switches the camera back to webcam mode, reads the battery",
+     "needs": "Bluetooth on this computer and one tap to allow it on the camera", "unofficial": True},
+]
 LABELS = {d["id"]: d["label"] for d in CATALOG}
+LABELS_EN = {d["id"]: d["label"] for d in CATALOG_EN}
+
+
+def catalog_for(lang: str = "zh") -> list[dict]:
+    return [dict(d) for d in (CATALOG_EN if lang == "en" else CATALOG)]
+
+
+def label(driver: str, lang: str = "zh") -> str:
+    return (LABELS_EN if lang == "en" else LABELS).get(driver, driver)
 
 DEFAULT_CONFIG = {
     "driver": "auto",
