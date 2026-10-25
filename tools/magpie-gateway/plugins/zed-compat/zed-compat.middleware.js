@@ -28,6 +28,9 @@
 //
 //   {"accounts": ["zed"], "off": false}
 
+// `tool_removal` (Claude Code dropping a deferred tool) is refused the same way; it is dropped, and the
+// tool stays offered.
+const TOOL_EDITS = ["tool_addition", "tool_removal"]
 const asText = (x) => ({ type: "text", text: typeof x === "string" ? x : JSON.stringify(x) })
 
 function toolResultContent(c) {
@@ -59,9 +62,9 @@ export function onProvider(body, ctx) {
   if (Array.isArray(body.messages)) {
     const added = []
     for (const m of body.messages) {
-      if (m && Array.isArray(m.content) && m.content.some((b) => b && b.type === "tool_addition")) {
+      if (m && Array.isArray(m.content) && m.content.some((b) => b && TOOL_EDITS.includes(b.type))) {
         for (const b of m.content) if (b && b.type === "tool_addition" && b.tool && b.tool.definition) added.push(b.tool.definition)
-        m.content = m.content.filter((b) => !(b && b.type === "tool_addition"))
+        m.content = m.content.filter((b) => !(b && TOOL_EDITS.includes(b.type)))
         changed = true
       }
     }
