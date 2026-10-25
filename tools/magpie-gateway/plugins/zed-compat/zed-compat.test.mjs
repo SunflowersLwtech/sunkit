@@ -88,3 +88,16 @@ test("all-text tool_result blocks are left alone", () => {
   assert.equal(onProvider(body, zed), undefined)
   assert.deepEqual(body, before)
 })
+
+test("tool_removal blocks are dropped", () => {
+  const b = onProvider({
+    model: "claude-sonnet-5-5",
+    tools: [{ name: "Bash" }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "system", content: [{ type: "tool_removal", tool: { name: "mcp__x__one" } }] },
+    ],
+  }, zed)
+  assert.equal(JSON.stringify(b.messages).includes("tool_removal"), false)
+  assert.deepEqual(b.messages.map((m) => m.role), ["user"])
+})
