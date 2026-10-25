@@ -370,6 +370,14 @@ class AIGateAskTest(unittest.TestCase):
         self.assertEqual(g.ask("frame", {"jpeg": b""})["scene"], "coding")
         self.assertEqual((c.asked, g.dropped_off, g.sent), (1, 1, 1))
 
+    def test_transcripts_the_client_does_not_take_are_not_counted_as_sent(self):
+        from room_companion.vision import LocalVision
+        s = Switches(os.path.join(tempfile.mkdtemp(), "s.json"))
+        s.set({"ai": True}, "t")
+        g = AIGate(s, LocalVision(server=None, key_file="/nonexistent"))
+        self.assertFalse(g.submit("transcript", {"text": "hi"}))
+        self.assertEqual(g.sent, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

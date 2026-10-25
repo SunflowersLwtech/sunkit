@@ -37,7 +37,8 @@ class AIGate:
     def submit(self, kind: str, payload) -> bool:
         if not self._open():
             return False
-        self.client.send(kind, payload)
+        if self.client.send(kind, payload) is False:
+            return False  # the client does not take this kind (e.g. transcripts): nothing left the gate
         with self._lock:
             self.sent += 1
         return True

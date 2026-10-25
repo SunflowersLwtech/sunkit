@@ -180,7 +180,7 @@ class LocalVision:
 
     def send(self, kind, payload):
         """Transcripts are not forwarded to the model in this version."""
-        return None
+        return False
 
     def ask(self, kind, payload):
         if kind != "frame" or not self.server.ready():
