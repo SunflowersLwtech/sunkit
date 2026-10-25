@@ -10,6 +10,10 @@ spare seat has left. This asks Anthropic's /api/oauth/usage for every seat, as c
   seat-guard tick [--dry-run]         the rule, from cron every 2 minutes: when the active seat's 5-hour window is
                                       at HIGH (95%) or more, or its 7-day at 99%, switch to the saved seat with the
                                       least 5-hour use, if that is under LOW (80%)
+  seat-guard ensure                   for a caller that just hit "usage limit reached" (cc-connect): switch now, to
+                                      any saved seat under HIGH, ignoring the 5-minute gap. Prints one JSON line;
+                                      exit 0 when the active seat has room afterwards, 3 when every seat is used up
+                                      ("resets_at": the soonest 5-hour reset), so the caller can fall back elsewhere
   seat-guard switch <email>           switch now
   seat-guard import <dir>             save the sign-in `CLAUDE_CONFIG_DIR=<dir> claude auth login` made, then
                                       delete <dir>'s copy of it
@@ -195,6 +199,7 @@ def usage(o):
     for k in ("five_hour", "seven_day"):
         v = raw.get(k)
         out[k] = round(float(v["utilization"]), 1) if isinstance(v, dict) and v.get("utilization") is not None else None
+        out[k + "_resets_at"] = v.get("resets_at") if isinstance(v, dict) else None
     return out
 
 
@@ -290,7 +295,7 @@ def switch(target, reason):
     return f"switched {cur_email} -> {target} ({reason})"
 
 
-def tick(dry):
+def tick(dry, ensure=False):
     cur = (read_json(CREDS) or {}).get("claudeAiOauth") or {}
     label, _ = active_email()
     cur_email, prof_acct = whoami(cur)
@@ -300,14 +305,28 @@ def tick(dry):
         log(f"oauthAccount said {label} but the active token is {cur_email}; label fixed")
     cur_email = cur_email or label
     u = usage(cur)
+    # Anthropic often answers 429 for the active seat's usage (every Claude Code on it asks too):
+    # use the last reading for up to 15 minutes, and a caller stopped by the limit counts it as used up
+    st = load_state()
+    last = st.get("active_usage") or {}
+    if u is not None:
+        st["active_usage"] = {"email": cur_email, "at": now_ms(), "usage": u}
+        write_json(STATE, st)
+    elif last.get("email") == cur_email and now_ms() - (last.get("at") or 0) < 900000:
+        u = last["usage"]
     if u is None:
-        return f"active {cur_email}: use not readable now; nothing to do"
+        if not ensure:
+            return f"active {cur_email}: use not readable now; nothing to do"
+        u = {"five_hour": 100.0, "seven_day": None, "five_hour_resets_at": None}
     five, week = u["five_hour"] or 0, u["seven_day"] or 0
     if five < HIGH and week < WEEK_HIGH:
+        if ensure:
+            return {"ok": True, "active": cur_email, "five_hour": u["five_hour"]}
         return f"active {cur_email}: 5h {u['five_hour']}% 7d {u['seven_day']}%"
-    if now_ms() - (load_state().get("last_switch") or 0) < MIN_GAP_S * 1000:
+    if not ensure and now_ms() - (load_state().get("last_switch") or 0) < MIN_GAP_S * 1000:
         return f"active {cur_email} at 5h {five}%, switched less than {MIN_GAP_S}s ago"
-    best = None
+    best, resets = None, [u.get("five_hour_resets_at")]
+    under = HIGH if ensure else LOW   # a caller already stopped by the limit takes any seat with room
     for email in saved_seats():
         if email == cur_email:
             continue
@@ -319,13 +338,20 @@ def tick(dry):
         if su is None:
             continue
         five_s = su["five_hour"] or 0
-        if five_s < LOW and (su["seven_day"] or 0) < WEEK_HIGH and (best is None or five_s < best[1]):
+        resets.append(su.get("five_hour_resets_at"))
+        if five_s < under and (su["seven_day"] or 0) < WEEK_HIGH and (best is None or five_s < best[1]):
             best = (email, five_s)
     if not best:
-        log(f"active {cur_email} at 5h {five}%; no saved seat under {LOW}%")
+        log(f"active {cur_email} at 5h {five}%; no saved seat under {under:g}%")
+        if ensure:
+            soon = min((r for r in resets if r), default=None)
+            return {"ok": False, "exhausted": True, "active": cur_email, "resets_at": soon}
         return f"active {cur_email} at 5h {five}%; no saved seat under {LOW}%"
     reason = f"{cur_email} at 5h {five}% 7d {u['seven_day']}%, {best[0]} at {best[1]}%"
-    return f"would switch: {reason}" if dry else switch(best[0], reason)
+    if dry:
+        return f"would switch: {reason}"
+    out = switch(best[0], ("limit hit, " if ensure else "") + reason)
+    return {"ok": True, "active": best[0], "switched": out} if ensure else out
 
 
 def import_dir(src):
@@ -386,12 +412,16 @@ def status(as_json):
 
 def main():
     ap = argparse.ArgumentParser(description="move Claude Code to another seat when the active one runs out")
-    ap.add_argument("cmd", choices=["status", "tick", "switch", "import", "import-magpie"])
+    ap.add_argument("cmd", choices=["status", "tick", "ensure", "switch", "import", "import-magpie"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     try:
+        if a.cmd == "ensure":
+            r = tick(False, ensure=True)
+            print(json.dumps(r, ensure_ascii=False))
+            sys.exit(0 if r.get("ok") else 3)
         out = {"status": lambda: status(a.json), "tick": lambda: tick(a.dry_run),
                "switch": lambda: switch(a.arg or "", "manual"), "import": lambda: import_dir(a.arg or ""),
                "import-magpie": lambda: import_magpie(a.arg)}[a.cmd]()

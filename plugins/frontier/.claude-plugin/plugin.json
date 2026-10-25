@@ -1,0 +1,10 @@
+{
+  "name": "frontier",
+  "version": "0.1.0",
+  "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client; plus the gateway's model list.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie", "gateway"]
+}

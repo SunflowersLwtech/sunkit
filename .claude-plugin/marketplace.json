@@ -79,6 +79,13 @@
       "license": "MIT",
       "category": "visualization",
       "keywords": ["diagram", "architecture", "interactive", "html"]
+    },
+    {
+      "name": "frontier",
+      "source": "./plugins/frontier",
+      "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client.",
+      "category": "agents",
+      "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie"]
     }
   ]
 }

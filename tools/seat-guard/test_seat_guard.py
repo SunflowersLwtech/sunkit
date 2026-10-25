@@ -8,6 +8,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 F = int(time.time() * 1000) + 3600000
 USE = {"tok-A": 100, "tok-B": 3, "tok-B2": 3, "tok-C": 60}
 WHO = {"tok-A": "a@x", "tok-B": "b@x", "tok-B2": "b@x", "tok-C": "c@x"}
+LIMITED = set()   # tokens whose /usage answers 429, as Anthropic does for a busy active seat
+RESET = {"tok-A": "2026-10-25T05:00:00Z", "tok-B2": "2026-10-25T03:00:00Z", "tok-C": "2026-10-25T04:00:00Z"}
 
 
 class Fake(http.server.BaseHTTPRequestHandler):
@@ -24,8 +26,10 @@ class Fake(http.server.BaseHTTPRequestHandler):
         t = self.headers.get("Authorization", "").split()[-1]
         if t not in USE:
             return self.reply(401)
+        if self.path.startswith("/usage") and t in LIMITED:
+            return self.reply(429)
         if self.path.startswith("/usage"):
-            return self.reply(200, {"five_hour": {"utilization": USE[t]}, "seven_day": None})
+            return self.reply(200, {"five_hour": {"utilization": USE[t], "resets_at": RESET.get(t)}, "seven_day": None})
         return self.reply(200, {"account": {"email": WHO[t], "uuid": "u-" + WHO[t]},
                                 "organization": {"uuid": "org", "name": "Org"}})
 
@@ -160,6 +164,62 @@ class SeatGuard(unittest.TestCase):
             self.assertEqual(g["other"], 1)
         finally:
             USE["tok-A"] = 100
+
+    def test_ensure_with_every_seat_used_up_says_so_and_stays(self):
+        USE["tok-B2"] = USE["tok-C"] = 99
+        try:
+            r = self.sg.tick(False, ensure=True)
+        finally:
+            USE["tok-B2"], USE["tok-C"] = 3, 60
+        self.assertEqual(r, {"ok": False, "exhausted": True, "active": "a@x", "resets_at": "2026-10-25T03:00:00Z"})
+        self.assertEqual(self.get(self.sg.CREDS)["claudeAiOauth"]["accessToken"], "tok-A")
+
+    def test_ensure_takes_a_seat_between_low_and_high(self):
+        # tick wants a seat under LOW (80); a caller already stopped by the limit takes one under HIGH (95)
+        USE["tok-B2"], USE["tok-C"] = 90, 97
+        try:
+            self.assertIn("no saved seat under", self.sg.tick(False))
+            r = self.sg.tick(False, ensure=True)
+        finally:
+            USE["tok-B2"], USE["tok-C"] = 3, 60
+        self.assertEqual((r["ok"], r["active"]), (True, "b@x"))
+        self.assertEqual(self.get(self.sg.CREDS)["claudeAiOauth"]["refreshToken"], "rt-B2")
+
+    def test_ensure_ignores_the_gap(self):
+        self.sg.tick(False)                       # a -> b
+        USE["tok-B2"] = 100
+        try:
+            self.assertIn("switched less than", self.sg.tick(False))
+            r = self.sg.tick(False, ensure=True)  # b used up at once: c (60%) has room
+        finally:
+            USE["tok-B2"] = 3
+        self.assertEqual((r["ok"], r["active"]), (True, "c@x"))
+
+    def test_ensure_leaves_a_seat_with_room(self):
+        USE["tok-A"] = 50
+        try:
+            self.assertEqual(self.sg.tick(False, ensure=True), {"ok": True, "active": "a@x", "five_hour": 50.0})
+        finally:
+            USE["tok-A"] = 100
+        self.assertEqual(self.get(self.sg.CREDS)["claudeAiOauth"]["accessToken"], "tok-A")
+
+    def test_unreadable_active_use_comes_from_the_last_reading(self):
+        self.sg.tick(False)                       # a -> b
+        self.assertIn("active b@x: 5h 3", self.sg.tick(False))   # b read at 3%
+        LIMITED.add("tok-B2")
+        try:
+            self.assertIn("active b@x: 5h 3", self.sg.tick(False))
+        finally:
+            LIMITED.discard("tok-B2")
+
+    def test_ensure_counts_an_unreadable_active_seat_as_used_up(self):
+        LIMITED.add("tok-A")
+        try:
+            self.assertIn("not readable", self.sg.tick(False))
+            r = self.sg.tick(False, ensure=True)
+        finally:
+            LIMITED.discard("tok-A")
+        self.assertEqual((r["ok"], r["active"]), (True, "b@x"))
 
 
 if __name__ == "__main__":

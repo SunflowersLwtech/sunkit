@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""harness-run: hand one task to another agent harness, or to any model behind the magpie gateway,
+and print its answer. Each harness runs in its own official client, signed in on its own machine.
+
+  harness-run <harness> [-m MODEL] [-C DIR] [-f FILE]... [-t SECONDS] [--edit] [--out DIR] PROMPT...|-
+  harness-run list                 the harnesses, where each runs, its default model
+  harness-run status <harness>     what is left of its quota, when the harness reports it
+  harness-run models [TEXT]        the models the magpie gateway serves (for `gw -m`)
+
+agy-pro, agy-trial and zcode run on the Mac they are signed in on, in a fresh job folder there:
+-f files are copied in, and files the run creates or changes are copied back to --out
+(default ./harness-out/<job>). zen and gw run on this machine, in -C DIR (default: here).
+Without --edit, a run in DIR may only read; job folders always allow writes.
+A failed run is reported as failed. Nothing retries on another account or harness.
+"""
+import json, os, secrets, shlex, shutil, socket, subprocess, sys, tempfile, time, urllib.request
+
+HOSTNAMES = {"m4": "Lius-MacBook-Air", "m2": "s-MacBook-Air"}
+ZCODE_APP = "/Applications/ZCode.app/Contents/Resources"
+HARNESSES = {
+    "agy-pro": dict(kind="agy", host="m2", model="gemini-4-argon-medium",
+                    about="Antigravity, weiliu0607 (Google AI Pro, paid)"),
+    "agy-trial": dict(kind="agy", host="m4", model="gemini-4-argon-medium",
+                      about="Antigravity, devweiliu0607 (Samsung trial)"),
+    "zcode": dict(kind="zcode", host="m4", model="",
+                  about="ZCode CLI, Z.ai account tp085412 (GLM; model is the account's plan default)"),
+    "zen": dict(kind="opencode", host="", model="opencode/deepseek-v4.1-flash-free",
+                about="OpenCode CLI, Zen free models"),
+    "gw": dict(kind="claude", host="", model="auto/gpt-6.1-sol",
+               about="Claude Code headless on the magpie gateway (any model it serves)"),
+}
+MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".mov", ".webm", ".mp3", ".wav", ".m4a")
+SSH = shlex.split(os.environ.get("HARNESS_SSH", "ssh -o BatchMode=yes -o ConnectTimeout=10"))
+SCP = shlex.split(os.environ.get("HARNESS_SCP", "scp -q -o BatchMode=yes -o ConnectTimeout=10"))
+
+
+class Fail(Exception):
+    pass
+
+
+def host_of(name):
+    return os.environ.get("HARNESS_HOST_" + name.upper().replace("-", "_"), HARNESSES[name]["host"])
+
+
+def is_local(host):
+    me = socket.gethostname().split(".")[0]
+    return host in ("", "local", me) or HOSTNAMES.get(host) == me
+
+
+def run(cmd, timeout, **kw):
+    if "input" not in kw:
+        kw["stdin"] = subprocess.DEVNULL   # a client that reads a piped stdin would wait on the caller's forever
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        raise Fail(f"no answer within {timeout} s")
+    except FileNotFoundError as e:
+        raise Fail(f"{e.filename} is not installed here")
+    return p
+
+
+def tail(s, n=6):
+    lines = (s or "").strip().splitlines()
+    hits = [l.strip() for l in lines if any(w in l.lower() for w in ("error", "limit", "quota", "balance", "denied", "not found"))]
+    return "\n".join(hits[-3:] if hits else lines[-n:])
+
+
+def harness_argv(kind, model, prompt_ref, files, timeout):
+    """The client's command line. prompt_ref is a shell expression that yields the prompt."""
+    if kind == "agy":
+        a = ['"$HOME/.local/bin/agy"', "-p", prompt_ref, "--output-format", "json", "--disable-slash-commands",
+             "--print-timeout", f"{timeout}s", "--mode", "accept-edits", "--sandbox"]
+        return a + (["--model", shlex.quote(model)] if model else [])
+    if kind == "zcode":
+        a = ["node", shlex.quote(f"{ZCODE_APP}/glm/zcode.cjs"), "-p", prompt_ref, "--output-format", "json",
+             "--mode", "yolo"]
+        for f in files:
+            if f.lower().endswith(MEDIA):
+                a += ["--attach", shlex.quote(os.path.basename(f))]
+        return a
+    raise Fail(kind)
+
+
+def remote_job(name, h, model, prompt, files, timeout, cwd, out):
+    """agy / zcode: a job folder on the harness's Mac, inputs in, new files back."""
+    host = host_of(name)
+    local = is_local(host)
+    job = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    rdir = f".harness-jobs/{job}"
+    out = out or os.path.join(cwd, "harness-out", job)
+    env = "PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+    if h["kind"] == "zcode":
+        env += f" ZCODE_BUILTIN_PROVIDER_CONFIG_FILE={shlex.quote(ZCODE_APP + '/config/provider/zcode-builtin.json')}"
+
+    def sh(cmd, t=60):
+        if local:
+            return run(["/bin/sh", "-c", cmd], t, cwd=os.path.expanduser("~"))
+        return run(SSH + [host, cmd], t)
+
+    def put(srcs, dst):
+        if local:
+            for s in srcs:
+                shutil.copy(s, os.path.join(os.path.expanduser("~"), dst))
+            return
+        p = run(SCP + list(srcs) + [f"{host}:{dst}/"], 300)
+        if p.returncode:
+            raise Fail(f"copying files to {host} failed: {tail(p.stderr, 2)}")
+
+    # job folders older than a week go first
+    p = sh(f"find .harness-jobs -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {{}} + 2>/dev/null; mkdir -p {rdir} && echo ok")
+    if p.returncode or "ok" not in p.stdout:
+        raise Fail(f"cannot reach {host}: {tail(p.stderr, 2)}")
+    with tempfile.TemporaryDirectory() as td:
+        pf = os.path.join(td, f"{job}.prompt")
+        with open(pf, "w") as f:
+            f.write(prompt)
+        if files:
+            put(files, rdir)
+        put([pf], ".harness-jobs")
+    argv = harness_argv(h["kind"], model, f'"$(cat ../{job}.prompt)"', files, timeout)
+    p = sh(f"cd {rdir} && {env} " + " ".join(argv), timeout + 60)
+    res = parse_json_answer(h["kind"], p)
+    made = sh(f"cd {rdir} && find . -type f -newer ../{job}.prompt -print").stdout.split()
+    got = []
+    if made:
+        os.makedirs(out, exist_ok=True)
+        for rel in made:
+            dst = os.path.join(out, rel[2:].replace("/", "__"))
+            if local:
+                shutil.copy(os.path.join(os.path.expanduser("~"), rdir, rel), dst)
+            elif run(SCP + [f"{host}:{rdir}/{rel[2:]}", dst], 300).returncode:
+                continue
+            got.append(dst)
+    return res, f"{name} on {host or 'this machine'} (job {job})", got
+
+
+def parse_json_answer(kind, p):
+    try:
+        d = json.loads(p.stdout)
+    except ValueError:
+        raise Fail(f"exit {p.returncode}: {tail(p.stderr) or tail(p.stdout)}")
+    if kind == "agy" and d.get("status") != "SUCCESS":
+        raise Fail(f"Antigravity says {d.get('status')}: {d.get('error') or d.get('response') or ''}".strip())
+    if p.returncode:
+        raise Fail(f"exit {p.returncode}: {tail(p.stderr)}")
+    return d.get("response") or ""
+
+
+def local_run(name, h, model, prompt, files, timeout, write, cwd):
+    if h["kind"] == "opencode":
+        oc = os.environ.get("HARNESS_OPENCODE_BIN") or shutil.which("opencode") or os.path.expanduser("~/.opencode/bin/opencode")
+        argv = [oc, "run", "-m", model] + (["--auto"] if write else ["--agent", "plan"])
+        for f in files:
+            argv += ["-f", f]
+        p = run(argv + [prompt], timeout, cwd=cwd)
+        if p.returncode or not p.stdout.strip():
+            raise Fail(f"exit {p.returncode}: {tail(p.stderr) or 'no answer'}")
+        return p.stdout.strip()
+    settings = os.path.expanduser(os.environ.get("HARNESS_GW_SETTINGS", "~/.claude/magpie-settings.json"))
+    if not os.path.exists(settings):
+        raise Fail(f"{settings} is missing: this machine is not set up for the gateway (magpie-client setup)")
+    if files:
+        prompt += "\n\nFiles for this task:\n" + "\n".join(os.path.abspath(f) for f in files)
+    argv = [os.environ.get("HARNESS_CLAUDE_BIN", "claude"), "--settings", settings, "-p", "--model", model,
+            "--output-format", "text", "--permission-mode", "acceptEdits" if write else "plan"]
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+    p = run(argv, timeout, cwd=cwd, input=prompt, env=env)
+    if p.returncode or not p.stdout.strip():
+        raise Fail(f"exit {p.returncode}: {tail(p.stderr) or tail(p.stdout) or 'no answer'}")
+    return p.stdout.strip()
+
+
+def gateway():
+    s = json.load(open(os.path.expanduser(os.environ.get("HARNESS_GW_SETTINGS", "~/.claude/magpie-settings.json"))))["env"]
+    key = s["ANTHROPIC_CUSTOM_HEADERS"].split(":", 1)[1].strip()
+    return s["ANTHROPIC_BASE_URL"].rstrip("/"), key
+
+
+def cmd_models(text):
+    base, key = gateway()
+    req = urllib.request.Request(base + "/v1/models", headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+    ids = [m["id"] for m in json.load(urllib.request.urlopen(req, timeout=20)).get("data", [])]
+    for i in ids:
+        if not text or text.lower() in i.lower():
+            print(i)
+
+
+def cmd_status(name):
+    h = HARNESSES[name]
+    if h["kind"] != "agy":
+        print(f"{name}: no quota readout; a run that is out of quota fails with the vendor's message")
+        return
+    host = host_of(name)
+    cmd = '"$HOME/.local/bin/agy" -p /usage --output-format json'
+    p = run(["/bin/sh", "-c", cmd], 120) if is_local(host) else run(SSH + [host, cmd], 120)
+    print(parse_json_answer("agy", p).rstrip())
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    if argv[0] == "list":
+        for n, h in HARNESSES.items():
+            print(f"{n:10} {host_of(n) or 'this machine':13} {h['model'] or '(plan default)':34} {h['about']}")
+        return 0
+    if argv[0] == "models":
+        cmd_models(argv[1] if len(argv) > 1 else "")
+        return 0
+    if argv[0] == "status":
+        if len(argv) < 2 or argv[1] not in HARNESSES:
+            raise Fail("status <harness>: one of " + ", ".join(HARNESSES))
+        cmd_status(argv[1])
+        return 0
+    name, rest = argv[0], argv[1:]
+    if name not in HARNESSES:
+        raise Fail(f"unknown harness {name!r}: one of " + ", ".join(HARNESSES))
+    h = HARNESSES[name]
+    model, cwd, files, timeout, write, out, words = h["model"], os.getcwd(), [], 900, False, None, []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("-m", "--model", "-C", "--cwd", "-f", "--file", "-t", "--timeout", "--out") and i + 1 < len(rest):
+            v = rest[i + 1]
+            i += 2
+            if a in ("-m", "--model"):
+                model = v
+            elif a in ("-C", "--cwd"):
+                cwd = os.path.abspath(v)
+            elif a in ("-f", "--file"):
+                if not os.path.isfile(v):
+                    raise Fail(f"no such file: {v}")
+                files.append(v)
+            elif a in ("-t", "--timeout"):
+                timeout = int(v)
+            else:
+                out = v
+            continue
+        if a == "--edit":
+            write = True
+        elif a == "--":
+            words += rest[i + 1:]
+            break
+        else:
+            words.append(a)
+        i += 1
+    prompt = sys.stdin.read() if words == ["-"] else " ".join(words)
+    if not prompt.strip():
+        raise Fail("empty prompt")
+    t0 = time.time()
+    if h["kind"] in ("agy", "zcode"):
+        answer, where, got = remote_job(name, h, model, prompt, files, timeout, cwd, out)
+    else:
+        answer, where, got = local_run(name, h, model, prompt, files, timeout, write, cwd), f"{name} on this machine", []
+    print(answer or "(the harness ended without a text answer" + ("; see the files below)" if got else ")"))
+    print(f"\n---\n[harness-run] {where} · {model or 'plan default'} · {time.time() - t0:.0f} s"
+          + (" · files: " + ", ".join(got) if got else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Fail as e:
+        print(f"[harness-run] FAILED: {e}", file=sys.stderr)
+        sys.exit(1)
