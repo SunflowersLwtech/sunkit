@@ -13,6 +13,11 @@
 //   400 Zed: failed to parse Anthropic request: invalid type: string "…"
 // Such content is sent as one text block, which means the same.
 //
+// When Claude Code knows the model (claude-sonnet-5-5 and the other native ids magpie's groups carry),
+// it loads deferred tools mid-conversation as `tool_addition` blocks in a system message:
+//   400 Zed: failed to parse Anthropic request: unknown variant `tool_addition`
+// Each added tool's definition goes into the request's `tools` instead, and the block is dropped.
+//
 //   {"accounts": ["zed"], "off": false}
 
 export function onProvider(body, ctx) {
@@ -28,6 +33,19 @@ export function onProvider(body, ctx) {
     changed = true
   }
   if (Array.isArray(body.messages)) {
+    const added = []
+    for (const m of body.messages) {
+      if (m && Array.isArray(m.content) && m.content.some((b) => b && b.type === "tool_addition")) {
+        for (const b of m.content) if (b && b.type === "tool_addition" && b.tool && b.tool.definition) added.push(b.tool.definition)
+        m.content = m.content.filter((b) => !(b && b.type === "tool_addition"))
+        changed = true
+      }
+    }
+    if (changed) {
+      body.messages = body.messages.filter((m) => !(m && Array.isArray(m.content) && m.content.length === 0))
+      const have = new Set((body.tools || []).map((x) => x && x.name))
+      for (const d of added) if (d.name && !have.has(d.name)) { (body.tools = body.tools || []).push(d); have.add(d.name) }
+    }
     for (const m of body.messages) {
       if (m && typeof m.content === "string") {
         m.content = [{ type: "text", text: m.content }]

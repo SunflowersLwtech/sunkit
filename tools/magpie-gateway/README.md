@@ -49,11 +49,16 @@ The group ids are Claude's own model names. A request for `claude-opus-5-5` reac
 | group | members, in order |
 |---|---|
 | `claude-opus-5-5` | `kiro/claude-opus-5.5` → `group/claude-sonnet-5-5` |
-| `claude-sonnet-5-5` | `kiro/claude-sonnet-5.5` → `zed/claude-sonnet-5-5` |
-| `claude-haiku-5-5` | `zed/claude-haiku-5-5` → `kiro/claude-haiku-4.5` |
+| `claude-sonnet-5-5` | `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
+| `claude-haiku-5-5` | `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
 | `claude-fable-5-1` | `group/claude-opus-5-5` |
+| `frontier` | `zed/gpt-6.1-sol` → `grok/grok-4.7` → `zed/gpt-6-sol` → `trae-global/gpt-6.1-sol` → Kimi K3.1 Pro, GLM-5.3, DeepSeek V4 Pro (WorkBuddy, Trae CN) → `trae-cn/qwen3.8-max` → `workbuddy/minimax-m3` → `trae-cn/Doubao-Seed-2.1-Pro` → the OpenCode Go copies |
+
+Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto` and the `claude` provider (the subscription bridge) exposes no model, so neither appears in a found `auto/<model>` group either.
 
 Checked on 2026-10-25 with a three-turn Claude Code session through the gateway: Read and Bash on the client machine, recalling the previous turn with no tool, then a subagent. The hostname and a nonce that exists only in a local file came back right, and the transcript has structured `tool_use` and no `<invoke>` text. `zed/claude-sonnet-5-5` passes with `zed-compat`. A Copilot student account answers only `copilot/auto`; any named model gets 400 "The requested model is not supported".
+
+Checked again after the chains above, with `claude -p --allowedTools Bash` running `echo TOOLCHECK-$((6*7))` on each id: all five groups and 15 single models answered `TOOLCHECK-42` (Zed Claude and GPT-6.1/6 Sol, Grok 4.7, Doubao, WorkBuddy GLM, the `auto/` Kimi, GLM, DeepSeek, Qwen, MiniMax, `copilot/auto`). `claude-opus-5-5` went Kiro 429 (monthly credits used up) → Zed Sonnet. OpenCode Go was out of its weekly allowance and Trae Global was rate-limited. Gemini on Zed fails under Claude Code: the Zed plugin sends the thinking level as `high` and the tool mode as `AUTO`, where Zed wants `HIGH` and `auto` (plugin 0.1.11), so no group carries Gemini.
 
 ## Client
 
@@ -62,7 +67,7 @@ install -m 755 client/magpie-client client/claude-gw client/claude-native ~/.loc
 vk run -r "K=个人/magpie 网关 (llm-gateway)/MAGPIE_KEY_<MACHINE>" -- sh -c 'printf %s "$K" | magpie-client setup'
 ```
 
-- `magpie-client setup` writes `~/.claude/magpie-settings.json` (mode 600): `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS` (`x-api-key: <gateway key>`), `CLAUDE_CODE_ATTRIBUTION_HEADER=0`. It does not touch the global settings. There is no `ANTHROPIC_AUTH_TOKEN`, so Claude Code keeps its claude.ai sign-in, and mesh channels and claude.ai connectors keep working.
+- `magpie-client setup` writes `~/.claude/magpie-settings.json` (mode 600): `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS` (`x-api-key: <gateway key>`), `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, and a `modelPicker` that adds `frontier`, GPT-6.1 Sol, Grok 4.7, Kimi, GLM, DeepSeek, Qwen, MiniMax and Doubao after the built-in rows of `/model`. `magpie-client picker` adds the rows to an existing file. In `/model`, press `s` to switch the session only: Enter also saves the model as the default in `~/.claude/settings.json`, and a plain `claude` session can't use a gateway id. It does not touch the global settings. There is no `ANTHROPIC_AUTH_TOKEN`, so Claude Code keeps its claude.ai sign-in, and mesh channels and claude.ai connectors keep working.
 - `claude-gw` adds `--model claude-opus-5-5` unless a model is given. Like the shell's `claude` wrapper, it puts `--channels plugin:mesh@sunkit` last for an interactive session. On Windows, use `client/claude-gw.cmd` with the same settings file in `%USERPROFILE%\.claude`.
 - Installed on 2026-10-25 on m4, m2, aws-sin, msi-wsl, MSI (Windows), wrsm, bd and devdesk. Each machine got a reply through the gateway from `claude-gw -p`. N150's Feishu assistant gets the gateway as a second cc-connect provider (`/provider magpie`), with Anthropic kept as the default.
 - `magpie-client on` / `off` write the gateway into or out of **the global** `~/.claude/settings.json`. Per the section above, don't. Values a running session already loaded stay until it restarts, so deleting the two keys doesn't take a session off the gateway. Empty strings do, through a hot reload. Empty values in the global file also override a process's own environment, so delete them once every session has restarted.
@@ -74,4 +79,4 @@ vk run -r "K=个人/magpie 网关 (llm-gateway)/MAGPIE_KEY_<MACHINE>" -- sh -c '
 Each one changes only the requests sent to its own provider.
 
 - `plugins/kiro-harness`: rewrites Claude Code's identity line into `<harness_instructions>`, because Kiro's own prompt already names the model Kiro. It also drops the billing line, which changes every request and spoils Kiro's prompt cache. Tests: `node --test plugins/kiro-harness/kiro-harness.test.mjs`.
-- `plugins/zed-compat`: drops `context_management` (Zed rejects `clear_thinking_20251015`) and wraps a plain-string message into a text block. Tests: `node --test plugins/zed-compat/zed-compat.test.mjs`.
+- `plugins/zed-compat`: drops `context_management` (Zed rejects `clear_thinking_20251015`), wraps a plain-string message into a text block, and moves the tools of `tool_addition` blocks (Claude Code loading deferred tools mid-conversation, sent when it knows the model id, as it does for the `claude-*` groups) into the request's `tools`. Tests: `node --test plugins/zed-compat/zed-compat.test.mjs`.

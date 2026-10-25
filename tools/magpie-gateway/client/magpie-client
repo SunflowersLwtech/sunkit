@@ -3,6 +3,7 @@
 #
 #   magpie-client setup       per process (the way to use it): writes ~/.claude/magpie-settings.json
 #                             for claude-gw; the global settings.json is not touched. Key on stdin.
+#   magpie-client picker      put the frontier models in magpie-settings.json's /model picker (setup does too)
 #   magpie-client on          GLOBAL: every new session goes through the gateway. Don't, on a machine with
 #                             interactive sessions: see the README's "Why not the global default".
 #   magpie-client off         global back to Anthropic directly
@@ -22,6 +23,22 @@ SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
 NATIVE=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/native-settings.json
 GW_SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/magpie-settings.json
 KEYS="ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS"
+# The /model rows a claude-gw session adds after the built-in Opus/Fable/Sonnet/Haiku rows (which magpie's
+# claude-* groups serve). Ids are magpie group or provider/model ids; Gemini is left out: the Zed plugin
+# refuses Claude Code's tool calls for it (use the agy subagents).
+PICKER='{"options": [
+ {"model": "frontier", "label": "Frontier (gateway)", "description": "GPT-6.1 Sol, then Grok 4.7, Kimi, GLM, DeepSeek, Qwen: the first with quota"},
+ {"model": "auto/gpt-6.1-sol", "label": "GPT-6.1 Sol", "description": "Zed or Trae Global"},
+ {"model": "grok/grok-4.7", "label": "Grok 4.7", "description": "SuperGrok"},
+ {"model": "auto/kimi-k3.1-pro", "label": "Kimi K3.1 Pro", "description": "WorkBuddy, Trae CN or OpenCode Go"},
+ {"model": "auto/glm-5.3", "label": "GLM-5.3", "description": "Trae CN, WorkBuddy or OpenCode Go"},
+ {"model": "auto/deepseek-v4-pro", "label": "DeepSeek V4 Pro", "description": "WorkBuddy or OpenCode Go"},
+ {"model": "auto/qwen3.8-max", "label": "Qwen3.8 Max", "description": "Trae CN or OpenCode Go"},
+ {"model": "auto/minimax-m3", "label": "MiniMax M3", "description": "WorkBuddy, Trae or OpenCode Go"},
+ {"model": "trae-cn/Doubao-Seed-2.1-Pro", "label": "Doubao Seed 2.1 Pro", "description": "Trae CN"},
+ {"model": "auto/deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash", "description": "fast and cheap"},
+ {"model": "auto/glm-5.3-flash", "label": "GLM-5.3 Flash", "description": "fast and cheap"}
+]}'
 
 py() { command -v python3 >/dev/null || { echo "magpie-client: needs python3" >&2; exit 1; }; python3 -I - "$@"; }
 
@@ -33,14 +50,14 @@ setup)
 	code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -H "x-api-key: $key" "$GATEWAY/v1/models" || true)
 	[ "$code" = 200 ] || { echo "magpie-client: gateway $GATEWAY answered $code with this key; nothing changed" >&2; exit 1; }
 	mkdir -p "$(dirname "$GW_SETTINGS")"
-	MAGPIE_CLIENT_KEY="$key" py "$GW_SETTINGS" "$GATEWAY" <<'EOF'
+	MAGPIE_CLIENT_KEY="$key" MAGPIE_PICKER="$PICKER" py "$GW_SETTINGS" "$GATEWAY" <<'EOF'
 import json, os, sys, tempfile
 path, gw = sys.argv[1], sys.argv[2]
 key = os.environ.pop("MAGPIE_CLIENT_KEY", "")
 if not key.startswith("sk-magpie-key-") or len(key) < 40:
     sys.exit(f"magpie-client: the key did not reach the writer (length {len(key)}); nothing changed")
 d = {"env": {"ANTHROPIC_BASE_URL": gw, "ANTHROPIC_CUSTOM_HEADERS": "x-api-key: " + key,
-             "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"}}
+             "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"}, "modelPicker": json.loads(os.environ["MAGPIE_PICKER"])}
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(d, f, indent=2); f.write("\n")
@@ -48,6 +65,22 @@ os.chmod(tmp, 0o600); os.replace(tmp, path)
 back = json.load(open(path, encoding="utf-8"))["env"]
 assert back["ANTHROPIC_CUSTOM_HEADERS"] == "x-api-key: " + key and len(key) >= 40 and back["ANTHROPIC_BASE_URL"] == gw
 print(f"magpie-client: setup — {path} ({os.path.getsize(path)} bytes); start a gateway session with claude-gw")
+EOF
+	;;
+picker)
+	[ -f "$GW_SETTINGS" ] || { echo "magpie-client: no $GW_SETTINGS; run setup first" >&2; exit 1; }
+	MAGPIE_PICKER="$PICKER" py "$GW_SETTINGS" <<'EOF'
+import json, os, sys, tempfile
+path = sys.argv[1]
+d = json.load(open(path, encoding="utf-8-sig"))
+d["modelPicker"] = json.loads(os.environ["MAGPIE_PICKER"])
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(d, f, indent=2); f.write("\n")
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+back = json.load(open(path, encoding="utf-8"))
+assert back["env"]["ANTHROPIC_CUSTOM_HEADERS"] == d["env"]["ANTHROPIC_CUSTOM_HEADERS"]
+print(f"magpie-client: picker — {len(back['modelPicker']['options'])} rows in {path}")
 EOF
 	;;
 on)

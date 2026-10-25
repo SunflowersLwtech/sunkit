@@ -36,3 +36,21 @@ test("another provider's request is left alone", () => {
 test("off leaves Zed's request alone", () => {
   assert.equal(onProvider(cc(), { ...zed, options: { off: true } }), undefined)
 })
+
+test("tool_addition blocks become tools in the request", () => {
+  const def = (name) => ({ name, description: "d", input_schema: { type: "object", properties: {} } })
+  const add = (name) => ({ type: "tool_addition", tool: { type: "tool_definition", definition: def(name) } })
+  const b = onProvider({
+    model: "claude-sonnet-5-5",
+    tools: [def("Bash"), def("Read")],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "system", content: [add("mcp__x__one"), add("Read")] },
+      { role: "user", content: [{ type: "text", text: "go" }, add("mcp__x__two")] },
+    ],
+  }, zed)
+  assert.deepEqual(b.tools.map((x) => x.name), ["Bash", "Read", "mcp__x__one", "mcp__x__two"])
+  assert.equal(JSON.stringify(b.messages).includes("tool_addition"), false)
+  assert.deepEqual(b.messages.map((m) => m.role), ["user", "user"])
+  assert.deepEqual(b.messages[1].content, [{ type: "text", text: "go" }])
+})
