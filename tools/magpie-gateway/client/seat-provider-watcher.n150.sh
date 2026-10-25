@@ -14,9 +14,11 @@ PY=/root/.claude/tools/uv/bin/python3
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
-# 1) 席位读数与决策在容器内做（seat-guard status --json；活跃席位读不到时用 state.json 兜底）
+# 1) 席位读数与决策在容器内做（seat-guard status --json；活跃席位读不到时用 state.json 兜底，
+#    且兜底必须邮箱一致 + 15 分钟内新鲜——12:14 误切 magpie 就是旧席位的 100% 被贴到
+#    刚切上的新席位造成的）
 DEC=$(docker exec feishu-cc $PY -c '
-import json,subprocess,sys
+import json,subprocess,sys,time
 HIGH=95.0;LOW=80.0
 try:
     out=subprocess.run([sys.executable,"/feishu-cc/bin/seat-guard","status","--json"],capture_output=True,text=True,timeout=120)
@@ -24,12 +26,15 @@ try:
 except Exception as e:
     print("error:"+str(e));sys.exit(0)
 try:
-    au=json.load(open("/root/.claude/.seat-guard/state.json")).get("active_usage",{}).get("usage",{})
+    au=json.load(open("/root/.claude/.seat-guard/state.json")).get("active_usage",{})
+    if not au.get("email") or not au.get("at") or time.time()*1000-au["at"]>15*60*1000: au={}
 except Exception:
     au={}
 for r in rows:
-    if r.get("active") and r.get("five_hour") is None and au.get("five_hour") is not None:
-        r["five_hour"]=au["five_hour"]
+    if r.get("active") and r.get("five_hour") is None:
+        u=au.get("usage") or {}
+        if au.get("email")==r.get("email") and u.get("five_hour") is not None:
+            r["five_hour"]=u["five_hour"]
 known=[r.get("five_hour") for r in rows if isinstance(r.get("five_hour"),(int,float))]
 n=len(rows)
 if n==0: print("error:no seats");sys.exit(0)
