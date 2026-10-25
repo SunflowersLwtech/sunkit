@@ -23,6 +23,21 @@ BUSY = ("coding", "router")
 MODES = {"quiet": "安静（只发通知，不出声）", "balanced": "平衡（出声并发通知）", "active": "主动（提醒得更早）"}
 CATEGORIES = {"久坐": "久坐提醒", "路由器": "改路由器前备份", "手机": "沙发上看手机", "晾衣服": "晾衣服",
               "厨房": "做完饭关火通风", "运动后": "运动后补水拉伸"}
+LANGUAGES = ("zh", "en")
+# What a reminder says, per language ("language" in the config, or chosen on the HipiMind page).
+TEXTS = {
+    "厨房": {"zh": "做完饭记得确认关火、开窗通风。", "en": "Done cooking? Check the stove is off and open a window."},
+    "运动后": {"zh": "练完了，记得补水、拉伸一下。", "en": "Workout done: drink some water and stretch."},
+    "晾衣服": {"zh": "洗衣服差不多该好了，记得晾衣服。", "en": "The laundry should be done; time to hang it up."},
+    "久坐": {"zh": "已经连续写了约 {m} 分钟代码，起来活动一下、喝口水吧。",
+            "en": "About {m} minutes of coding in a row: stand up, move and drink some water."},
+    "路由器": {"zh": "配置路由器有一阵了，改动前记得先备份配置，改坏了好回滚。",
+             "en": "You've been on the router a while: back up its settings before changing them."},
+    "手机": {"zh": "在沙发上看手机快 {m} 分钟了，起来走走、看看远处吧。",
+            "en": "Almost {m} minutes on the phone on the sofa: get up, walk, look far away."},
+}
+SCENES_EN = {"laundry": "laundry", "cooking": "cooking", "coding": "coding", "router": "router setup", "yoga": "yoga",
+             "sofa_phone": "phone on the sofa", "sleeping": "sleeping", "other": "other", "empty": "nobody"}
 
 
 def _hm(s: str) -> int:
@@ -57,6 +72,7 @@ class Policy:
         self.timers: list[tuple[float, str, str]] = []
         self.ai_on = False
         self.talking_at = 0.0
+        self.language = "zh"  # set by the app; the reminder and summary wording follows it
         self.state = self._load()
 
     # ---- persistence ----
@@ -131,6 +147,10 @@ class Policy:
             self._flush(now)
             self._save()
 
+    def _t(self, cat, **kw) -> str:
+        lang = self.language if self.language in LANGUAGES else "zh"
+        return TEXTS[cat][lang].format(**kw)
+
     def _switch(self, new, now):
         old, since = self.scene, self.scene_since
         self.scene, self.scene_since = new, now
@@ -139,11 +159,11 @@ class Policy:
             self.events.add("scene", scene=new)
         lasted = (now - since) if since else 0
         if old == "cooking" and lasted >= 5 * 60:
-            self._queue("厨房", "做完饭记得确认关火、开窗通风。", now)
+            self._queue("厨房", self._t("厨房"), now)
         if old == "yoga" and lasted >= 10 * 60:
-            self._queue("运动后", "练完了，记得补水、拉伸一下。", now)
+            self._queue("运动后", self._t("运动后"), now)
         if new == "laundry":
-            self.timers.append((now + self.cfg.get("laundry_minutes", 45) * 60, "晾衣服", "洗衣服差不多该好了，记得晾衣服。"))
+            self.timers.append((now + self.cfg.get("laundry_minutes", 45) * 60, "晾衣服", self._t("晾衣服")))
         h = time.localtime(now).tm_hour
         sl = self.state["sleep"]
         if new == "sleeping" and (h >= 20 or h < 5) and (not sl["start"] or now - sl["start"] > 18 * 3600):
@@ -156,11 +176,11 @@ class Policy:
             return
         dur = now - self.scene_since
         if self.scene == "coding" and dur >= self._minutes("coding_minutes", 90):
-            self._queue("久坐", f"已经连续写了约 {int(dur // 60)} 分钟代码，起来活动一下、喝口水吧。", now)
+            self._queue("久坐", self._t("久坐", m=int(dur // 60)), now)
         if self.scene == "router" and dur >= self._minutes("router_minutes", 30):
-            self._queue("路由器", "配置路由器有一阵了，改动前记得先备份配置，改坏了好回滚。", now)
+            self._queue("路由器", self._t("路由器"), now)
         if self.scene == "sofa_phone" and dur >= self._minutes("phone_minutes", 45):
-            self._queue("手机", f"在沙发上看手机快 {int(dur // 60)} 分钟了，起来走走、看看远处吧。", now)
+            self._queue("手机", self._t("手机", m=int(dur // 60)), now)
 
     def _queue(self, cat, text, now):
         if cat in self.pending or self._blocked(cat):
@@ -232,18 +252,26 @@ class Policy:
             return
         self.state["summary_sent"] = today
         self._save()
+        en = self.language == "en"
         y = self.state["minutes"].get(_day(now - 86400), {})
-        parts = [f"{SCENES[k]}约 {_fmt_minutes(v)}" for k, v in sorted(y.items(), key=lambda kv: -kv[1])
+        parts = [(f"{SCENES_EN.get(k, k)} about {_fmt_minutes(v, 'en')}" if en else f"{SCENES[k]}约 {_fmt_minutes(v)}")
+                 for k, v in sorted(y.items(), key=lambda kv: -kv[1])
                  if k not in ("empty", "other", "sleeping") and v >= 5]
         sl = self.state["sleep"]
         night = ""
         if sl.get("start") and now - sl["start"] < 18 * 3600:
-            night = f"昨晚约 {time.strftime('%H:%M', time.localtime(sl['start']))} 睡"
+            start = time.strftime('%H:%M', time.localtime(sl['start']))
+            night = f"slept around {start}" if en else f"昨晚约 {start} 睡"
             if sl.get("wake"):
-                night += f"，{time.strftime('%H:%M', time.localtime(sl['wake']))} 起"
+                wake = time.strftime('%H:%M', time.localtime(sl['wake']))
+                night += f", up at {wake}" if en else f"，{wake} 起"
         if not parts and not night:
             return
-        text = "早上好。" + ("昨天：" + "，".join(parts) + "。" if parts else "") + (night + "。" if night else "")
+        if en:
+            text = ("Good morning." + (" Yesterday: " + ", ".join(parts) + "." if parts else "")
+                    + (" Last night you " + night + "." if night else ""))
+        else:
+            text = "早上好。" + ("昨天：" + "，".join(parts) + "。" if parts else "") + (night + "。" if night else "")
         if self.events:
             self.events.add("summary")
         self.deliver(text, "早报", self.state["mode"] != "quiet" and self.scene not in (None, "empty", "sleeping"))
@@ -300,7 +328,9 @@ class Policy:
             }
 
 
-def _fmt_minutes(v: float) -> str:
+def _fmt_minutes(v: float, lang: str = "zh") -> str:
+    if lang == "en":
+        return f"{v / 60:.1f} h" if v >= 90 else f"{int(round(v))} min"
     return f"{v / 60:.1f} 小时" if v >= 90 else f"{int(round(v))} 分钟"
 
 

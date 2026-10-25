@@ -316,7 +316,7 @@ class NoLocalAddressesLeave(unittest.TestCase):
         ev = d.map_event({"ts": "2026-10-25T20:00:00+0800", "kind": "switch", "source": "网页（192.168.1.23）",
                           "changes": {"video": False}})
         self.assertNotIn("192.168.1.23", json.dumps(ev, ensure_ascii=False))
-        self.assertIn("web (local)", ev["text"])
+        self.assertEqual(ev["data"]["source"], "local")
 
     def test_credentials_in_a_base_url_are_not_reported(self):  # P2-3
         st = hm.map_state({"switches": {}, "models": {"vision": {"source": "openai",
@@ -498,6 +498,133 @@ class SidecarClientPassesLocalChecks(unittest.TestCase):
                 self.assertTrue(h.get("host", "").startswith("127.0.0.1:"), h.get("host"))
         finally:
             local.close()
+
+
+
+HAN = __import__("re").compile(r"[\u4e00-\u9fff]")
+
+
+class SwitchEventData(unittest.TestCase):
+    def test_switch_events_carry_the_changes_and_a_mapped_source(self):
+        d = hm.EventDiffer()
+        for source, code in (("HipiMind (web)", "web"), ("网页（192.168.1.23）", "local"), ("语音", "voice"),
+                             ("飞书", "feishu"), ("本机", "device"), (None, "device")):
+            ev = d.map_event({"ts": "2026-10-25T20:00:00+0800", "kind": "switch", "source": source,
+                              "changes": {"video": False, "ai": True, "x": 1}})
+            self.assertEqual(ev["data"], {"changes": {"video": False, "ai": True}, "source": code}, source)
+            self.assertNotIn("192.168.1.23", json.dumps(ev, ensure_ascii=False))
+
+    def test_event_text_follows_the_language(self):
+        lang = {"v": "en"}
+        d = hm.EventDiffer(language=lambda: lang["v"])
+        reminder = {"ts": "2026-10-25T20:00:00+0800", "kind": "reminder", "category": "久坐"}
+        switch = {"ts": "2026-10-25T20:00:01+0800", "kind": "switch", "source": "语音", "changes": {"audio": False}}
+        notice = {"ts": "2026-10-25T20:00:02+0800", "kind": "gpu_too_hot"}
+        en = [d.map_event(e)["text"] for e in (reminder, switch, notice)]
+        self.assertEqual(en[0], "Time to move")
+        self.assertEqual(en[1], "Sound off (voice)")
+        for t in en:
+            self.assertIsNone(HAN.search(t), t)
+        lang["v"] = "zh"
+        zh = [d.map_event(e)["text"] for e in (reminder, switch, notice)]
+        self.assertEqual(zh[0], "久坐提醒")
+        self.assertEqual(zh[1], "关声音（语音）")
+        self.assertTrue(all(HAN.search(t) for t in zh))
+
+
+class EnglishHub(FakeHipiMind):
+    """A HipiMind whose welcome carries config.language = "en"."""
+
+    async def handler(self, ws):
+        self.connections += 1
+        n = self.connections
+        self.socket = ws
+        try:
+            hello = await ws.recv()
+            self.received.append((n, hello))
+            await self.inbox.put(json.loads(hello))
+            await ws.send(json.dumps({"type": "welcome", "v": 1, "device_id": "dev-1", "name": "Room",
+                                      "config": {"language": "en"},
+                                      "limits": {"frame_max_bytes": 150000, "live_max_fps": 3}}))
+            async for raw in ws:
+                self.received.append((n, raw))
+                await self.inbox.put(raw if isinstance(raw, bytes) else json.loads(raw))
+        except Exception:
+            pass
+
+
+@unittest.skipIf(websockets is None, "websockets not installed")
+class WelcomeLanguageSidecar(unittest.IsolatedAsyncioTestCase):
+    async def test_a_welcome_in_english_gives_english_event_text(self):
+        d = tempfile.mkdtemp()
+        hm.write_secret(os.path.join(d, "token"), TOKEN)
+        local = FakeLocal()
+        hub = EnglishHub()
+        await hub.start()
+        bridge = hm.Bridge(hm.load_config_dict({"ws_url": hub.url, "token_file": os.path.join(d, "token"),
+                                                "local_api": local.url, "poll_seconds": 0.1}))
+        task = asyncio.create_task(bridge.run_forever())
+        try:
+            await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "hello")
+            for _ in range(60):
+                if bridge.ready and bridge.lang() == "en":
+                    break
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(0.3)
+            local.status["events"].append({"ts": "2026-10-25T21:00:00+0800", "kind": "reminder", "category": "久坐"})
+            ev = await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "event" and x.get("kind") == "reminder",
+                                timeout=5)
+            self.assertEqual(ev["text"], "Time to move")
+            state = await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "state", timeout=5)
+            self.assertIsNone(HAN.search(state["state"]["summary"]), state["state"]["summary"])
+        finally:
+            bridge.stop()
+            await asyncio.wait_for(task, 5)
+            await hub.stop()
+            local.close()
+
+
+class WelcomeLanguageInProcess(InProc):
+    hub_cls = EnglishHub
+
+    async def test_the_app_writes_and_speaks_reminders_in_english_after_the_welcome(self):
+        for _ in range(60):
+            if self.app.language == "en":
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(self.app.language, "en")
+        self.assertEqual(self.app.policy.language, "en")
+        said = []
+        self.app.policy.deliver = lambda text, cat, speak: said.append(text)
+        self.app.policy.set_context(True, 0)
+        now = time.time()
+        self.app.policy.scene, self.app.policy.scene_since = "coding", now - 95 * 60
+        self.app.policy._triggers(now)
+        text = self.app.policy.pending["久坐"]["text"]
+        self.assertIn("95 minutes of coding", text)
+        self.assertIsNone(HAN.search(text), text)
+        # kept across a restart, and a config can switch it back
+        self.assertEqual(json.load(open(os.path.join(self.dir, "state", "overrides.json")))["language"], "en")
+        await self.hub.socket.send(json.dumps({"type": "config", "req": "z", "config": {"language": "zh"}}))
+        ack = await self.hub.next(lambda x: isinstance(x, dict) and x.get("type") == "ack" and x.get("req") == "z")
+        self.assertTrue(ack["ok"], ack)
+        self.assertEqual(self.app.language, "zh")
+        await self.hub.socket.send(json.dumps({"type": "config", "req": "b", "config": {"language": "fr"}}))
+        bad = await self.hub.next(lambda x: isinstance(x, dict) and x.get("type") == "ack" and x.get("req") == "b")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["code"], "bad_request")
+
+
+class DefaultLanguage(unittest.TestCase):
+    def test_without_a_language_the_device_keeps_its_own(self):
+        app = make_app()
+        self.assertEqual(app.language, "zh")
+        self.assertIn("分钟", app.policy._t("久坐", m=90))
+        app_en = make_app(language="en")
+        self.assertEqual(app_en.policy.language, "en")
+        bridge = hm.Bridge(hm.load_config_dict({"ws_url": "ws://127.0.0.1:9", "token_file": "/nonexistent"}),
+                           device=hm.AppDevice(app_en))
+        self.assertEqual(bridge.lang(), "en")
 
 
 if __name__ == "__main__":

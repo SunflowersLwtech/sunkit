@@ -18,8 +18,11 @@ Only to your HipiMind account:
   hardware and carries capture errors);
 - the current scene label and its short note ("what the AI sees" — text, never an image);
 - reminder categories, switch changes, scene changes (at most one every 10 minutes) and a few
-  notices (camera missing, model paused for heat). A switch change says where it came from with a
-  fixed word — `HipiMind`, `web (local)`, `voice`, `feishu` or `device` — never an address;
+  notices (camera missing, model paused for heat). A switch change also carries
+  `data: {"changes": {...}, "source": ...}`, where the source is a fixed code — `web` (the HipiMind
+  website), `local` (the device's own page), `voice`, `feishu` or `device` — never an address. Event
+  text is written in the language chosen on the HipiMind page (`config.language`, `zh` or `en`);
+  the website renders switch events from `data` in the reader's language;
 - the model settings you chose (server address and model name; **never a key**);
 - JPEG frames, **only while you have the HipiMind page open and asked for live video**;
   HipiMind forwards them to your browser and keeps nothing.
@@ -129,6 +132,10 @@ Each job has its own model, chosen in the `models` section of the config or on t
 Both files are mode 600 and HipiMind does not keep the keys. A key belongs to the server address
 it was typed for: moving a slot to another address does not take the key along (type it again
 for the new server); moving back to the first address uses it again.
+
+**Language.** `config.language` (`zh` or `en`, in `welcome` and in `config`) sets the language the
+device writes event text in and speaks reminders in; it is kept in `<data_dir>/state/overrides.json`.
+Without it the device keeps its own: the config file's top-level `"language"`, default `zh`.
 
 Changes made on the page while the device was offline arrive when it reconnects (the server sends
 them in `welcome`). From `welcome`, a part that is missing or `null` leaves the device's own

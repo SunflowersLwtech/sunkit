@@ -124,7 +124,11 @@ class App:
         self.policy = Policy(os.path.join(d, "state", "policy.json"), cfg.get("policy", {}), self._deliver,
                              self.events)
         self._overrides_path = os.path.join(d, "state", "overrides.json")
+        # The language reminders are written and spoken in: the config's "language" (default Chinese),
+        # or the one chosen on the HipiMind page (kept in state/overrides.json).
+        self.language = cfg.get("language") if cfg.get("language") in ("zh", "en") else "zh"
         self._load_overrides()
+        self.policy.language = self.language
         self.web_token = env("WEB_TOKEN") or None
         self.started = time.time()
         self.last_obs_at = 0.0
@@ -380,6 +384,30 @@ class App:
         qh = d.get("quiet_hours") if isinstance(d, dict) else None
         if isinstance(qh, list) and len(qh) == 2:
             self.policy.cfg["quiet_hours"] = qh
+        if isinstance(d, dict) and d.get("language") in ("zh", "en"):
+            self.language = d["language"]
+
+    def _save_override(self, key, value):
+        try:
+            with open(self._overrides_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            d = d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            d = {}
+        d[key] = value
+        os.makedirs(os.path.dirname(self._overrides_path), exist_ok=True)
+        tmp = self._overrides_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+        os.replace(tmp, self._overrides_path)
+
+    def set_language(self, lang: str):
+        """"zh" or "en": the language reminders are written and spoken in (raises ValueError otherwise)."""
+        if lang not in ("zh", "en"):
+            raise ValueError("language must be zh or en")
+        self.language = lang
+        self.policy.language = lang
+        self._save_override("language", lang)
 
     def set_quiet_hours(self, start: str | None, end: str | None):
         """None/None means no quiet hours."""
@@ -387,11 +415,7 @@ class App:
         qh = [start, end] if start and end else ["00:00", "00:00"]
         _hm(qh[0]), _hm(qh[1])  # raises ValueError on a bad time
         self.policy.cfg["quiet_hours"] = qh
-        os.makedirs(os.path.dirname(self._overrides_path), exist_ok=True)
-        tmp = self._overrides_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"quiet_hours": qh}, f)
-        os.replace(tmp, self._overrides_path)
+        self._save_override("quiet_hours", qh)
 
     def quiet_hours(self):
         qh = self.policy.cfg.get("quiet_hours", ["23:00", "08:00"])

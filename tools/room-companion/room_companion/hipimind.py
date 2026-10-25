@@ -56,16 +56,35 @@ PERMANENT_CLOSE = {4401: "the device token is unknown or revoked; pair the devic
                    4403: "HipiMind Room is not enabled for this account",
                    4409: "another connection for this device replaced this one"}
 EVENT_NAMESPACE = uuid.UUID("6f2b1c1e-7a0d-4f43-9a51-2d2f1b0c9e11")
-SCENE_LABELS = {"laundry": "洗衣服", "cooking": "做饭", "coding": "写代码", "router": "配置路由器", "yoga": "瑜伽",
-                "sofa_phone": "沙发上玩手机", "sleeping": "睡觉", "other": "其他", "empty": "没人"}
-CATEGORY_LABELS = {"久坐": "久坐提醒", "路由器": "改路由器前备份", "手机": "沙发上看手机", "晾衣服": "晾衣服",
-                   "厨房": "做完饭关火通风", "运动后": "运动后补水拉伸"}
+LANGUAGES = ("zh", "en")
+# Event text in the owner's language (config.language); the page renders switch events from `data` and
+# falls back to this text.
+SCENE_LABELS = {
+    "zh": {"laundry": "洗衣服", "cooking": "做饭", "coding": "写代码", "router": "配置路由器", "yoga": "瑜伽",
+           "sofa_phone": "沙发上玩手机", "sleeping": "睡觉", "other": "其他", "empty": "没人"},
+    "en": {"laundry": "Laundry", "cooking": "Cooking", "coding": "Coding", "router": "Router setup", "yoga": "Yoga",
+           "sofa_phone": "Phone on the sofa", "sleeping": "Sleeping", "other": "Something else", "empty": "Nobody"},
+}
+CATEGORY_LABELS = {
+    "zh": {"久坐": "久坐提醒", "路由器": "改路由器前备份", "手机": "沙发上看手机", "晾衣服": "晾衣服",
+           "厨房": "做完饭关火通风", "运动后": "运动后补水拉伸", "summary": "早报"},
+    "en": {"久坐": "Time to move", "路由器": "Back up the router first", "手机": "A break from the phone",
+           "晾衣服": "Hang up the laundry", "厨房": "Stove off, air the kitchen", "运动后": "Water and a stretch",
+           "summary": "Morning summary"},
+}
+SWITCH_NAMES = {"zh": {"video": "视频", "audio": "声音", "ai": "AI"}, "en": {"video": "Video", "audio": "Sound", "ai": "AI"}}
+SOURCE_NAMES = {"zh": {"web": "网页", "local": "本机网页", "voice": "语音", "feishu": "飞书", "device": "设备"},
+                "en": {"web": "website", "local": "local page", "voice": "voice", "feishu": "Feishu", "device": "device"}}
 # Spec defaults (HipiMind docs §2) for when a server sends no limits.
 DEFAULT_FRAME_MAX_BYTES = 150_000
 DEFAULT_LIVE_MAX_FPS = 3
 DEFAULT_MESSAGE_MAX_BYTES = 65_536
-NOTICE_TEXT = {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
-               "gpu_too_hot": "The local model is paused for 30 minutes to cool down"}
+NOTICE_TEXT = {
+    "en": {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
+           "gpu_too_hot": "The local model is paused for 30 minutes to cool down"},
+    "zh": {"camera_missing_reminder": "视频开着，但相机已经几分钟没接上了",
+           "gpu_too_hot": "本地模型太热，暂停 30 分钟降温"},
+}
 
 DEFAULTS = {
     "server": "https://api.hipimind.com",
@@ -289,6 +308,13 @@ class AppDevice:
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
 
+    @property
+    def language(self):
+        return getattr(self.app, "language", None)
+
+    def set_language(self, lang: str) -> None:
+        self.app.set_language(lang)
+
     # camera drivers (when the app has them): config.camera and camera_action
     @property
     def camera_capable(self) -> bool:
@@ -349,7 +375,7 @@ def _models_state(st: dict) -> dict:
     return {"vision": {"source": "engine"} if ai.get("client") else {"source": "off", "state": "off"}}
 
 
-def map_state(st: dict) -> dict:
+def map_state(st: dict, lang: str = "en") -> dict:
     """room-companion's /api/status -> HipiMind State. Only whitelisted fields are read."""
     sw = st.get("switches") if isinstance(st.get("switches"), dict) else {}
     out: dict = {"switches": {k: sw.get(k) is True for k in KEYS}}
@@ -387,14 +413,30 @@ def map_state(st: dict) -> dict:
             out["scene"] = entry
     # Built here from the facts above, never copied from the local status text: that names hardware
     # (speaker and microphone names) and carries capture error output.
-    out["summary"] = summarize(out)
+    out["summary"] = summarize(out, lang)
     return out
 
 
-def summarize(state: dict) -> str:
+def summarize(state: dict, lang: str = "en") -> str:
     """One plain sentence from the allow-listed state: switches, capture and model readiness only."""
     sw = state.get("switches") or {}
     cap = state.get("capture") or {}
+    vision = (state.get("models") or {}).get("vision") or {}
+    ready = vision.get("state")
+    if lang == "zh":
+        words = {"running": "使用中", "off": "已释放", "starting": "启动中", "waiting_device": "没接设备", "error": "出错"}
+        parts = []
+        for key, name in (("video", "视频"), ("audio", "声音")):
+            c = cap.get(key)
+            parts.append(f"{name}{'开' if sw.get(key) else '关'}" + (f"（{words[c]}）" if c in words else ""))
+        if not sw.get("ai"):
+            parts.append("AI 关（不发给任何模型）")
+        else:
+            where = {"engine": "设备本地", "openai": "自选服务", "cloud": "HipiMind 云"}.get(vision.get("source"), "")
+            states = {"ready": "就绪", "starting": "启动中", "off": "待命", "error": "出错"}
+            parts.append("AI 开" + (f"（看图：{where}" + (f"，{states[ready]}" if ready in states else "") + "）"
+                                    if where else ""))
+        return "；".join(parts)[:300]
     words = {"running": "in use", "off": "released", "starting": "starting", "waiting_device": "no device",
              "error": "problem"}
     parts = []
@@ -404,22 +446,21 @@ def summarize(state: dict) -> str:
     if not sw.get("ai"):
         parts.append("AI off (nothing goes to any model)")
     else:
-        vision = (state.get("models") or {}).get("vision") or {}
         where = {"engine": "on this device", "openai": "on your server", "cloud": "HipiMind cloud"}.get(
             vision.get("source"), "")
-        ready = vision.get("state")
         parts.append("AI on" + (f", vision {where}" if where else "") + (f" ({ready})" if ready in MODEL_STATES else ""))
     return "; ".join(parts)[:300]
 
 
-def _source_label(source) -> str:
-    """Where a switch change came from, as a fixed word: never a client address or a host name."""
+def _source_code(source) -> str:
+    """Where a switch change came from, as a fixed code — "web" (the HipiMind website), "local" (the
+    device's own page), "voice", "feishu" or "device" — never a client address or a host name."""
     s = str(source or "")
     low = s.lower()
     if low.startswith("hipimind"):
-        return "HipiMind"
+        return "web"
     if "网页" in s or "web" in low or "browser" in low:
-        return "web (local)"
+        return "local"
     if "语音" in s or "voice" in low:
         return "voice"
     if "飞书" in s or "feishu" in low or "lark" in low:
@@ -427,20 +468,23 @@ def _source_label(source) -> str:
     return "device"
 
 
-def _switch_text(changes: dict, source) -> str:
-    names = {"video": "Video", "audio": "Audio", "ai": "AI"}
-    parts = [f"{names[k]} {'on' if v else 'off'}" for k, v in changes.items() if k in names]
-    text = ", ".join(parts) or "Switches unchanged"
-    if source:
-        text += f" ({_source_label(source)})"
-    return text
+def _switch_text(changes: dict, source, lang: str = "en") -> str:
+    lang = lang if lang in LANGUAGES else "en"
+    names, code = SWITCH_NAMES[lang], _source_code(source) if source else None
+    if lang == "zh":
+        text = "，".join(f"{'开' if v else '关'}{names[k]}" for k, v in changes.items() if k in names) or "开关没有变化"
+        return text + (f"（{SOURCE_NAMES['zh'][code]}）" if code else "")
+    text = ", ".join(f"{names[k]} {'on' if v else 'off'}" for k, v in changes.items() if k in names) or "Switches unchanged"
+    return text + (f" ({SOURCE_NAMES['en'][code]})" if code else "")
 
 
 class EventDiffer:
     """Turns new entries of the local event list into HipiMind events (only a few kinds)."""
 
-    def __init__(self, enabled: dict | None = None, scene_min_minutes: float = 10, clock=time.time):
+    def __init__(self, enabled: dict | None = None, scene_min_minutes: float = 10, clock=time.time,
+                 language=lambda: "zh"):
         self.enabled = dict(DEFAULTS["events"], **(enabled or {}))
+        self.language = language  # callable: the language event text is written in
         self.scene_gap = scene_min_minutes * 60
         self.clock = clock
         self.seen: dict[str, None] = {}
@@ -476,28 +520,31 @@ class EventDiffer:
 
     def map_event(self, e: dict) -> dict | None:
         kind = e.get("kind")
+        lang = self.language()
+        lang = lang if lang in LANGUAGES else "zh"
         at = _iso(e.get("ts")) or datetime.now().astimezone().isoformat(timespec="seconds")
         if kind == "reminder" and self.enabled.get("reminders"):
             cat = str(e.get("category") or "")
-            return {"type": "event", "kind": "reminder", "text": CATEGORY_LABELS.get(cat, cat or "reminder")[:1000],
-                    "at": at, "data": {"category": cat[:40]}}
+            text = CATEGORY_LABELS[lang].get(cat, cat or ("提醒" if lang == "zh" else "Reminder"))
+            return {"type": "event", "kind": "reminder", "text": text[:1000], "at": at, "data": {"category": cat[:40]}}
         if kind == "summary" and self.enabled.get("reminders"):
-            return {"type": "event", "kind": "reminder", "text": "早报", "at": at, "data": {"category": "summary"}}
+            return {"type": "event", "kind": "reminder", "text": CATEGORY_LABELS[lang]["summary"], "at": at,
+                    "data": {"category": "summary"}}
         if kind == "switch" and self.enabled.get("switches"):
             changes = e.get("changes") if isinstance(e.get("changes"), dict) else {}
             changes = {k: v is True for k, v in changes.items() if k in KEYS}
-            return {"type": "event", "kind": "switch", "text": _switch_text(changes, e.get("source")), "at": at,
-                    "data": {"changes": changes}}
+            return {"type": "event", "kind": "switch", "text": _switch_text(changes, e.get("source"), lang), "at": at,
+                    "data": {"changes": changes, "source": _source_code(e.get("source"))}}
         if kind == "scene" and self.enabled.get("scene"):
             now = self.clock()
             if now - self.last_scene_sent < self.scene_gap:
                 return None
             self.last_scene_sent = now
             scene = str(e.get("scene") or "")
-            return {"type": "event", "kind": "scene", "text": SCENE_LABELS.get(scene, scene)[:200], "at": at,
+            return {"type": "event", "kind": "scene", "text": SCENE_LABELS[lang].get(scene, scene)[:200], "at": at,
                     "data": {"label": scene[:40]}}
-        if kind in NOTICE_TEXT and self.enabled.get("notices"):
-            return {"type": "event", "kind": "notice", "text": NOTICE_TEXT[kind], "at": at, "data": {}}
+        if kind in NOTICE_TEXT["en"] and self.enabled.get("notices"):
+            return {"type": "event", "kind": "notice", "text": NOTICE_TEXT[lang][kind], "at": at, "data": {}}
         return None
 
 
@@ -565,7 +612,11 @@ class Bridge:
         self.clock = clock
         self._connect = connect
         self.ws_url = ws_url_for(cfg)
-        self.events = EventDiffer(cfg.get("events"), cfg.get("scene_event_min_minutes", 10), clock)
+        # The language event text and the summary are written in: config.language from HipiMind once it
+        # arrives, else the device's own (the app's "language", or this bridge's config), else Chinese.
+        self.language: str | None = None
+        self.events = EventDiffer(cfg.get("events"), cfg.get("scene_event_min_minutes", 10), clock,
+                                  language=self.lang)
         self.state: dict | None = None
         self.state_changed = asyncio.Event()
         self.unacked: dict[str, dict] = {}
@@ -586,6 +637,14 @@ class Bridge:
         self.control_q: asyncio.Queue | None = None
         self.side_tasks: set[asyncio.Task] = set()
         self.test_slots: asyncio.Semaphore | None = None
+
+    def lang(self) -> str:
+        if self.language in LANGUAGES:
+            return self.language
+        own = getattr(self.device, "language", None)
+        if own in LANGUAGES:
+            return own
+        return self.cfg.get("language") if self.cfg.get("language") in LANGUAGES else "zh"
 
     # ---- local side ----
     @property
@@ -616,7 +675,7 @@ class Bridge:
                 self._last_status_error = type(e).__name__
             return
         self._last_status_error = None
-        new = map_state(st)
+        new = map_state(st, self.lang())
         if new != self.state:
             self.state = new
             self.state_changed.set()
@@ -919,6 +978,13 @@ class Bridge:
         setting alone: the welcome can set quiet hours, never clear the ones in the device's config.
         """
         ignored = []
+        lang = cfg.get("language")
+        if lang is not None:
+            if lang not in LANGUAGES:
+                return False, {"code": "bad_request", "message": "language must be zh or en"}, ignored
+            self.language = lang
+            if hasattr(self.device, "set_language"):
+                await asyncio.to_thread(self.device.set_language, lang)
         rem = dict(cfg.get("reminders")) if isinstance(cfg.get("reminders"), dict) else {}
         if from_welcome and rem.get("quiet_hours") is None:
             rem.pop("quiet_hours", None)
