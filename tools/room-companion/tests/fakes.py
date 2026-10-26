@@ -34,6 +34,11 @@ FAKE_ARECORD = textwrap.dedent(r'''
 ''')
 
 
+def ignoring_sigterm(body: str) -> str:
+    """The same fake, but it ignores SIGTERM, so stopping it takes the 3 s wait and a kill."""
+    return "import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n" + body
+
+
 def write_script(body: str) -> str:
     fd, path = tempfile.mkstemp(suffix=".py")
     with os.fdopen(fd, "w") as f:

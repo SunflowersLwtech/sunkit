@@ -27,7 +27,9 @@ def obs(scene, **kw):
 class PolicyTest(unittest.TestCase):
     def setUp(self):
         self.said = []
-        self.p = Policy(os.path.join(tempfile.mkdtemp(), "policy.json"), {}, lambda t, c, sp: self.said.append((c, t, sp)))
+        # "today" comes from the clock: pin it to the day the fixed timestamps below are on
+        self.p = Policy(os.path.join(tempfile.mkdtemp(), "policy.json"), {}, lambda t, c, sp: self.said.append((c, t, sp)),
+                        clock=lambda: at(15))
         self.p.set_context(True, 0.0)
 
     def feed(self, scene, start, minutes, step=1, **kw):
@@ -52,7 +54,7 @@ class PolicyTest(unittest.TestCase):
         self.feed("sofa_phone", at(7, 0, day=26), 50)  # still quiet before 08:00
         self.assertEqual(self.said, [])
         self.p.state["delivered"] = []
-        p2 = Policy(os.path.join(tempfile.mkdtemp(), "p.json"), {}, lambda *a: self.said.append(a))
+        p2 = Policy(os.path.join(tempfile.mkdtemp(), "p.json"), {}, lambda *a: self.said.append(a), clock=lambda: at(15))
         p2.set_context(True, 0.0)
         t = at(15)
         for i in range(40):
@@ -113,7 +115,7 @@ class PolicyTest(unittest.TestCase):
         self.assertIn("以后", self.p.on_reply("别再提醒这个", within_s=180, now=t + 80))
         self.assertIn("厨房", self.p.state["suppress_forever"])
         # the next day: today's "不用" is gone, the permanent one stays (and is persisted)
-        p2 = Policy(self.p.path, {}, lambda *a: None)
+        p2 = Policy(self.p.path, {}, lambda *a: None, clock=lambda: at(10, day=26))
         p2.set_context(True, 0.0)
         p2.observe(obs("other"), at(10, day=26))
         self.assertEqual(p2.state["suppress_today"], [])

@@ -13,7 +13,7 @@ from room_companion.audio import AudioPipeline, EnergyVAD
 from room_companion.devices import AudioDevice, VideoDevice
 from room_companion.video import VideoPipeline
 from room_companion.web import make_handler, serve
-from tests.fakes import FAKE_ARECORD, FAKE_FFMPEG, PY, FakeNotifier, pid_alive, write_script
+from tests.fakes import FAKE_ARECORD, FAKE_FFMPEG, PY, FakeNotifier, ignoring_sigterm, pid_alive, write_script
 
 
 def wait_for(cond, timeout=15.0):
@@ -36,6 +36,33 @@ class ScriptedSpeech(EnergyVAD):
     def transcribe(self, seg):
         self.calls += 1
         return self.texts.pop(0) if self.texts else ""
+
+
+def confirmation_after_exit(test, key, label, install_stub, pid_of):
+    """Switch `key` on, then off, with a capture process that ignores SIGTERM; record whether that process
+    was still alive at the moment the off confirmation went out."""
+    app, notifier = make_app(tempfile.mkdtemp())
+    install_stub(app)
+    seen, pid = [], {}
+    real_send = notifier.send
+
+    def send(text, *a, **k):
+        if "已关闭" + label in text:
+            seen.append(pid_alive(pid["p"]))
+        return real_send(text, *a, **k)
+
+    notifier.send = send
+    app.start()
+    try:
+        app.set_switches({key: True}, "t")
+        test.assertTrue(wait_for(lambda: pid_of(app) is not None))
+        pid["p"] = pid_of(app)
+        app.set_switches({key: False}, "t")
+        app.wait_settled()
+        test.assertTrue(wait_for(lambda: seen, timeout=15))
+        test.assertEqual(seen, [False], "confirmation sent while the capture process was still alive")
+    finally:
+        app.shutdown()
 
 
 def make_app(tmp, texts=(), ffmpeg_exit_after=0, video_device=True, audio_device=True):
@@ -83,6 +110,14 @@ class VideoPipelineTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: len(self.notifier.messages) >= 2))
         self.assertIn("已关闭视频", self.notifier.messages[-1])
         self.assertIn("摄像头已释放", self.notifier.messages[-1])
+
+    def test_off_confirmation_only_after_exit(self):
+        stub = write_script(ignoring_sigterm(FAKE_FFMPEG))
+
+        def install(app):
+            app.video.build_cmd = lambda dev, fmt, fps, w, fd: [PY, stub, str(fd)]
+        confirmation_after_exit(self, "video", "视频", install,
+                                lambda app: app.video.pid if app.video.latest()[0] is not None else None)
 
     def test_confirmations_arrive_in_switch_order(self):
         # The first confirmation is slow to settle, the second is instant: they must still go out in order.
@@ -142,6 +177,15 @@ class AudioPipelineTest(unittest.TestCase):
             self.assertIn("voice_command", kinds)
         finally:
             app.shutdown()
+
+    def test_off_confirmation_only_after_exit(self):
+        stub = write_script(ignoring_sigterm(FAKE_ARECORD))
+
+        def install(app):
+            app.audio.build_cmd = lambda alsa: [PY, stub]
+        confirmation_after_exit(self, "audio", "声音", install,
+                                # only once audio has arrived: before that the stub may not have set its handler yet
+                                lambda app: app.audio.pid if app.audio.level_db > -100 else None)
 
     def test_audio_off_kills_recorder_and_clears_transcripts(self):
         app, _ = make_app(tempfile.mkdtemp(), texts=["一句话"])

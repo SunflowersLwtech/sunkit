@@ -151,6 +151,7 @@ class AudioPipeline:
         self._next_prefer_check = 0.0
         self.transcripts = collections.deque(maxlen=50)
         self._gen = 0
+        self._transcripts_lock = threading.Lock()
         self._q: queue.Queue = queue.Queue(maxsize=20)
         self._threads = []
         self._stderr = collections.deque(maxlen=20)
@@ -304,7 +305,9 @@ class AudioPipeline:
         proc = self.proc
         if proc is None:
             return
-        self._gen += 1  # in-flight audio and transcriptions of the old generation are dropped
+        with self._transcripts_lock:
+            self._gen += 1  # in-flight audio and transcriptions of the old generation are dropped
+            self.transcripts.clear()
         end_process(proc, self.graceful_quit)
         # Only now is the mic released: proc stays set until arecord has exited.
         self.proc = None
@@ -380,9 +383,10 @@ class AudioPipeline:
             except Exception as e:
                 self.speech_error = f"ASR failed: {e}"[:200]
                 continue
-            if gen != self._gen or not text:
-                continue
-            self.transcripts.append({"t": time.time(), "text": text})
+            with self._transcripts_lock:  # a switch-off between the check and the append wins
+                if gen != self._gen or not text:
+                    continue
+                self.transcripts.append({"t": time.time(), "text": text})
             try:
                 self.on_transcript(text)
             except Exception:
