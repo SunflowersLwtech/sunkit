@@ -222,6 +222,9 @@ def make_handler(app):
                 return self._send(200, "image/jpeg", frame)
             if u.path == "/stream.mjpg":
                 return self._stream()
+            if u.path.startswith("/api/broadcast/"):
+                r = app.broadcast_result(u.path.rsplit("/", 1)[-1])
+                return self._json(200, r) if r else self._json(404, {"ok": False, "message": "没有这一条"})
             return self._send(404, "text/plain", b"not found")
 
         def do_POST(self):
@@ -249,6 +252,15 @@ def make_handler(app):
             if u.path == "/api/command":
                 r = app.run_command(str(body.get("text", "")), self._source(body))
                 return self._json(200 if r.get("ok") else 400, r)
+            if u.path == "/api/broadcast":
+                r = app.broadcast(str(body.get("text", "")), self._source(body), request_id=body.get("id"))
+                code = 200 if r.get("ok") else {"rate_limited": 429, "busy": 503, "no_output": 503}.get(r.get("code"), 400)
+                return self._json(code, r)
+            if u.path == "/api/output":
+                try:
+                    return self._json(200, app.set_output(str(body.get("choice", "auto")), self._source(body)))
+                except ValueError as e:
+                    return self._json(400, {"ok": False, "message": str(e)})
             if u.path == "/api/selftest/unplug" and self._who() == "local":
                 app.hide_devices(body.get("names", []), body.get("seconds", 60))
                 return self._json(200, {"ok": True})
@@ -322,6 +334,11 @@ h1{font-size:20px;margin:4px 0 12px}
 .muted{color:var(--muted);font-size:14px}.warn{color:var(--warn)}
 ul{margin:4px 0;padding-left:18px}li{margin:2px 0}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--on);width:0}
+textarea,select{width:100%;font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+textarea{resize:vertical;min-height:64px;margin:6px 0}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.big{border:0;border-radius:12px;background:var(--on);color:#fff;font-size:17px;padding:12px 22px;min-height:48px;cursor:pointer}
+.big:disabled{opacity:.5}
 </style></head><body><main>
 <h1>房间AI</h1>
 <div class="sw">
@@ -336,8 +353,13 @@ ul{margin:4px 0;padding-left:18px}li{margin:2px 0}
 <div class="card"><div>声音电平</div><div class="bar"><i id="lv"></i></div>
  <div class="muted" id="ainfo"></div>
  <div id="tr"></div></div>
+<div class="card"><div>念出来</div>
+ <textarea id="say" maxlength="300" placeholder="打一句话，点「念出来」，房间里就会念（最多 300 字，中英文都行）"></textarea>
+ <div class="row"><button class="big" id="b-say">念出来</button><span class="muted" id="saymsg"></span></div>
+ <div style="margin-top:10px">从哪出声</div><select id="outsel" aria-label="从哪出声"></select>
+ <div class="muted" id="outinfo"></div><div id="bc"></div></div>
 <div class="card"><div>最近发生的事（只记摘要，不存画面和录音）</div><ul id="ev"></ul></div>
-<p class="muted">语音口令：先说「房间助手」，再说「关视频」「关声音」「关AI」「隐私模式」（三个全关），或「安静模式」（只发通知不出声）、「平衡模式」、「主动模式」。听到提醒后说「不用」今天不再提这类，说「别再提醒这个」以后都不提。声音关着时听不到口令，要用这里或你配置的消息渠道打开。</p>
+<p class="muted">语音口令：先说「房间助手」，再说「关视频」「关声音」「关AI」「隐私模式」（三个全关），或「安静模式」（只发通知不出声）、「平衡模式」、「主动模式」。听到提醒后说「不用」今天不再提这类，说「别再提醒这个」以后都不提。声音关着时听不到口令，要用这里或你配置的消息渠道打开。上面「念出来」框里打的字会在房间里念出来；文字命令「播报：要念的话」也一样。念的时候不用开视频或声音，房间里念的话也不会被当成口令。</p>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -346,12 +368,15 @@ const KIND={switch:"开关",video_on:"摄像头开始用",video_off:"摄像头�
  motion_start:"画面开始有动静",motion_end:"画面安静了",speech:"有人说话",voice_command:"语音命令",voice_command_unparsed:"没听懂的语音命令",
  service_start:"服务启动",state_load:"开关状态读取",scene:"AI 判断场景",reminder:"说了一条提醒",reminder_queued:"有一条提醒在等时机",
  reminder_off:"关掉了一类提醒",model_on:"本地模型启动",model_ready:"本地模型就绪",model_off:"本地模型已停",mic_change:"换了麦克风",
- spoke:"音箱说了一句",summary:"早报",camera_missing_reminder:"提醒点相机",reminder_setting:"提醒设置"};
+ spoke:"念了一句",summary:"早报",camera_missing_reminder:"提醒点相机",reminder_setting:"提醒设置",
+ broadcast:"播报了一句",output_choice:"换了出声设备",interop:"和 Windows 的连接"};
 const SCN={laundry:"洗衣服",cooking:"做饭",coding:"写代码",router:"配置路由器",yoga:"瑜伽",sofa_phone:"沙发上玩手机",sleeping:"睡觉",other:"其他",empty:"没人"};
 function fmtEv(e){let t=e.ts.slice(11,16)+" "+(KIND[e.kind]||e.kind);
  if(e.kind==="switch"){t+=" · "+e.source+"："+Object.entries(e.changes).map(([k,v])=>({video:"视频",audio:"声音",ai:"AI"}[k])+(v?"开":"关")).join("、")}
  if(e.kind==="speech")t+=(e.n>1?" "+e.n+" 段，共 ":" ")+Math.round(e.seconds*10)/10+" 秒"; if(e.kind==="motion_end")t+="（持续 "+e.seconds+" 秒）";
- if(e.kind==="scene")t+="："+(SCN[e.scene]||e.scene); if(e.category)t+="："+e.category; return t}
+ if(e.kind==="scene")t+="："+(SCN[e.scene]||e.scene); if(e.category)t+="："+e.category;
+ if(e.kind==="broadcast")t+="（"+e.chars+" 字，来自"+e.source+"）"; if(e.kind==="spoke"&&e.output)t+="（"+e.output+"）";
+ if(e.kind==="output_choice")t+="："+e.choice; return t}
 function groupEv(list){const out=[];for(const e of list){const last=out[out.length-1];
  if(e.kind==="speech"&&last&&last.kind==="speech"){last.n=(last.n||1)+1;last.seconds+=e.seconds;last.ts=e.ts}else out.push({...e})}return out}
 const ASR={ready:"本地识别就绪",loading:"识别模型加载中",idle:"识别未启动"};
@@ -370,9 +395,27 @@ async function refresh(){
  const a=s.audio; const pct=Math.max(0,Math.min(100,(a.level_db+70)/70*100)); $("lv").style.width=(a.state==="running"?pct:0)+"%";
  $("ainfo").textContent=s.switches.audio?(a.state==="running"?(a.device+" · "+(ASR[a.asr]||"识别不可用")+" · 已切出 "+a.segments+" 段话"):(a.detail||"正在连接麦克风…")):"声音关着，麦克风没有在用。";
  $("tr").innerHTML=(s.transcripts||[]).slice(-6).reverse().map(t=>"<div class='muted'>"+new Date(t.t*1000).toTimeString().slice(0,5)+" "+t.text.replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]))+"</div>").join("");
+ renderOut(s.speaker,s.broadcast);
  $("ev").innerHTML=groupEv(s.events||[]).slice(-12).reverse().map(e=>"<li>"+fmtEv(e).replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]))+"</li>").join("");
  }catch(e){$("summary").textContent="连不上："+e}
 }
+const esc=t=>String(t).replace(/[<&]/g,c=>({"<":"&lt;","&":"&amp;"}[c]));
+let outKey="";
+function renderOut(sp,bc){
+ if(!sp){$("outinfo").textContent="这台电脑没有配置出声";$("b-say").disabled=true;return}
+ const key=sp.choice+"|"+sp.outputs.map(o=>o.name).join("|");
+ if(key!==outKey&&document.activeElement!==$("outsel")){outKey=key;
+  $("outsel").innerHTML="<option value='auto'>自动（按设置的顺序，没有就用 Windows 默认的）</option>"+sp.outputs.map(o=>"<option value='"+esc(o.name).replace(/'/g,"&#39;")+"'>"+esc(o.label)+(o.label!==o.name?" · "+esc(o.name):"")+"</option>").join("");
+  $("outsel").value=sp.choice}
+ const o=sp.output; $("outinfo").textContent=(o?"现在从「"+o.label+"」出声"+(sp.speaking?"，正在念":""):"没有能出声的设备")+(sp.notes.length?" · "+sp.notes.join(" · "):"")+(sp.error?" · 出错："+sp.error:"");
+ $("bc").innerHTML=bc&&bc.recent.length?"<div class='muted'>今天念过 "+bc.today+"/"+bc.max_per_day+" 次（文字只留在今天，不存盘）：</div>"+bc.recent.slice().reverse().map(b=>"<div class='muted'>"+new Date(b.t*1000).toTimeString().slice(0,5)+" "+esc(b.text)+"</div>").join(""):""}
+async function post(path,body){const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify(body)});
+ let j={};try{j=await r.json()}catch(e){j={message:"出错了（"+r.status+"）"}} return j}
+$("b-say").onclick=async()=>{const t=$("say").value.trim(); if(!t){$("saymsg").textContent="先打一句话";return}
+ $("b-say").disabled=true; try{const j=await post("/api/broadcast",{text:t}); $("saymsg").textContent=j.message||""; if(j.ok)$("say").value=""}
+ finally{$("b-say").disabled=false} refresh()};
+$("say").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey))$("b-say").click()});
+$("outsel").onchange=async()=>{const j=await post("/api/output",{choice:$("outsel").value}); $("saymsg").textContent=j.message||""; outKey=""; refresh()};
 for(const k of ["video","audio","ai"]){$("b-"+k).onclick=async()=>{if(!cur)return;
  const b=$("b-"+k); b.disabled=true;
  try{await fetch("/api/switch",{method:"POST",headers:{"Content-Type":"application/json","X-Room-AI":"1"},body:JSON.stringify({[k]:!cur[k]})})}finally{b.disabled=false}

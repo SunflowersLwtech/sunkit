@@ -1,11 +1,14 @@
 """Wires switches, capture pipelines, voice commands, the AI gate, reminders and notifications."""
 from __future__ import annotations
 
+import collections
 import json
 import os
 import queue
+import re
 import threading
 import time
+import uuid
 
 from . import commands
 from .ai import AIGate
@@ -99,10 +102,13 @@ class App:
                        build_cmd=ds.audio_cmd)
         self.video = video or VideoPipeline(self.switches, self.events, cfg, **vkw)
         self.audio = audio or AudioPipeline(self.switches, self.events, cfg, on_transcript=self.on_transcript,
-                                            on_device_change=self._on_mic_change, **akw)
+                                            on_device_change=self._on_mic_change,
+                                            is_echo=lambda a, b: self.speaker is not None and self.speaker.echo(now=b, since=a),
+                                            **akw)
         if speaker is None and cfg.get("tts"):
             from .speaker import Speaker
-            speaker = Speaker(cfg["tts"], self.events)
+            speaker = Speaker({"language": cfg.get("language", "zh"), **cfg["tts"]}, self.events,
+                              state_path=os.path.join(d, "state", "output.json"))
         self.speaker = speaker
         self.policy = Policy(os.path.join(d, "state", "policy.json"), cfg.get("policy", {}), self._deliver,
                              self.events)
@@ -114,6 +120,12 @@ class App:
         self.gpu = None
         self._gpu_checked_at = 0.0
         self.gpu_pause_until = 0.0
+        # typed text read out in the room: the words stay in memory for today only
+        self.broadcasts = collections.deque(maxlen=50)
+        self._bc_times = collections.deque(maxlen=100)
+        self._bc_day, self._bc_count = "", 0
+        self._bc_lock = threading.Lock()
+        self._bc_results = collections.OrderedDict()  # id -> state, kept for the last 50
         self.gpu_query = gpu_query
         self.hidden_devices: dict[str, float] = {}  # self-test: pretend these devices are unplugged until t
         self._stop = threading.Event()
@@ -313,10 +325,8 @@ class App:
                                                "off": "待命：视频开着才会看"}.get(st, st) + "）")
         else:
             parts.append("AI 开")
-        out = (self.speaker.output or {}) if self.speaker is not None else {}
-        if out.get("name"):
-            heard = not out.get("muted") and out.get("volume", 0) > 0
-            parts.append("出声：" + _out_label(out["name"]) + ("" if heard else "（静音，只发通知）"))
+        if self.speaker is not None:
+            parts.append(self.speaker.describe())
         return "；".join(parts)
 
     def status(self) -> dict:
@@ -334,6 +344,7 @@ class App:
                           paused_hot=time.time() < self.gpu_pause_until) if self.model_server is not None else None,
             "policy": self.policy.status(),
             "speaker": self.speaker.status() if self.speaker is not None else None,
+            "broadcast": self.broadcast_status(),
             "windows": self.windows_evidence() if self.evidence is not None else None,
             "interop": self.interop.status() if self.interop is not None else None,
             "feishu": {"configured": getattr(self.notifier, "configured", False),
@@ -359,7 +370,88 @@ class App:
             return "好的，之前关掉的提醒都恢复了。"
         return self.policy.on_reply(text, within_s=within_s)
 
+    # ---- reading typed text out loud ----
+    def broadcast(self, text: str, source: str, now=None, request_id=None, on_done=None) -> dict:
+        """Read `text` out in the room. Not tied to the three switches; limited per minute and per day.
+
+        Returns at once with {"ok", "id", "message"}. When it has been played (or failed),
+        on_done({"id", "ok", "output", "seconds", "peak", "error"}) is called from the speaker's thread,
+        and broadcast_result(id) has the same fields plus "state".
+        """
+        now = now or time.time()
+        bid = str(request_id or "")[:64] or uuid.uuid4().hex[:12]
+        text = " ".join(str(text or "").split())
+        limit = self.cfg.get("broadcast_max_chars", 300)
+        if not text:
+            return {"ok": False, "id": bid, "code": "empty", "message": "没有要念的文字。"}
+        if len(text) > limit:
+            return {"ok": False, "id": bid, "code": "too_long", "message": f"太长了：{len(text)} 字，一次最多 {limit} 字。"}
+        if self.speaker is None:
+            return {"ok": False, "id": bid, "code": "no_output", "message": "这台电脑没有配置出声。"}
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        per_min, per_day = self.cfg.get("broadcast_per_minute", 6), self.cfg.get("broadcast_per_day", 200)
+        with self._bc_lock:
+            if self._bc_day != day:
+                self._bc_day, self._bc_count = day, 0
+            if sum(1 for t in self._bc_times if now - t < 60) >= per_min:
+                return {"ok": False, "id": bid, "code": "rate_limited", "message": f"念得太频繁了：每分钟最多 {per_min} 次，等一会儿再试。"}
+            if self._bc_count >= per_day:
+                return {"ok": False, "id": bid, "code": "rate_limited", "message": f"今天已经念了 {per_day} 次，到上限了，明天再用。"}
+            res = {"id": bid, "state": "queued", "chars": len(text), "source": source, "t": now, "day": day,
+                   "ok": None, "output": None, "seconds": None, "peak": None, "error": None}
+
+            def done(r, res=res):
+                res.update({k: r.get(k) for k in ("ok", "output", "seconds", "peak", "error")},
+                           state="done" if r.get("ok") else "failed")
+                if on_done is not None:
+                    on_done({k: res[k] for k in ("id", "ok", "output", "seconds", "peak", "error")})
+
+            done.res = res  # lets broadcast_result see that this one is being spoken
+            if not self.speaker.say(text, on_done=done):
+                return {"ok": False, "id": bid, "code": "busy", "message": "前面还有好几句没念完，等一会儿再试。"}
+            self._bc_results[bid] = res
+            while len(self._bc_results) > 50:
+                self._bc_results.popitem(last=False)
+            self._bc_times.append(now)
+            self._bc_count += 1
+            self.broadcasts.append({"t": now, "day": day, "text": text, "source": source})
+        self.events.add("broadcast", chars=len(text), source=source)
+        where = self.speaker.describe().replace("出声：", "")
+        return {"ok": True, "id": bid, "message": f"好，{len(text)} 字，马上念（{where}）。", "summary": self.plain_status()}
+
+    def broadcast_result(self, bid: str):
+        with self._bc_lock:
+            r = self._bc_results.get(bid)
+            if r is None:
+                return None
+            out = {k: r[k] for k in ("id", "state", "ok", "output", "seconds", "peak", "error", "chars", "source")}
+        if out["state"] == "queued" and self.speaker is not None and getattr(self.speaker.current, "res", None) is r:
+            out["state"] = "speaking"
+        return out
+
+    def broadcast_status(self, now=None) -> dict:
+        now = now or time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        with self._bc_lock:
+            while self.broadcasts and self.broadcasts[0]["day"] != day:
+                self.broadcasts.popleft()  # only today's words are kept
+            recent = [{"t": b["t"], "text": b["text"], "source": b["source"]} for b in list(self.broadcasts)[-10:]]
+            count = self._bc_count if self._bc_day == day else 0
+        return {"today": count, "max_per_day": self.cfg.get("broadcast_per_day", 200),
+                "max_chars": self.cfg.get("broadcast_max_chars", 300), "recent": recent}
+
+    def set_output(self, choice: str, source: str) -> dict:
+        if self.speaker is None:
+            raise ValueError("这台电脑没有配置出声")
+        self.speaker.set_choice(choice)
+        self.events.add("output_choice", choice="自动" if self.speaker.choice == "auto" else
+                        self.speaker.label(self.speaker.choice), source=source)
+        return {"ok": True, "message": self.speaker.describe(), "summary": self.plain_status()}
+
     def run_command(self, text: str, source: str) -> dict:
+        m = re.match(r"\s*播报\s*[:：]?\s*(.*)$", text or "", re.S)
+        if m:
+            return self.broadcast(m.group(1), source)
         reply = self._policy_text(text)
         if reply:
             self.events.add("reminder_setting", source=source)
@@ -430,12 +522,6 @@ def parse_nvidia_smi(out: str):
         return {"temp_c": int(float(t)), "power_w": round(float(p), 1), "mem_mb": int(float(m))}
     except (ValueError, IndexError):
         return None
-
-
-def _out_label(name: str) -> str:
-    if "realtek" in name.lower() or "speakers" in name.lower():
-        return "电脑喇叭"
-    return name
 
 
 def _mic_label(name: str) -> str:

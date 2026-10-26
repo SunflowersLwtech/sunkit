@@ -66,8 +66,18 @@ mic ──recorder──> 16 kHz PCM ──> VAD ──> local ASR ──> voice
   - a short summary of yesterday and last night at 08:30;
   - modes: 安静 (notifier only, no speech), 平衡, 主动 (earlier thresholds).
   Only scene labels and minutes are kept (`state/policy.json`).
-- **Speaking** (optional): local Chinese TTS (sherpa-onnx, e.g. MeloTTS zh_en) on the CPU, played on
-  Windows' default output device. While it speaks, transcripts are ignored as echo.
+- **Speaking** (optional): local Chinese TTS (sherpa-onnx, e.g. MeloTTS zh_en, which also reads English
+  words) on the CPU. `winplay.ps1` plays it straight to one Windows output (WASAPI shared mode) without
+  changing the default device. The output is picked by name from `tts.output_prefer`, or chosen on the
+  page; with nothing preferred, Windows' default is used. A muted or quiet output is raised to
+  `tts.volume` (default 70%) while speaking and put back afterwards. The output's peak meter during
+  playback is kept as proof that it played. `tts.output_labels` gives outputs short names, and
+  `tts.missing_notes` adds a line for a preferred device that is not connected. Speech the mic picks up
+  while we are speaking (any segment that overlaps playback) is dropped before recognition, so it is
+  never a command, a transcript, or "someone is talking".
+- **Reading typed text out loud**: the page has a text box, and the text command `播报：<text>` does
+  the same. It works with all three switches off. At most 300 characters, 6 a minute and 200 a day.
+  Events record only the length and where it came from; the words stay in memory for the day.
 - **Notifiers** (`notifiers/`): `log` (default, prints) or `feishu` (optional plugin: a custom app bot
   messaging one user; needs `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_OPEN_ID`). Adding one is a
   class with `send(text)`.
@@ -93,6 +103,13 @@ It listens on `0.0.0.0:8790` by default (`listen`, `port` in the config).
     sent, must be one of the allowed hosts. A cross-site form can send neither header.
 - `POST /api/switch {"video": false}`, `POST /api/command {"text": "隐私模式"}`, `GET /api/status`,
   `GET /snapshot.jpg`, `GET /stream.mjpg`.
+- `POST /api/broadcast {"text": "...", "id": "optional"}` answers at once with `{"ok", "id", "message"}`;
+  when it is refused, `code` is `empty`, `too_long`, `rate_limited` (429), `busy` or `no_output` (503).
+  `GET /api/broadcast/<id>` gives `state` (`queued`, `speaking`, `done`, `failed`), `output`, `seconds`,
+  `peak` and `error`. In-process connectors call `app.broadcast(text, source, request_id=, on_done=)`
+  and get the same result fields through `on_done` once it has been played.
+- `POST /api/output {"choice": "auto" | "<output name>"}` picks where it speaks; the choice is kept in
+  `state/output.json`.
 - Loopback-only self-test hooks: `/api/selftest/inject` (16 kHz PCM into the microphone path),
   `/api/selftest/unplug` (pretend devices are gone for N seconds), `/api/speak`.
 
@@ -167,8 +184,9 @@ with the key read from a file, never from the command line.
 |---|---|---|
 | Video, audio | No. Only the latest frame and the utterance being recognized are in memory | Dropped when the switch turns off |
 | Transcripts | No, memory only | 10 minutes; dropped when audio turns off |
+| Text read out loud | No, memory only | That day |
 | Frames sent to the vision model | No | Only for the one local request |
-| Event summaries (`events/*.jsonl`): switch changes, device in use/released, motion start/end, seconds of speech (no words), scene labels, reminder kinds, GPU temperature | Yes | 30 days |
+| Event summaries (`events/*.jsonl`): switch changes, device in use/released, motion start/end, seconds of speech (no words), scene labels, reminder kinds, GPU temperature, text read out loud (length and source, no words) | Yes | 30 days |
 | `state/policy.json`: minutes per scene per day, sleep/wake time, reminder kinds given or turned off | Yes | Minutes: 3 days |
 
 ## Tests
@@ -179,7 +197,7 @@ From `tools/room-companion`:
 python -m unittest discover -s tests -t .
 ```
 
-65 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
+84 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
 device and make no network request. To be sure, run them with the network cut. Loopback has to be up,
 because the web tests talk to a server on 127.0.0.1:
 

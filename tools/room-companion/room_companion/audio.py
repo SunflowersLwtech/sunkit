@@ -125,11 +125,15 @@ class SherpaSpeech:
 
 class AudioPipeline:
     def __init__(self, switches, events, cfg, on_transcript=None, find_device=None, build_cmd=None,
-                 speech_factory=None, on_device_change=None):
+                 speech_factory=None, on_device_change=None, is_echo=None):
         self.switches = switches
         self.events = events
         self.cfg = cfg
         self.on_transcript = on_transcript or (lambda text: None)
+        # is_echo(start, end): our own speaker was playing at some point in [start, end]; such speech is
+        # dropped before recognition
+        self.is_echo = is_echo or (lambda start, end: False)
+        self.echo_dropped = 0
         self.find_device = find_device or devices.find_audio
         self.build_cmd = build_cmd or build_arecord
         self.speech_factory = speech_factory or self._default_speech
@@ -356,6 +360,11 @@ class AudioPipeline:
             with self._speech_lock:
                 segs = speech.accept(data)
             for seg in segs:
+                now = time.time()
+                # the segment ends about now; it started its length ago, plus capture and VAD lag
+                if self.is_echo(now - speech.seconds(seg) - self.cfg.get("echo_lag_s", 1.0), now):
+                    self.echo_dropped += 1  # our own voice: not a command, not a transcript, not "someone talking"
+                    continue
                 self.segments += 1
                 self.last_speech_at = time.time()
                 secs = speech.seconds(seg)

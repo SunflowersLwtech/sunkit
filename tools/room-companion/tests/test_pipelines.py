@@ -187,6 +187,20 @@ class AudioPipelineTest(unittest.TestCase):
                                 # only once audio has arrived: before that the stub may not have set its handler yet
                                 lambda app: app.audio.pid if app.audio.level_db > -100 else None)
 
+    def test_own_voice_is_dropped_before_recognition(self):
+        app, _ = make_app(tempfile.mkdtemp(), texts=["房间助手，关视频"] * 5)
+        app.audio.is_echo = lambda start, end: True  # the speaker is playing the whole time
+        app.start()
+        try:
+            app.set_switches({"video": True, "audio": True}, "test")
+            self.assertTrue(wait_for(lambda: app.audio.echo_dropped >= 2, timeout=10))
+            self.assertEqual(app.audio.recent_transcripts(), [])
+            self.assertEqual(app.speech.calls, 0, "nothing was sent to recognition")
+            self.assertTrue(app.switches.get("video"), "our own words did not switch video off")
+            self.assertEqual(app.audio.last_speech_at, 0.0, "not counted as someone talking")
+        finally:
+            app.shutdown()
+
     def test_audio_off_kills_recorder_and_clears_transcripts(self):
         app, _ = make_app(tempfile.mkdtemp(), texts=["一句话"])
         app.start()
@@ -344,6 +358,18 @@ class WebTest(unittest.TestCase):
         nav = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
         self.assertEqual(self.req("/", headers=nav)[0], 200)
         self.assertEqual(self.req("/", headers={**nav, "Sec-Fetch-Dest": "iframe"})[0], 403)
+
+    def test_broadcast_needs_the_same_guard(self):
+        form = {"Content-Type": "text/plain", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+        self.assertEqual(self.raw("/api/broadcast", '{"text":"hi","x":"="}'.encode(), form)[0], 403)
+        self.assertEqual(self.req("/api/broadcast", {"text": "hi"})[0], 403)  # no X-Room-AI
+        self.assertEqual(self.req("/api/broadcast", {"text": "hi"}, headers={"Host": "evil.example"})[0], 403)
+        code, body = self.req("/api/broadcast", {"text": "hi"}, headers={"X-Room-AI": "1"})
+        self.assertEqual(code, 503, body)  # this test app has no speaker
+        self.assertEqual(json.loads(body)["code"], "no_output")
+        self.assertIn("没有配置出声", json.loads(body)["message"])
+        self.assertEqual(self.req("/api/broadcast/abc")[0], 404)
+        self.assertEqual(self.req("/api/broadcast/abc", headers={"Host": "evil.example"})[0], 403)
 
     def test_stream_refused_when_video_off(self):
         self.assertEqual(self.req("/stream.mjpg")[0], 409)

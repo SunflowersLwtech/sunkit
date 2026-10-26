@@ -25,4 +25,4 @@ build-backend = "setuptools.build_meta"
 packages = ["room_companion", "room_companion.notifiers"]
 
 [tool.setuptools.package-data]
-room_companion = ["winaudio.ps1"]
+room_companion = ["winplay.ps1"]
