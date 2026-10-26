@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import hashlib
 import hmac
 import json
@@ -79,6 +80,46 @@ def upsert_env(path: Path, values: dict[str, str]) -> None:
         if key not in seen:
             out.append(f"{key}={value}")
     path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+
+
+VK_FIELDS = (
+    "X_CLIENT_ID",
+    "X_CLIENT_SECRET",
+    "X_OAUTH2_ACCESS_TOKEN",
+    "X_OAUTH2_REFRESH_TOKEN",
+    "X_OAUTH2_TOKEN_EXPIRES_AT",
+)
+
+
+def load_env_vk(entry: str) -> dict[str, str]:
+    """The X tokens straight from Vaultwarden (`vk render` into a 0600 file in the temp dir, read, deleted at once).
+
+    Vaultwarden rotates nothing on its own, but X rotates the refresh token on every use and other pipelines share
+    the same entry: what this script reads at the start is what every other caller reads after it writes back.
+    """
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="r2x-vk-") as tmp:
+        template = Path(tmp) / "t"
+        out = Path(tmp) / "o"
+        template.write_text("".join(f"{k}=vk://{entry}/{k}\n" for k in VK_FIELDS), encoding="utf-8")
+        result = subprocess.run(["vk", "render", "-f", str(template), "-o", str(out)], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise SystemExit(f"vk render failed for {entry}: {result.stderr[-200:]}")
+        return load_env_file(out)
+
+
+def save_env_vk(entry: str, values: dict[str, str]) -> None:
+    """Write the rotated tokens back to Vaultwarden, on stdin, before they are used anywhere."""
+    import subprocess
+
+    for key, value in values.items():
+        if not value:
+            continue
+        result = subprocess.run(["vk", "set", entry, key], input=value, capture_output=True, text=True)
+        if result.returncode != 0 or value in (result.stdout + result.stderr):
+            raise SystemExit(f"vk set {key} failed")
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -343,7 +384,7 @@ def api_json_oauth1(method: str, url: str, env: dict[str, str], payload: dict[st
         raise RuntimeError(f"HTTP {exc.code} from {url}: {detail}") from exc
 
 
-def refresh_access_token(env: dict[str, str], env_path: Path | None) -> str:
+def refresh_access_token(env: dict[str, str], env_path: Path | None, vk_entry: str = "") -> str:
     refresh_token = env.get("X_OAUTH2_REFRESH_TOKEN") or env.get("X_REFRESH_TOKEN", "")
     client_id = env.get("X_CLIENT_ID", "")
     client_secret = env.get("X_CLIENT_SECRET", "")
@@ -377,11 +418,20 @@ def refresh_access_token(env: dict[str, str], env_path: Path | None) -> str:
     env["X_OAUTH2_ACCESS_TOKEN"] = access
     if payload.get("refresh_token"):
         env["X_OAUTH2_REFRESH_TOKEN"] = str(payload["refresh_token"])
-    updates = {
-        "X_OAUTH2_ACCESS_TOKEN": env["X_OAUTH2_ACCESS_TOKEN"],
-        "X_OAUTH2_REFRESH_TOKEN": env.get("X_OAUTH2_REFRESH_TOKEN", ""),
-    }
-    if env_path:
+    if vk_entry:
+        # The refresh token is written first: the old one is already dead, so losing the new one means a new sign-in.
+        updates = {"X_OAUTH2_REFRESH_TOKEN": env.get("X_OAUTH2_REFRESH_TOKEN", ""),
+                   "X_OAUTH2_ACCESS_TOKEN": env["X_OAUTH2_ACCESS_TOKEN"]}
+        if payload.get("expires_in"):
+            updates["X_OAUTH2_TOKEN_EXPIRES_AT"] = datetime.fromtimestamp(
+                time.time() + int(payload["expires_in"]), timezone.utc
+            ).isoformat()
+        save_env_vk(vk_entry, updates)
+    elif env_path:
+        updates = {
+            "X_OAUTH2_ACCESS_TOKEN": env["X_OAUTH2_ACCESS_TOKEN"],
+            "X_OAUTH2_REFRESH_TOKEN": env.get("X_OAUTH2_REFRESH_TOKEN", ""),
+        }
         upsert_env(env_path, {key: value for key, value in updates.items() if value})
     return access
 
@@ -487,10 +537,14 @@ def publish(args: argparse.Namespace) -> int:
         "posts": [],
     }
 
-    env, env_path = load_env([repo_run_dir / ".env", Path.cwd() / ".env", Path(args.env_file)])
+    vk_entry = args.vk_entry or os.environ.get("REPO2X_VK_ENTRY", "")
+    if vk_entry:
+        env, env_path = load_env_vk(vk_entry), None
+    else:
+        env, env_path = load_env([repo_run_dir / ".env", Path.cwd() / ".env", Path(args.env_file)])
     token = env.get("X_OAUTH2_ACCESS_TOKEN") or env.get("X_USER_ACCESS_TOKEN", "")
     if args.live and not token:
-        token = refresh_access_token(env, env_path)
+        token = refresh_access_token(env, env_path, vk_entry)
     if args.live and not token:
         raise SystemExit(
             "Missing X_OAUTH2_ACCESS_TOKEN. Run x_oauth2_pkce_setup.py first, or provide an env file with a user token."
@@ -541,7 +595,7 @@ def publish(args: argparse.Namespace) -> int:
                 tweet_id = post_tweet(token, text, media_ids, reply_to, bool(entry["made_with_ai"]))
             except RuntimeError as exc:
                 if "401" in str(exc):
-                    token = refresh_access_token(env, env_path)
+                    token = refresh_access_token(env, env_path, vk_entry)
                     if not token:
                         raise
                     tweet_id = post_tweet(token, text, media_ids, reply_to, bool(entry["made_with_ai"]))
@@ -579,6 +633,10 @@ def main() -> int:
     parser.add_argument("--reply-mode", choices=["previous", "root"], help="Thread replies target previous post or root post")
     parser.add_argument("--delay-seconds", type=float, default=1.0, help="Delay between live posts")
     parser.add_argument("--live", action="store_true", help="Actually publish posts. Default is dry-run.")
+    parser.add_argument("--vk-entry", default="",
+                        help="Read and write the X tokens in this Vaultwarden entry instead of an env file "
+                        "(also REPO2X_VK_ENTRY). When set, .env files are not read and refreshes are written "
+                        "back to Vaultwarden before they are used.")
     args = parser.parse_args()
     return publish(args)
 
