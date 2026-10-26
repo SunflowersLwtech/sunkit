@@ -337,9 +337,9 @@ class LocalAPI:
         from .speaker import DEFAULT_LABELS
         return {label for labels in DEFAULT_LABELS.values() for label in labels.values()}
 
-    #: How long a sidecar follows one announcement before reporting it failed (300 characters read out
-    #: take about a minute and a half).
-    ANNOUNCE_FOLLOW_SECONDS = 150.0
+    #: How long a sidecar follows one announcement before reporting it failed: as long as HipiMind waits,
+    #: since the speaker queues up to ten sentences and 300 characters take about a minute and a half.
+    ANNOUNCE_FOLLOW_SECONDS = 900.0
 
     def announce(self, text: str, source: str, req: str, on_done) -> dict:
         """Hand `text` to the room-companion to read out; on_done(result) once it was played or failed."""
