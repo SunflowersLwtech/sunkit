@@ -9,13 +9,90 @@ record that drives the privacy indicator (LastUsedTimeStop == 0 means in use).
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 
 SYS32 = "/mnt/c/Windows/System32"
 CONSENT = r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
+
+
+class Interop:
+    """Keeps WSL_INTEROP pointing at a socket that can start Windows programs.
+
+    A systemd service has no WSL_INTEROP and falls back to /run/WSL/1_interop. After WSL restarts that
+    default can be broken (every .exe fails with "Invalid argument") while the socket of another WSL
+    session still works. This checks the current choice with a trivial cmd.exe call and, if it fails,
+    tries every socket in /run/WSL, newest first. The choice goes into os.environ, so every Windows
+    program started afterwards (ffmpeg.exe, powershell.exe, tasklist.exe, llama-server.exe, ...) uses it.
+    """
+
+    def __init__(self, run=subprocess.run, sock_dir="/run/WSL", environ=None, min_interval=600.0, min_retry=10.0):
+        self.run = run
+        self.sock_dir = sock_dir
+        self.environ = os.environ if environ is None else environ
+        self.min_interval = min_interval  # re-check a working choice this often
+        self.min_retry = min_retry  # after a failure, don't probe again sooner than this
+        self.ok = None
+        self.socket = None  # None: the default (no WSL_INTEROP)
+        self.repairs = 0
+        self._checked = 0.0
+        self._lock = threading.Lock()
+
+    def _works(self, sock) -> bool:
+        env = dict(self.environ)
+        if sock is None:
+            env.pop("WSL_INTEROP", None)
+        else:
+            env["WSL_INTEROP"] = sock
+        try:
+            p = self.run([f"{SYS32}/cmd.exe", "/d", "/c", "exit 0"], env=env, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return p.returncode == 0
+
+    def _candidates(self):
+        cur = self.environ.get("WSL_INTEROP")
+        out = [cur] if cur else []
+        out.append(None)
+        try:
+            socks = [os.path.join(self.sock_dir, n) for n in os.listdir(self.sock_dir) if n.endswith("_interop")]
+        except OSError:
+            socks = []
+        socks.sort(key=lambda p: os.stat(p).st_mtime if os.path.exists(p) else 0, reverse=True)
+        out += [s for s in socks if s != cur]
+        return out
+
+    def ensure(self, force=False, now=None) -> bool:
+        """True when Windows programs can be started. Cheap when checked recently."""
+        now = time.time() if now is None else now
+        with self._lock:
+            if self.ok is not None:
+                # a working choice is re-checked every min_interval; after a failure (or when a caller saw a
+                # Windows program fail to start) at most every min_retry
+                limit = self.min_retry if (force or not self.ok) else self.min_interval
+                if now - self._checked < limit:
+                    return bool(self.ok)
+            self._checked = now
+            before = self.environ.get("WSL_INTEROP")
+            for sock in self._candidates():
+                if self._works(sock):
+                    if sock is None:
+                        self.environ.pop("WSL_INTEROP", None)
+                    else:
+                        self.environ["WSL_INTEROP"] = sock
+                    if sock != before:
+                        self.repairs += 1
+                    self.ok, self.socket = True, sock
+                    return True
+            self.ok = False
+            return False
+
+    def status(self):
+        return {"ok": self.ok, "socket": self.socket or "default", "repairs": self.repairs}
 
 
 @dataclass
@@ -55,17 +132,15 @@ def parse_dshow_formats(text: str):
 
 
 class Dshow:
-    def __init__(self, ffmpeg_exe: str, run=subprocess.run):
+    def __init__(self, ffmpeg_exe: str, run=subprocess.run, interop=None):
         self.ffmpeg = ffmpeg_exe
         self.run = run
+        self.interop = interop
         self._cache = (0.0, [])
 
     def _ffmpeg_out(self, args, timeout=15) -> str:
-        try:
-            p = self.run([self.ffmpeg, "-hide_banner", *args], capture_output=True, timeout=timeout)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return (p.stdout + p.stderr).decode("utf-8", "replace")
+        return run_windows(self.run, [self.ffmpeg, "-hide_banner", *args], self.interop, timeout,
+                           lambda p: (p.stdout + p.stderr).decode("utf-8", "replace"))
 
     def devices(self, max_age=5.0) -> list[DshowDevice]:
         t, devs = self._cache
@@ -101,6 +176,33 @@ class Dshow:
         return [self.ffmpeg, "-hide_banner", "-loglevel", "error",
                 "-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={name}",
                 "-ac", "1", "-ar", str(rate), "-f", "s16le", "pipe:1"]
+
+
+def interop_failed(args, p) -> bool:
+    """A Windows program that never started because the interop channel is broken: WSL's loader exits
+    with 1 and prints "<path>: Invalid argument" (measured), not an OSError in the caller."""
+    err = p.stderr.decode("utf-8", "replace") if isinstance(p.stderr, bytes) else (p.stderr or "")
+    first = err.strip().splitlines()[0] if err.strip() else ""
+    return p.returncode != 0 and not p.stdout and first == f"{args[0]}: Invalid argument"
+
+
+def run_windows(run, args, interop, timeout, read):
+    """Run a Windows program and return read(result), or "" on failure. If it could not start because the
+    interop channel is broken, let `interop` find a working one and try once more."""
+    for attempt in (0, 1):
+        try:
+            p = run(args, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return ""
+        except FileNotFoundError:
+            return ""  # wrong path, not a channel problem
+        except OSError:
+            p = None
+        if p is not None and not interop_failed(args, p):
+            return read(p)
+        if attempt or interop is None or not interop.ensure(force=True):
+            return ""
+    return ""
 
 
 # ---- evidence ----
@@ -142,18 +244,16 @@ def filetime_to_unix(ft: int) -> float | None:
 class Evidence:
     """What Windows says about the devices, cached briefly because each probe spawns a Windows process."""
 
-    def __init__(self, run=subprocess.run, ttl=3.0, app_key="ffmpeg.exe"):
+    def __init__(self, run=subprocess.run, ttl=3.0, app_key="ffmpeg.exe", interop=None):
         self.run = run
         self.ttl = ttl
         self.app_key = app_key  # how our ffmpeg.exe shows up in the usage record, e.g. "full_build#bin#ffmpeg.exe"
+        self.interop = interop
         self._cache = {}
 
     def _cmd(self, args, timeout=10) -> str:
-        try:
-            p = self.run(args, capture_output=True, timeout=timeout)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return p.stdout.decode("utf-8", "replace") if isinstance(p.stdout, bytes) else (p.stdout or "")
+        return run_windows(self.run, args, self.interop, timeout,
+                           lambda p: p.stdout.decode("utf-8", "replace") if isinstance(p.stdout, bytes) else (p.stdout or ""))
 
     def _cached(self, key, fn):
         t, v = self._cache.get(key, (0.0, None))

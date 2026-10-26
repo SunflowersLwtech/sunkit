@@ -38,7 +38,9 @@ mic ──recorder──> 16 kHz PCM ──> VAD ──> local ASR ──> voice
     Windows `ffmpeg.exe` reads them through DirectShow and is started from WSL. Killing the WSL side
     ends the Windows process too, which is what releases the device. No USB passthrough, no driver,
     no Windows service. Devices are picked by name (`video_prefer`, `audio_prefer`). Motion is scored
-    from the live JPEG frames.
+    from the live JPEG frames. After WSL restarts, a systemd service can be left with a broken interop
+    channel (every `.exe` fails with "Invalid argument"); the app then picks a working socket from
+    `/run/WSL` by itself and shows it under `interop` in `/api/status`.
 - **Microphone fallback**: if the preferred microphone disappears, or stays digitally silent for
   10 minutes, recording moves to the next name in `audio_prefer`, and moves back when the preferred
   one returns. The change is announced at most 4 times a day and never during quiet hours.
@@ -177,7 +179,7 @@ From `tools/room-companion`:
 python -m unittest discover -s tests -t .
 ```
 
-59 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
+65 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
 device and make no network request. To be sure, run them with the network cut. Loopback has to be up,
 because the web tests talk to a server on 127.0.0.1:
 

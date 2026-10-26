@@ -84,12 +84,14 @@ class App:
             ai_client = LocalVision(self.model_server, cfg["llama"]["key_file"])
         self.ai = AIGate(self.switches, ai_client)
         self.evidence = evidence
+        self.interop = None
         vkw, akw = {}, {}
         if cfg.get("capture") == "dshow":
-            from .windows import Dshow, Evidence
-            ds = Dshow(cfg["ffmpeg_exe"])
+            from .windows import Dshow, Evidence, Interop
+            self.interop = Interop()
+            ds = Dshow(cfg["ffmpeg_exe"], interop=self.interop)
             # the usage record names the exe by its full path with "#" for "\\"; the last parts identify ours
-            self.evidence = evidence or Evidence(app_key="#".join(cfg["ffmpeg_exe"].split("/")[-3:]))
+            self.evidence = evidence or Evidence(app_key="#".join(cfg["ffmpeg_exe"].split("/")[-3:]), interop=self.interop)
             vkw = dict(find_device=lambda: ds.find("video", [w for w in cfg["video_prefer"] if not self._hidden(w)]),
                        list_formats=ds.formats, build_cmd=ds.video_cmd, motion_from_frames=True)
             akw = dict(find_device=lambda: ds.find("audio", [w for w in cfg["audio_prefer"]
@@ -125,6 +127,8 @@ class App:
         if self.switches.load_error:
             self.events.add("state_load", detail=self.switches.load_error)
         self.notifier.start() if hasattr(self.notifier, "start") else None
+        if self.interop is not None and not self.interop.ensure():
+            self.events.add("interop_broken", detail="no /run/WSL socket can start Windows programs")
         self.video.start()
         self.audio.start()
         threading.Thread(target=self._observe_loop, name="observer", daemon=True).start()
@@ -170,6 +174,10 @@ class App:
 
     def observe_once(self, now=None):
         now = now or time.time()
+        if self.interop is not None:
+            ok_before = self.interop.ok
+            if self.interop.ensure(now=now) != ok_before and ok_before is not None:
+                self.events.add("interop", ok=self.interop.ok, socket=self.interop.socket or "default")
         ai_on = self.switches.get("ai")
         looking = ai_on and self.switches.get("video") and self.video.state == "running"
         if self.model_server is not None:
@@ -252,7 +260,8 @@ class App:
         self.audio.poke()
         self._confirmations.put((diff, source))
 
-    def wait_settled(self, timeout=8.0) -> bool:
+    def wait_settled(self, timeout=15.0) -> bool:
+        # the first Windows calls after a restart are slow: turning video on has taken 8 s
         deadline = time.time() + timeout
         while time.time() < deadline:
             v_ok = (self.video.proc is None) if not self.switches.get("video") else (self.video.state != "off")
@@ -275,7 +284,7 @@ class App:
         changed = "，".join(f"{'打开' if new else '关闭'}{LABELS[k]}" for k, (old, new) in diff.items())
         text = f"房间AI：已{changed}（来源：{source}）。\n现在：{self.plain_status()}"
         if not settled:
-            text += "\n注意：采集进程没有在 8 秒内按开关停下或启动，请看网页上的状态。"
+            text += "\n注意：采集进程没有在 15 秒内按开关停下或启动，请看网页上的状态。"
         self.notifier.send(text)
 
     # ---- plain-language status ----
@@ -286,13 +295,13 @@ class App:
         if not s.get("video"):
             parts.append("视频关（摄像头已释放）" if v.proc is None else "视频关（正在停止）")
         else:
-            parts.append({"running": "视频开（正在看）", "waiting_device": "视频开，但没接上相机"}
+            parts.append({"running": "视频开（正在看）", "waiting_device": "视频开，但没接上相机", "off": "视频开（正在启动）"}
                          .get(v.state, f"视频开，但出错：{v.detail[:60]}"))
         a = self.audio
         if not s.get("audio"):
             parts.append("声音关（麦克风已释放）" if a.proc is None else "声音关（正在停止）")
         else:
-            parts.append({"running": "声音开（正在听）", "waiting_device": "声音开，但没接上麦克风"}
+            parts.append({"running": "声音开（正在听）", "waiting_device": "声音开，但没接上麦克风", "off": "声音开（正在启动）"}
                          .get(a.state, f"声音开，但出错：{a.detail[:60]}"))
         if not s.get("ai"):
             parts.append("AI 关（不发给任何模型）")
@@ -326,6 +335,7 @@ class App:
             "policy": self.policy.status(),
             "speaker": self.speaker.status() if self.speaker is not None else None,
             "windows": self.windows_evidence() if self.evidence is not None else None,
+            "interop": self.interop.status() if self.interop is not None else None,
             "feishu": {"configured": getattr(self.notifier, "configured", False),
                        "sent": getattr(self.notifier, "sent", 0),
                        "last_error": getattr(self.notifier, "last_error", None)},

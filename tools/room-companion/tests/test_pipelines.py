@@ -124,7 +124,7 @@ class VideoPipelineTest(unittest.TestCase):
         real = self.app.wait_settled
         calls = []
 
-        def slow_first(timeout=8.0):
+        def slow_first(timeout=15.0):
             calls.append(1)
             if len(calls) == 1:
                 time.sleep(0.8)

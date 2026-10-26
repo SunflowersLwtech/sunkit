@@ -10,7 +10,11 @@ from room_companion.events import EventLog
 from room_companion.policy import Policy, parse_policy_command
 from room_companion.switches import Switches
 from room_companion.vision import LlamaServer, parse_observation
-from room_companion.windows import parse_consent, parse_dshow_devices, parse_dshow_formats, parse_tasklist_csv
+import errno
+import subprocess
+
+from room_companion.windows import (Dshow, Evidence, Interop, parse_consent, parse_dshow_devices, parse_dshow_formats,
+                            parse_tasklist_csv)
 from tests.fakes import FakeNotifier
 
 
@@ -234,6 +238,107 @@ class WindowsParsersTest(unittest.TestCase):
         self.assertTrue(u["in_use"])
         self.assertIsNone(u["stop"])
         self.assertFalse(parse_consent(reg, "#old#ffmpeg.exe")["in_use"])
+
+
+class FakeWindows:
+    """Windows programs reached through WSL interop: they start only when WSL_INTEROP (in `environ`)
+    names the working socket, or with no WSL_INTEROP when the default works."""
+
+    DEVICES = '[in#0 @ 0] "OsmoAction5pro" (video)\n[in#0 @ 0] "OsmoAction5pro" (audio)\n'
+
+    def __init__(self, environ, good, default_works=False):
+        self.environ, self.good, self.default_works = environ, good, default_works
+        self.calls = []
+
+    def run(self, args, env=None, capture_output=True, timeout=None):
+        env = self.environ if env is None else env  # like subprocess: no env means this process's environment
+        self.calls.append((os.path.basename(args[0]), env.get("WSL_INTEROP")))
+        sock = env.get("WSL_INTEROP")
+        if not ((sock is None and self.default_works) or (sock is not None and sock == self.good)):
+            # what WSL's loader does when the channel is broken (measured)
+            return subprocess.CompletedProcess(args, 1, b"", f"{args[0]}: Invalid argument\n".encode())
+        err = self.DEVICES.encode() if "-list_devices" in args else b""
+        out = b'"ffmpeg.exe","4242","Console","1","9,000 K"\r\n' if "tasklist.exe" in args[0] else b""
+        # real ffmpeg -list_devices also exits non-zero ("dummy" is not an input); that is not a channel failure
+        return subprocess.CompletedProcess(args, 1 if "-list_devices" in args else 0, out, err)
+
+
+class StatusWordsTest(unittest.TestCase):
+    def test_switched_on_but_not_started_yet_is_not_an_error(self):
+        app = App(dict(DEFAULTS, data_dir=tempfile.mkdtemp()), video=type("V", (), {"state": "off", "detail": "", "proc": None})(),
+                  audio=type("A", (), {"state": "off", "detail": "", "proc": None, "device": None})(), notifier=FakeNotifier())
+        app.switches.set({"video": True, "audio": True}, "t")
+        text = app.plain_status()
+        self.assertIn("视频开（正在启动）", text)
+        self.assertIn("声音开（正在启动）", text)
+        self.assertNotIn("出错", text)
+
+
+class InteropTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        for i, n in enumerate(("1_interop", "2_interop", "1190_interop")):
+            path = os.path.join(self.dir, n)
+            open(path, "w").close()
+            os.utime(path, (1000 + i, 1000 + i))
+        self.good = os.path.join(self.dir, "1190_interop")
+
+    def test_broken_default_moves_to_a_working_socket(self):
+        env = {}
+        win = FakeWindows(env, self.good)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        self.assertTrue(io.ensure(now=100))
+        self.assertEqual(env["WSL_INTEROP"], self.good)
+        self.assertEqual(io.status(), {"ok": True, "socket": self.good, "repairs": 1})
+        n = len(win.calls)
+        self.assertTrue(io.ensure(now=200))  # checked recently: no new probe
+        self.assertEqual(len(win.calls), n)
+
+    def test_working_default_is_left_alone(self):
+        env = {}
+        win = FakeWindows(env, self.good, default_works=True)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        self.assertTrue(io.ensure(now=100))
+        self.assertNotIn("WSL_INTEROP", env)
+        self.assertEqual(win.calls, [("cmd.exe", None)])
+        self.assertEqual(io.repairs, 0)
+
+    def test_nothing_works(self):
+        env = {"WSL_INTEROP": "/gone"}
+        win = FakeWindows(env, "/nowhere")
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        self.assertFalse(io.ensure(now=100))
+        self.assertEqual(env, {"WSL_INTEROP": "/gone"})
+        n = len(win.calls)
+        self.assertFalse(io.ensure(force=True, now=105))  # rate-limited
+        self.assertEqual(len(win.calls), n)
+        win.good = self.good
+        self.assertTrue(io.ensure(now=111))  # the socket came back
+        self.assertEqual(env["WSL_INTEROP"], self.good)
+
+    def test_device_list_and_evidence_recover_after_the_channel_breaks(self):
+        env = {}
+        win = FakeWindows(env, self.good, default_works=True)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, min_retry=0)
+        self.assertTrue(io.ensure())
+        win.default_works = False  # WSL restarted: the default channel now fails
+        ds = Dshow("/mnt/c/ffmpeg/bin/ffmpeg.exe", run=win.run, interop=io)
+        cam = ds.find("video", ["Osmo"])
+        self.assertIsNotNone(cam, "the device list came back empty: the call was not retried on a working channel")
+        self.assertEqual(cam.name, "OsmoAction5pro")
+        self.assertEqual(env["WSL_INTEROP"], self.good)
+        win.good = os.path.join(self.dir, "2_interop")  # and again, to another socket
+        ev = Evidence(run=win.run, interop=io)
+        self.assertEqual(ev.pids("ffmpeg.exe"), [4242])
+        self.assertEqual(io.repairs, 2)
+
+    def test_missing_program_is_not_an_interop_problem(self):
+        env = {}
+        io = Interop(run=lambda *a, **k: self.fail("must not probe"), sock_dir=self.dir, environ=env)
+
+        def missing(args, **kw):
+            raise FileNotFoundError(errno.ENOENT, "No such file", args[0])
+        self.assertEqual(Dshow("/mnt/c/nope/ffmpeg.exe", run=missing, interop=io).devices(), [])
 
 
 class FakeServer:
