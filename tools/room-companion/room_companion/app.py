@@ -258,7 +258,7 @@ class App:
         # a flaky mic must not send messages all night: at most 4 a day, none in quiet hours
         if self._mic_notices < self.cfg.get("mic_notices_per_day", 4) and not self.policy.quiet_now(now):
             self._mic_notices += 1
-            self.notifier.send(f"房间AI：声音改用「{_mic_label(new)}」（{why}）。")
+            self.notifier.send(f"房间AI：声音改用「{_mic_label(new, self.cfg.get('language', 'zh'))}」（{why}）。")
 
     # ---- switching ----
     def set_switches(self, changes: dict, source: str) -> dict:
@@ -526,12 +526,14 @@ def parse_nvidia_smi(out: str):
         return None
 
 
-def _mic_label(name: str) -> str:
+def _mic_label(name: str, language: str = "zh") -> str:
+    """A short name for a microphone. It goes into messages, so never the hardware name itself."""
+    en = str(language).startswith("en")
     if "osmo" in name.lower():
-        return "相机的麦克风"
+        return "camera microphone" if en else "相机的麦克风"
     if "microphone array" in name.lower():
-        return "电脑自带的麦克风"
-    return name
+        return "built-in microphone" if en else "电脑自带的麦克风"
+    return "microphone" if en else "麦克风"
 
 
 def describe_switches(app: App) -> str:

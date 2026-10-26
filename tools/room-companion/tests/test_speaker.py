@@ -190,6 +190,10 @@ class NothingIdentifyingLeavesTest(unittest.TestCase):
             self.assertTrue(wait_for(lambda: got))
             out = notifier.messages + [r["message"], app.run_command("状态", "手机")["message"],
                                        json.dumps(app.broadcast_result(r["id"]), ensure_ascii=False), json.dumps(got)]
+            app.policy.quiet_now = lambda now: False  # mic notices are held back in quiet hours; not what this tests
+            app._on_mic_change("Microphone (Camera)", "Headset (SENTINEL-HW-99 Pods)", "原来的麦克风不在了")
+            out += notifier.messages[-1:]
+            self.assertIn("声音改用「麦克风」", notifier.messages[-1])
             for text in out:
                 self.assertNotIn("SENTINEL", text)
             self.assertIn("出声：音箱", notifier.messages[0])
