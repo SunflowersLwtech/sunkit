@@ -113,9 +113,11 @@ def announce_error_code(error) -> str | None:
         return "ai_off"
     if "no result" in text:
         return "no_result"
-    if "TTS" in text or "speech model" in text:
-        return "tts_failed"
-    return "playback_failed"
+    # The player's own failures say so ("playback failed: …"), and writing the sound file fails with an
+    # OSError; anything else came from making the voice (a remote voice server, a missing voice model).
+    if text.startswith("playback failed") or "[Errno" in text:
+        return "playback_failed"
+    return "tts_failed"
 NOTICE_TEXT = {
     "en": {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
            "gpu_too_hot": "The local model is paused for 30 minutes to cool down"},

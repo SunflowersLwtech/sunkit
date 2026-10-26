@@ -282,7 +282,7 @@ refused at once (`ai_off`). While it plays, the microphone ignores the room's ow
 {"type": "announce", "req": "a-17", "text": "晚饭好了，下楼吃饭", "source": "web"}
 ```
 
-The device answers at once with an `ack`: `{"ok": true, "result": {"id": "a-17", "message": "…"}}`,
+The device answers at once with an `ack`: `{"ok": true, "result": {"id": "a-17"}}`,
 or `{"ok": false, "error": {"code": …, "message": …}}` with `empty`, `too_long` (more than 300
 characters), `rate_limited` (more than 6 a minute or 200 a day, from all sources together), `busy`
 (several sentences still waiting), `no_output` (nothing that can make a sound) or `ai_off`. Once the

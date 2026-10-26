@@ -131,12 +131,30 @@ class AnnounceInTheApp(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SENTINEL", sent)
 
     async def test_a_remote_voice_with_ai_off_is_refused_at_once(self):
-        self.app.apply_models({"tts": {"source": "cloud"}})
         self.assertFalse(self.app.switches.get("ai"))
-        await self.hub.socket.send(json.dumps({"type": "announce", "req": "o-1", "text": "开饭了"}))
-        ack = await self.hub.next(is_type("ack", "o-1"))
-        self.assertEqual((ack["ok"], ack["error"]["code"]), (False, "ai_off"))
+        slots = {"cloud": {"source": "cloud"},
+                 "openai": {"source": "openai", "base_url": "http://127.0.0.1:1/v1", "model": "kokoro"}}
+        for name, slot in slots.items():
+            self.app.apply_models({"tts": slot})
+            await self.hub.socket.send(json.dumps({"type": "announce", "req": f"o-{name}", "text": "开饭了"}))
+            ack = await self.hub.next(is_type("ack", f"o-{name}"))
+            self.assertEqual((ack["ok"], ack["error"]["code"]), (False, "ai_off"), name)
         self.assertEqual(self.tts.texts, [])
+
+    async def test_a_voice_that_cannot_be_made_is_tts_failed_without_its_host(self):
+        from room_companion.models import ModelCallError
+
+        class DownVoice:
+            def generate(self, text, sid=0, speed=1.0):
+                raise ModelCallError("connect_failed", "Could not connect to 10.9.9.9:8000 (SENTINEL-HOST)")
+
+        self.sp.tts = DownVoice()
+        await self.hub.socket.send(json.dumps({"type": "announce", "req": "v-1", "text": "开饭了"}))
+        got = await expect(self.hub, ack=is_type("ack", "v-1"), done=is_type("announce_result", "v-1"))
+        self.assertEqual((got["done"]["ok"], got["done"]["error"]), (False, "tts_failed"))
+        sent = " ".join(raw for _, raw in self.hub.received if isinstance(raw, str))
+        self.assertNotIn("SENTINEL", sent)
+        self.assertNotIn("10.9.9.9", sent)
 
 
 class AnnounceEventText(unittest.TestCase):
