@@ -270,6 +270,11 @@ class WebTest(unittest.TestCase):
         # a remote caller cannot pretend to be Feishu
         self.req("/api/switch", {"video": False, "source": "飞书"}, headers={**ok, "X-Room-AI": "1"})
         self.assertTrue(self.app.switches.snapshot()["source"].startswith("网页"))
+        # unless its address is configured as that service
+        self.app.cfg["source_names"] = {"127.0.0.1": "手机助手"}
+        self.srv.RequestHandlerClass = make_handler(self.app)
+        self.req("/api/switch", {"video": True, "source": "随便写"}, headers={**ok, "X-Room-AI": "1"})
+        self.assertEqual(self.app.switches.snapshot()["source"], "手机助手")
 
     def test_request_through_caddy_is_not_local(self):
         # a reverse proxy passes the browser's Host through, so the name has to be in allowed_hosts

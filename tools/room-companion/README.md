@@ -110,6 +110,8 @@ It listens on `0.0.0.0:8790` by default (`listen`, `port` in the config).
   and get the same result fields through `on_done` once it has been played.
 - `POST /api/output {"choice": "auto" | "<output name>"}` picks where it speaks; the choice is kept in
   `state/output.json`.
+- A remote caller can't name its own source in confirmations and events; `source_names` maps known
+  addresses (for example a bot on another machine) to a name.
 - Loopback-only self-test hooks: `/api/selftest/inject` (16 kHz PCM into the microphone path),
   `/api/selftest/unplug` (pretend devices are gone for N seconds), `/api/speak`.
 

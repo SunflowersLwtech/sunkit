@@ -76,6 +76,8 @@ def make_handler(app):
     allowed = app.cfg.get("allowed_cidrs", [])
     trust_loopback = app.cfg.get("trust_loopback", True)
     extra_hosts = list(app.cfg.get("allowed_hosts", []))
+    # a remote caller cannot name its own source; addresses that are known services get a name here
+    source_names = dict(app.cfg.get("source_names", {}))
     stream_slots = threading.BoundedSemaphore(app.cfg.get("max_streams", 4))
 
     class H(BaseHTTPRequestHandler):
@@ -147,7 +149,7 @@ def make_handler(app):
                 return (body or {}).get("source") or "本机"
             if self.headers.get("X-Forwarded-For"):
                 return "网页（经反向代理）"
-            return f"网页（{self.client_address[0]}）"
+            return source_names.get(self.client_address[0]) or f"网页（{self.client_address[0]}）"
 
         # ---- helpers ----
         def _unread_body(self) -> bool:
