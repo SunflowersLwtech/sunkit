@@ -18,7 +18,7 @@ BASE = os.environ.get("ROOM_COMPANION_URL", "http://127.0.0.1:8790")
 def call(path, body=None):
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
     req = urllib.request.Request(BASE + path, data=data, method="POST" if body is not None else "GET",
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json", "X-Room-AI": "1"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read().decode())

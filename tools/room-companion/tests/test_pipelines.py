@@ -5,13 +5,14 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import socket
 import threading
 
 from room_companion.app import App, DEFAULTS
 from room_companion.audio import AudioPipeline, EnergyVAD
 from room_companion.devices import AudioDevice, VideoDevice
 from room_companion.video import VideoPipeline
-from room_companion.web import serve
+from room_companion.web import make_handler, serve
 from tests.fakes import FAKE_ARECORD, FAKE_FFMPEG, PY, FakeNotifier, pid_alive, write_script
 
 
@@ -175,9 +176,13 @@ class WebTest(unittest.TestCase):
         self.app.shutdown()
 
     def req(self, path, body=None, headers=None):
-        r = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
-                                   data=None if body is None else json.dumps(body).encode(),
-                                   method="POST" if body is not None else "GET", headers=headers or {})
+        if body is None:
+            return self.raw(path, None, headers)
+        return self.raw(path, json.dumps(body).encode(), {"Content-Type": "application/json", **(headers or {})})
+
+    def raw(self, path, data, headers=None):
+        r = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data,
+                                   method="POST" if data is not None else "GET", headers=headers or {})
         try:
             with urllib.request.urlopen(r, timeout=15) as resp:
                 return resp.status, resp.read()
@@ -185,7 +190,7 @@ class WebTest(unittest.TestCase):
             return e.code, e.read()
 
     def test_local_needs_no_key(self):
-        code, body = self.req("/api/command", {"text": "开AI", "source": "飞书"})
+        code, body = self.req("/api/command", {"text": "开AI", "source": "飞书"}, headers={"X-Room-AI": "1"})
         self.assertEqual(code, 200, body)
         self.assertTrue(self.app.switches.get("ai"))
         self.assertTrue(wait_for(lambda: any("来源：飞书" in m for m in self.notifier.messages)))
@@ -209,15 +214,92 @@ class WebTest(unittest.TestCase):
         self.assertTrue(self.app.switches.snapshot()["source"].startswith("网页"))
 
     def test_request_through_caddy_is_not_local(self):
-        via = {"X-Forwarded-For": "100.101.102.103", "X-Forwarded-Host": "room.example.org"}
+        # a reverse proxy passes the browser's Host through, so the name has to be in allowed_hosts
+        self.app.cfg["allowed_hosts"] = ["room.example.org"]
+        self.srv.RequestHandlerClass = make_handler(self.app)
+        via = {"Host": "room.example.org", "X-Forwarded-For": "100.101.102.103",
+               "X-Forwarded-Host": "room.example.org"}
         self.assertEqual(self.req("/api/status", headers=via)[0], 401)
-        self.assertEqual(self.req("/api/command", {"text": "开视频", "source": "飞书"}, headers=via)[0], 401)
+        self.assertEqual(self.req("/api/command", {"text": "开视频", "source": "飞书"},
+                                  headers={**via, "X-Room-AI": "1"})[0], 401)
         self.assertFalse(self.app.switches.get("video"))
         # a proxy on the same box can forward LAN clients, so the forwarded address can be loopback too
-        self.assertEqual(self.req("/api/status", headers={"X-Forwarded-For": "127.0.0.1"})[0], 401)
+        self.assertEqual(self.req("/api/status", headers={**via, "X-Forwarded-For": "127.0.0.1"})[0], 401)
         ok = {**via, "Cookie": "room_k=" + "k" * 32, "X-Room-AI": "1"}
         self.assertEqual(self.req("/api/switch", {"ai": True, "source": "飞书"}, headers=ok)[0], 200)
         self.assertEqual(self.app.switches.snapshot()["source"], "网页（经反向代理）")
+
+    def test_cross_site_form_post_is_refused(self):
+        # what <form enctype="text/plain"> on another site, open in a browser on this machine, sends to 127.0.0.1
+        form = {"Content-Type": "text/plain", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+        for path, text in (("/api/switch", '{"video":true,"audio":true,"ai":true,"x":"="}'),
+                           ("/api/command", '{"text":"全开","x":"="}')):
+            self.assertEqual(self.raw(path, text.encode(), form)[0], 403, path)
+        self.assertEqual([self.app.switches.get(k) for k in ("video", "audio", "ai")], [False, False, False])
+        self.assertIsNone(self.app.video.proc)
+        self.assertIsNone(self.app.audio.proc)
+        self.assertFalse(any("打开" in m for m in self.notifier.messages), self.notifier.messages)
+
+    def test_every_post_needs_the_header_and_json(self):
+        self.assertEqual(self.req("/api/switch", {"video": True})[0], 403)  # same machine, no header
+        self.assertEqual(self.raw("/api/switch", b'{"video":true}',
+                                  {"X-Room-AI": "1", "Content-Type": "text/plain"})[0], 415)
+        self.assertEqual(self.req("/api/switch", {"video": True},
+                                  headers={"X-Room-AI": "1", "Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.req("/api/switch", {"video": True},
+                                  headers={"X-Room-AI": "1", "Sec-Fetch-Site": "cross-site"})[0], 403)
+        self.assertFalse(self.app.switches.get("video"))
+        code, _ = self.req("/api/switch", {"ai": True}, headers={"X-Room-AI": "1", "Origin": f"http://127.0.0.1:{self.port}"})
+        self.assertEqual(code, 200)
+        self.assertTrue(self.app.switches.get("ai"))
+
+    def test_foreign_host_is_refused(self):
+        # DNS rebinding: a hostile name that now resolves to 127.0.0.1
+        self.app.set_switches({"video": True}, "test")
+        self.assertTrue(wait_for(lambda: self.app.video.latest()[0] is not None))
+        evil = {"Host": "evil.example:8790"}
+        for path in ("/api/status", "/snapshot.jpg", "/", "/healthz", "/stream.mjpg"):
+            self.assertEqual(self.req(path, headers=evil)[0], 403, path)
+        self.assertEqual(self.req("/api/switch", {"video": False}, headers={**evil, "X-Room-AI": "1"})[0], 403)
+        self.assertTrue(self.app.switches.get("video"))
+        for host in (f"127.0.0.1:{self.port}", "localhost", "[::1]:8790"):
+            self.assertEqual(self.req("/api/status", headers={"Host": host})[0], 200, host)
+
+    def test_refused_body_is_not_read_as_a_second_request(self):
+        # a cross-site POST whose body is itself a complete request with every header the guard wants
+        inner = (b"POST /api/switch HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Room-AI: 1\r\n"
+                 b"Content-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"ai\":true}")
+        outer = (b"POST /api/switch HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\n"
+                 b"Origin: https://evil.example\r\nSec-Fetch-Site: cross-site\r\n"
+                 b"Content-Length: " + str(len(inner)).encode() + b"\r\n\r\n" + inner)
+        got = b""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as c:
+            c.sendall(outer)
+            try:
+                while True:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        break
+                    got += chunk
+            except socket.timeout:
+                pass
+        self.assertEqual(got.count(b"HTTP/1.1 "), 1, got[:300])
+        self.assertTrue(got.startswith(b"HTTP/1.1 403"), got[:100])
+        self.assertFalse(self.app.switches.get("ai"))
+
+    def test_configured_host_and_cross_site_reads(self):
+        self.assertEqual(self.req("/api/status", headers={"Host": "room.example.test"})[0], 403)
+        self.app.cfg["allowed_hosts"] = ["room.example.test"]
+        self.srv.RequestHandlerClass = make_handler(self.app)
+        self.assertEqual(self.req("/api/status", headers={"Host": "room.example.test"})[0], 200)
+        # a page on another site cannot load the data, even with an allowed Host (the browser marks it cross-site)
+        self.assertEqual(self.req("/api/status", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"})[0], 403)
+        self.assertEqual(self.req("/snapshot.jpg", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors",
+                                                             "Sec-Fetch-Dest": "image"})[0], 403)
+        # following a link to the page from elsewhere still opens it, but not inside a frame
+        nav = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+        self.assertEqual(self.req("/", headers=nav)[0], 200)
+        self.assertEqual(self.req("/", headers={**nav, "Sec-Fetch-Dest": "iframe"})[0], 403)
 
     def test_stream_refused_when_video_off(self):
         self.assertEqual(self.req("/stream.mjpg")[0], 409)

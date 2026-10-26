@@ -5,6 +5,13 @@ Who may connect:
   unless the request came through a reverse proxy (X-Forwarded-For set): then it is a browser and needs the key.
 - tailnet / home LAN addresses: need the key (link with ?k=..., then a cookie).
 - anything else: refused.
+
+On top of that, for every caller (this machine included):
+- the Host header must be 127.0.0.1, localhost, [::1] or a name in `allowed_hosts`, and a browser request
+  marked `Sec-Fetch-Site: cross-site` is refused (except opening the page itself from a link). This stops a
+  web page in a browser on the same machine from reading the API, also through DNS rebinding.
+- a POST needs `X-Room-AI: 1` and `Content-Type: application/json`, and a browser Origin, when sent, must be
+  an allowed host. A cross-site form cannot set either header, so it cannot flip a switch.
 """
 from __future__ import annotations
 
@@ -18,6 +25,33 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .switches import SwitchWriteError
 
 COOKIE = "room_k"
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def host_name(value: str) -> str:
+    """The name part of a Host header or an Origin: lower case, no port, no brackets, no trailing dot."""
+    h = (value or "").strip().lower()
+    if "://" in h:
+        h = h.split("://", 1)[1].split("/", 1)[0]
+    if h.startswith("["):
+        end = h.find("]")
+        return h[1:end] if end > 0 else ""
+    if h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h.rstrip(".")
+
+
+def host_allowed(value: str, extra=()) -> bool:
+    name = host_name(value)
+    return bool(name) and (name in LOOPBACK_HOSTS or name in {host_name(x) for x in extra})
+
+
+def cross_site(headers, method: str, path: str) -> bool:
+    if headers.get("Sec-Fetch-Site", "").lower() != "cross-site":
+        return False
+    # Following a link to the page from elsewhere is fine; everything the page then loads is same-origin.
+    return not (method == "GET" and path == "/" and headers.get("Sec-Fetch-Mode") == "navigate"
+                and headers.get("Sec-Fetch-Dest", "document") == "document")
 
 
 def classify(ip: str, allowed_cidrs, trust_loopback: bool = True) -> str:
@@ -41,16 +75,39 @@ def classify(ip: str, allowed_cidrs, trust_loopback: bool = True) -> str:
 def make_handler(app):
     allowed = app.cfg.get("allowed_cidrs", [])
     trust_loopback = app.cfg.get("trust_loopback", True)
+    extra_hosts = list(app.cfg.get("allowed_hosts", []))
     stream_slots = threading.BoundedSemaphore(app.cfg.get("max_streams", 4))
 
     class H(BaseHTTPRequestHandler):
-        server_version = "room-ai"
+        server_version = "room-companion"
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *args):  # keep logs quiet; no URLs (they may hold the key)
             pass
 
         # ---- auth ----
+        def _guard(self, method, path):
+            """Host / cross-site / header checks that apply to every caller, before the key is looked at."""
+            if not host_allowed(self.headers.get("Host", ""), extra_hosts):
+                self._send(403, "text/plain; charset=utf-8", "host not allowed".encode())
+                return False
+            if cross_site(self.headers, method, path):
+                self._send(403, "text/plain; charset=utf-8", "cross-site request refused".encode())
+                return False
+            if method == "POST":
+                origin = self.headers.get("Origin")
+                if origin is not None and not host_allowed(origin, extra_hosts):
+                    self._send(403, "text/plain; charset=utf-8", "origin not allowed".encode())
+                    return False
+                if self.headers.get("X-Room-AI") != "1":  # a custom header: cross-site forms cannot send it
+                    self._send(403, "text/plain; charset=utf-8", "missing X-Room-AI header".encode())
+                    return False
+                ctype = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if ctype != "application/json":
+                    self._send(415, "text/plain; charset=utf-8", "Content-Type must be application/json".encode())
+                    return False
+            return True
+
         def _who(self):
             who = classify(self.client_address[0], allowed, trust_loopback)
             if who == "local" and (self.headers.get("X-Forwarded-For") or self.headers.get("X-Forwarded-Host")):
@@ -73,7 +130,7 @@ def make_handler(app):
                     cands.append(v)
             return any(hmac.compare_digest(c.encode(), tok.encode()) for c in cands)
 
-        def _authorize(self, qs, write=False):
+        def _authorize(self, qs):
             who = self._who()
             if who == "local":
                 return True
@@ -82,9 +139,6 @@ def make_handler(app):
                 return False
             if not self._token_ok(qs):
                 self._send(401, "text/html; charset=utf-8", NEED_KEY.encode())
-                return False
-            if write and self.headers.get("X-Room-AI") != "1":  # blocks cross-site form posts
-                self._send(403, "text/plain; charset=utf-8", "missing X-Room-AI header".encode())
                 return False
             return True
 
@@ -96,12 +150,28 @@ def make_handler(app):
             return f"网页（{self.client_address[0]}）"
 
         # ---- helpers ----
+        def _unread_body(self) -> bool:
+            if self.headers.get("Transfer-Encoding"):
+                return True
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return True
+            return n > 0 and not self._body_done
+
         def _send(self, code, ctype, data: bytes, extra=None):
+            if self._unread_body():
+                # Refused before the body was read: close, or the body would be parsed as the next request
+                # on this connection (and could carry the headers the refused request lacked).
+                self.close_connection = True
+                extra = {**(extra or {}), "Connection": "close"}
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -111,10 +181,13 @@ def make_handler(app):
             self._send(code, "application/json; charset=utf-8", json.dumps(obj, ensure_ascii=False).encode())
 
         def _body(self, limit=10000):
+            if self.headers.get("Transfer-Encoding"):
+                raise ValueError("chunked bodies are not accepted")
             n = int(self.headers.get("Content-Length") or 0)
             if n > limit:
                 raise ValueError("body too large")
             raw = self.rfile.read(n) if n else b"{}"
+            self._body_done = True
             obj = json.loads(raw.decode("utf-8") or "{}")
             if not isinstance(obj, dict):
                 raise ValueError("body must be an object")
@@ -122,8 +195,11 @@ def make_handler(app):
 
         # ---- routes ----
         def do_GET(self):
+            self._body_done = False
             u = urllib.parse.urlsplit(self.path)
             qs = urllib.parse.parse_qs(u.query)
+            if not self._guard("GET", u.path):
+                return
             if u.path == "/healthz" and self._who() == "local":
                 return self._json(200, {"ok": True})
             if not self._authorize(qs):
@@ -149,9 +225,10 @@ def make_handler(app):
             return self._send(404, "text/plain", b"not found")
 
         def do_POST(self):
+            self._body_done = False
             u = urllib.parse.urlsplit(self.path)
             qs = urllib.parse.parse_qs(u.query)
-            if not self._authorize(qs, write=True):
+            if not self._guard("POST", u.path) or not self._authorize(qs):
                 return
             big = u.path == "/api/selftest/inject" and self._who() == "local"
             try:
