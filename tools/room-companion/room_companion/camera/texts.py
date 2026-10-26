@@ -4,6 +4,7 @@ from __future__ import annotations
 TEXTS = {
     "zh": {
         "not_found": "蓝牙找不到相机（关机了、没电了，或休眠超过 30 分钟）",
+        "several_cameras": "附近有 {n} 台 DJI 相机，不知道是哪一台：请在设置里填上相机的蓝牙名字",
         "rsdk_need_tap": "相机还没允许电脑用官方蓝牙连接：第一次要在相机屏幕上点一次允许（设置里点「配对」）",
         "rsdk_rejected": "相机拒绝了官方蓝牙连接",
         "rsdk_failed": "官方蓝牙握手没成功（{error}）",
@@ -42,6 +43,7 @@ TEXTS = {
     },
     "en": {
         "not_found": "Bluetooth cannot find the camera (switched off, flat battery, or asleep for over 30 minutes)",
+        "several_cameras": "{n} DJI cameras are nearby and it is not clear which one: set the camera's Bluetooth name in the settings",
         "rsdk_need_tap": "The camera has not allowed this computer on the official protocol yet: tap allow on its screen once (Pair in settings)",
         "rsdk_rejected": "The camera refused the official connection",
         "rsdk_failed": "The official handshake failed ({error})",

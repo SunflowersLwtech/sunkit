@@ -3,9 +3,11 @@
 Written from DJI's published protocol description for the Osmo Action 4 / 5 Pro / 6 and Osmo 360
 (github.com/dji-sdk/Osmo-GPS-Controller-Demo, docs/protocol.md and docs/protocol_data_segment.md).
 No code was copied from that repository. What the protocol can do on an Action 5 Pro: pair (the camera
-asks for a tap the first time), report its status (mode, battery, temperature, sleep), switch modes,
-start/stop recording, press its buttons, sleep, wake (by advertising, within 30 minutes of sleep)
-and restart. It has no Wi-Fi, livestream or webcam commands.
+asks for a tap the first time), report its status (mode, battery, temperature, sleep), switch modes
+(its mode list includes the USB webcam mode, 0x23, which is how this tool tries to bring the webcam
+back), start/stop recording, press its buttons, sleep, wake (by advertising, within 30 minutes of
+sleep) and restart. It cannot set up Wi-Fi or a livestream. This module implements only what the
+tool uses: pairing, status, mode switch, stop recording, sleep/normal and the wake broadcast.
 
 Frame (little-endian):
     0  SOF 0xAA
@@ -165,17 +167,6 @@ def power_mode(sleep: bool) -> bytes:
     """0x00/0x1A: 0 normal, 3 sleep."""
     return bytes([3 if sleep else 0])
 
-
-def key_report(key: str, event: str = "short") -> bytes:
-    """0x00/0x11 button press: key record/qs/snapshot, event short/long/double."""
-    code = {"record": 1, "qs": 2, "snapshot": 3}[key]
-    value = {"short": 0, "long": 1, "double": 2}[event]
-    return struct.pack("<BBH", code, 1, value)
-
-
-def restart(sender_id: int) -> bytes:
-    """0x00/0x16."""
-    return struct.pack("<I4s", sender_id, b"\x00" * 4)
 
 
 def parse_status(payload: bytes) -> dict | None:

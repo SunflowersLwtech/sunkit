@@ -46,7 +46,9 @@ class FakeTransport:
         await asyncio.sleep(0.01)
         if not self.c.get("found", True) or self.sleeping:
             return []
-        return [{"addr": ADDR, "name": "OsmoAction5ProFAKE", "model_byte": 0x15, "rssi": -40}]
+        others = [{"addr": f"aa:bb:cc:dd:ee:{i:02x}", "name": f"OsmoAction5ProNEXT{i}", "model_byte": 0x15, "rssi": -30}
+                  for i in range(self.c.get("extra_cameras", 0))]  # a neighbour's camera, louder than ours
+        return others + [{"addr": ADDR, "name": "OsmoAction5ProFAKE", "model_byte": 0x15, "rssi": -40}]
 
     async def connect(self, addr, timeout):
         if not self.c.get("found", True) or self.sleeping:

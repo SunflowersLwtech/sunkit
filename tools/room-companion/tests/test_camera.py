@@ -263,6 +263,14 @@ class RecoveryTest(unittest.TestCase):
         self.assertNotIn(FAKE_ADDR, text)
         self.assertEqual(m.errors["dji-ble-official"].key, "not_found")
 
+    def test_the_helper_refuses_to_guess_between_cameras(self):
+        m, events, sent = self.make({"rsdk_paired": True, "extra_cameras": 1, "mode": 0x01})
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertEqual(m.errors["dji-ble-official"].key, "several_cameras")
+        self.assertIsNone(m.ble_state.get("addr"))
+        self.assertEqual(self.fake_mode(), 0x01)
+
     def test_choice_is_saved_private_and_validated(self):
         m, events, sent = self.make({"rsdk_paired": True})
         ok, code, msg = m.set_config({"driver": "dji-duml"})
@@ -392,9 +400,6 @@ class TickTest(unittest.TestCase):
         self.assertEqual(m.backoff, 60.0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SharedSchemaTest(unittest.TestCase):
     """What a remote settings page gets: hello.device.camera_drivers and state.camera."""
@@ -519,3 +524,117 @@ class ActionBudgetTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("正在忙", detail)
         self.assertEqual(m.busy, "recover")
+
+
+class RecordingBridge(StubBridge):
+    def __init__(self, connect_ok=False, addr=None, handshake_ok=False, count=1):
+        super().__init__()
+        self.kw = []
+        self.connect_ok, self.addr, self.handshake_ok, self.count = connect_ok, addr, handshake_ok, count
+
+    def call(self, cmd, timeout=30, **kw):
+        self.kw.append((cmd, kw))
+        if cmd == "connect" and self.connect_ok:
+            if kw.get("unique") and self.count > 1:
+                return {"ok": False, "error": "several", "count": self.count}
+            return {"ok": True, "addr": kw.get("addr") or self.addr}
+        if cmd == "rsdk_connect":
+            return {"ok": True, "model": "Osmo Action 5 Pro"} if self.handshake_ok else {"ok": False, "error": "no_tap"}
+        if cmd in ("disconnect", "wake_adv"):
+            return {"ok": True}
+        return super().call(cmd, timeout, **kw)
+
+
+class CameraIdentityTest(unittest.TestCase):
+    """Which camera is ours: never one that merely answered a scan."""
+
+    def make(self, bridge, clock=time.time, camera=None):
+        d = tempfile.mkdtemp()
+        video = FakeVideo(os.path.join(d, "none.json"))
+        video.waiting_since = 1.0
+        m = CameraManager({"data_dir": d, "camera": camera, "camera_host": {"uvc_wait_s": 0}}, video, Events(),
+                          bridge=bridge, clock=clock, sleep=lambda s: None)
+        self.assertTrue(m.ble_available())
+        return m
+
+    def test_tick_waits_out_the_back_off_after_a_failed_round(self):
+        now = [10_000.0]
+        m = self.make(StubBridge(), clock=lambda: now[0])
+        started = []
+        m._recover_bg = lambda: (started.append(1), setattr(m, "busy", None))
+        ok, _ = m.recover()                # every allowed driver fails: next round in 60 s
+        self.assertFalse(ok)
+        m.tick(now[0] + 30)
+        time.sleep(0.2)
+        self.assertEqual(started, [], "a new round started inside the back-off")
+        m.tick(now[0] + 61)
+        time.sleep(0.2)
+        self.assertEqual(started, [1])
+
+    def test_a_remembered_camera_is_connected_by_its_address(self):
+        b = RecordingBridge()
+        m = self.make(b)
+        m.remember(addr=FAKE_ADDR)
+        m.recover()
+        connects = [kw for cmd, kw in b.kw if cmd == "connect"]
+        self.assertEqual(connects[0].get("addr"), FAKE_ADDR, "scanned instead of using the remembered camera")
+        # asleep: after the wake broadcast it reconnects to that same camera, never by a scan
+        self.assertEqual([c.get("addr") for c in connects], [FAKE_ADDR, FAKE_ADDR])
+
+    def test_a_failed_handshake_leaves_the_saved_camera_alone(self):
+        other = "aa:bb:cc:dd:ee:ff"
+        b = RecordingBridge(connect_ok=True, addr=other, handshake_ok=False)
+        m = self.make(b)
+        ok, _ = m.recover()              # a new camera answers the scan but refuses the handshake
+        self.assertFalse(ok)
+        self.assertIsNone(m.ble_state.get("addr"))
+        b.handshake_ok = True
+        m.recover()
+        self.assertEqual(m.ble_state.get("addr"), other)  # saved once it answered the handshake
+
+    def test_several_cameras_nearby_are_not_guessed_between(self):
+        b = RecordingBridge(connect_ok=True, addr="aa:bb:cc:dd:ee:ff", handshake_ok=True, count=2)
+        m = self.make(b)
+        ok, detail = m.recover()
+        self.assertFalse(ok)
+        self.assertIn("2 台", detail)
+        self.assertNotIn("rsdk_connect", [c for c, _ in b.kw])
+        self.assertIsNone(m.ble_state.get("addr"))
+        # naming the camera in the settings picks it
+        m2 = self.make(b, camera={"ble": {"device": "OsmoAction5ProFAKE"}})
+        m2.recover()
+        named = [kw for cmd, kw in b.kw if cmd == "connect"][-1]
+        self.assertEqual((named.get("name"), named.get("unique")), ("OsmoAction5ProFAKE", False))
+
+    def test_pointing_at_another_camera_forgets_the_old_one(self):
+        m = self.make(StubBridge())
+        m.remember(addr=FAKE_ADDR)
+        ok, code, msg = m.set_config({"ble": {"device": "OsmoAction5ProOTHER"}})
+        self.assertTrue(ok, msg)
+        self.assertIsNone(m.ble_state.get("addr"))
+
+    def test_the_action_budget_includes_the_helper_check(self):
+        now = [0.0]
+
+        class SlowCheck(StubBridge):
+            def call(self, cmd, timeout=30, **kw):
+                if cmd == "check":
+                    now[0] += min(timeout, 40)
+                return super().call(cmd, timeout, **kw)
+        d = tempfile.mkdtemp()
+        m = CameraManager({"data_dir": d, "camera": {"allow_unofficial": True}}, FakeVideo(os.path.join(d, "x")),
+                          Events(), bridge=SlowCheck(), sleep=lambda s: now.__setitem__(0, now[0] + s),
+                          monotonic=lambda: now[0])
+        from room_companion.camera.manager import StepFailed
+
+        def slow():
+            now[0] += 60
+            raise StepFailed("rsdk_uvc_refused", ret=2)
+        m.drivers["dji-ble-official"].recover = slow
+        m.drivers["dji-duml"].recover = lambda: None
+        m.action("recover")
+        self.assertLess(now[0], 90)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -254,6 +254,8 @@ class Helper:
             cams = [c for c in cams if not want or want in c["name"].lower()]
             if not cams:
                 return {"ok": False, "error": "not_found"}
+            if req.get("unique") and len(cams) > 1:
+                return {"ok": False, "error": "several", "count": len(cams)}  # never guess between cameras
             addr = cams[0]["addr"]
         self.demux = duml.Demux()
         info = await self.t.connect(addr, float(req.get("connect_seconds", 20)))

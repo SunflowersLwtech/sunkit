@@ -50,9 +50,9 @@ ADDR_DM368_1 = 0x28
 ADDR_DM368_2 = 0x48
 ADDR_SESSION = 0xF0
 
-# Shooting modes for 0x02/0xE1 (same codes as the official protocol). Only these are ever sent:
+# Shooting modes for 0x02/0xE1 (same codes as the official protocol). Only webcam mode is ever sent:
 # enumerating unknown values froze a camera until it was power-cycled (dji-vcam camera-controls.md).
-MODES = {"video": 0x01, "photo": 0x05, "live_streaming": 0x1A, "uvc_webcam": 0x23}
+MODES = {"uvc_webcam": 0x23}
 
 # 62-byte "APP" device-info blob a camera expects in reply to its 0x00/0x81 request.
 APP_DEVICE_INFO = b"\x00APP" + bytes(37) + b"\x02" + bytes(8) + b"\x02\x08" + bytes(10)
@@ -158,28 +158,10 @@ def pairing(identifier: str, token: str) -> bytes:
     return pack_string(identifier) + pack_string(token)
 
 
-def wifi_join(ssid: str, password: str) -> bytes:
-    """0x07/0x47: join a network as a client (only in Live Streaming mode). Reply 00 00 = joined."""
-    return pack_string(ssid) + pack_string(password)
-
-
-LIVESTREAM_STOP = bytes.fromhex("01011a000102")  # 0x02/0x8E to 0x08: ends a livestream, the join and the mode
-
-
-def parse_status_reply(frame: Frame | None) -> int | None:
-    return frame.payload[0] if frame is not None and frame.payload else None
-
-
 def parse_battery(payload: bytes) -> int | None:
     """0x0D/0x02 push from the battery (sender 0x05): percent at byte 20."""
     return payload[20] if len(payload) > 20 else None
 
-
-def parse_mac(frame: Frame | None) -> str | None:
-    """0x07/0x0C reply: [status][6-byte MAC]."""
-    if frame is None or len(frame.payload) < 7 or frame.payload[0] != 0:
-        return None
-    return ":".join(f"{b:02x}" for b in frame.payload[1:7])
 
 
 # ---- both framings on one notify characteristic ----

@@ -69,22 +69,36 @@ class BleControl:
 
     def __init__(self, mgr: "CameraManager"):
         self.m = mgr
+        self.pending_addr = None
 
     def _connect(self, wake: bool):
+        """Connect to our camera. A camera we know is reached by its address only (never by a scan that
+        could pick another camera nearby); a new one by a scan that must find exactly one, or the name
+        set in `ble.device`. The address is saved only after a handshake succeeded (`_confirmed`)."""
         b = self.m.bridge
-        name = self.m.config["ble"]["device"] or "osmo"
-        addr = self.m.ble_state.get("addr") if not self.m.config["ble"]["device"] else None
-        r = b.call("connect", timeout=60, name=name, scan_seconds=8, **({"addr": addr} if addr else {}))
-        if not r.get("ok") and wake and self.m.ble_state.get("addr"):
-            # asleep (it stops advertising): the official wake-up broadcast works within 30 min of sleep
-            w = b.call("wake_adv", timeout=20, addr=self.m.ble_state["addr"], seconds=2)
-            self.m.note(self.id, "wake", w)
-            self.m.sleep(3)
-            r = b.call("connect", timeout=60, name=name, scan_seconds=8)
+        known = self.m.ble_state.get("addr")
+        self.pending_addr = None
+        if known:
+            r = b.call("connect", timeout=60, addr=known)
+            if not r.get("ok") and wake:
+                # asleep (it stops advertising): the official wake-up broadcast works within 30 min of
+                # sleep; then connect to the camera the broadcast was for
+                w = b.call("wake_adv", timeout=20, addr=known, seconds=2)
+                self.m.note(self.id, "wake", w)
+                self.m.sleep(3)
+                r = b.call("connect", timeout=60, addr=known)
+        else:
+            wanted = self.m.config["ble"]["device"]
+            r = b.call("connect", timeout=60, name=wanted or "osmo", scan_seconds=8, unique=not wanted)
         if not r.get("ok"):
+            if r.get("error") == "several":
+                raise StepFailed("several_cameras", n=r.get("count"))
             raise StepFailed("not_found")
-        if r.get("addr"):
-            self.m.remember(addr=r["addr"])
+        self.pending_addr = r.get("addr") or known
+
+    def _confirmed(self, **state):
+        """The camera answered a handshake: now it is ours."""
+        self.m.remember(addr=self.pending_addr or self.m.ble_state.get("addr"), **state)
 
     def _disconnect(self):
         self.m.bridge.call("disconnect", timeout=15)
@@ -101,7 +115,7 @@ class OfficialBle(BleControl):
                                sender_mac=self.m.ble_state["sender_mac"], verify_mode=0, wait=wait)
         self.m.note(self.id, "connect", r)
         if r.get("ok"):
-            self.m.remember(rsdk_paired=True, model=r.get("model"))
+            self._confirmed(rsdk_paired=True, model=r.get("model"))
             return
         if r.get("error") == "no_tap":
             self.m.remember(rsdk_paired=False)
@@ -164,7 +178,7 @@ class DumlBle(BleControl):
                                token="ROOM", wait=wait)
         self.m.note(self.id, "pair", r)
         if r.get("ok"):
-            self.m.remember(duml_paired=True)
+            self._confirmed(duml_paired=True)
             return
         if r.get("error") == "no_tap":
             self.m.remember(duml_paired=False)
@@ -271,6 +285,9 @@ class CameraManager:
         except OSError as e:
             return False, "save_failed", f"没能保存：{e}"
         old, self.config = self.config, new
+        if old["ble"]["device"] != new["ble"]["device"] and "addr" in self.ble_state:
+            self.ble_state.pop("addr", None)  # the user pointed at another camera
+            self.remember()
         self.gave_up, self.next_try_at, self.backoff = False, 0.0, 60.0
         self.events.add("camera_config", driver=new["driver"], allow_unofficial=new["allow_unofficial"],
                         previous=old["driver"])
@@ -302,7 +319,7 @@ class CameraManager:
         if self._bridge is not None:
             self._bridge.stop()
 
-    def ble_available(self) -> bool:
+    def ble_available(self, timeout: float = 30.0) -> bool:
         """Whether the Bluetooth helper works here. Waits for a check already running; a failed check is
         tried again after a minute (Bluetooth may come up after the app, Windows Python may be slow)."""
         with self._check_lock:
@@ -313,7 +330,7 @@ class CameraManager:
                 err = StepFailed("bt_off")
             else:
                 try:
-                    r = self.bridge.call("check", timeout=30)
+                    r = self.bridge.call("check", timeout=max(1.0, timeout))
                     ok = bool(r.get("ok"))
                     err = None if ok else StepFailed("helper_down")
                     if not ok:
@@ -457,13 +474,14 @@ class CameraManager:
     # ---- actions from a settings page ----
     def action(self, name: str) -> tuple[bool, str]:
         lang = self.lang()
+        # the budget starts now: starting and checking the helper counts against it too
+        deadline = self.monotonic() + self.action_budget_s
         if name not in ("pair", "recover", "wake", "sleep", "stop_recording"):
             return False, f"unknown action {name}"
-        if not self.ble_available():
+        if not self.ble_available(timeout=min(30.0, self.action_budget_s / 3)):
             return False, t("no_helper", lang)
         if not self._claim(name):
             return False, t("busy", lang, what=self.busy)
-        deadline = self.monotonic() + self.action_budget_s
         try:
             if name == "recover":
                 return self.recover(deadline)

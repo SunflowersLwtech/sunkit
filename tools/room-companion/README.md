@@ -187,7 +187,7 @@ the status object holds `driver`, `active`, `control`, `fallback`, `state`, `nam
 
 | Project | License | Action 5 Pro | Used here |
 |---|---|---|---|
-| [dji-sdk/Osmo-GPS-Controller-Demo](https://github.com/dji-sdk/Osmo-GPS-Controller-Demo) | Protocol documents: DJI EULA; demo code: MIT | Listed by DJI (device id `0xFF44`) | `rsdk.py` is written from the protocol description; no text or code copied |
+| [dji-sdk/Osmo-GPS-Controller-Demo](https://github.com/dji-sdk/Osmo-GPS-Controller-Demo) | Protocol documents: DJI EULA; demo: DJI EULA and MIT (both in its LICENSE) | Listed by DJI (device id `0xFF44`) | `rsdk.py` is written from the protocol description; no text or code copied |
 | [RB14/dji-vcam](https://github.com/RB14/dji-vcam) | MIT | Developed and tested on it (Windows) | DUML frame codec adapted (see THIRD_PARTY_NOTICES.md); command bytes from its protocol notes |
 | [KonradIT/osmosis](https://github.com/KonradIT/osmosis) | MIT | Media offload verified | Pairing sequence, via dji-vcam's notes |
 | [eerimoq/moblin](https://github.com/eerimoq/moblin) | MIT | Has Action 5 Pro specific code | First open implementation of the camera's Bluetooth commands, via dji-vcam's notes |
