@@ -75,11 +75,20 @@ mic ──recorder──> 16 kHz PCM ──> VAD ──> local ASR ──> voice
 A small page (Chinese UI) shows the three switches, a live view, the current scene, reminders,
 the audio level, recent transcripts and an event list.
 
-- `127.0.0.1` is trusted (other services on the same machine). A request that came through a reverse
+It listens on `0.0.0.0:8790` by default (`listen`, `port` in the config).
+
+- `127.0.0.1` needs no key (other services on the same machine). A request that came through a reverse
   proxy (it carries `X-Forwarded-For`) is treated as remote.
 - Addresses in `allowed_cidrs` (default: the Tailscale ranges) need the key: `?k=` once (turned into
-  an HttpOnly cookie), or `Authorization: Bearer`. Changing a switch also needs the header
-  `X-Room-AI: 1`, which blocks cross-site form posts. Everything else is refused.
+  an HttpOnly cookie), or `Authorization: Bearer`. Everything else is refused.
+- For every caller, the local one included, so that a web page open in a browser on the same machine
+  can neither change a switch nor read anything:
+  - the `Host` header must be `127.0.0.1`, `localhost`, `[::1]` or a name in `allowed_hosts` (add the
+    name your reverse proxy serves); this stops DNS rebinding;
+  - a request the browser marks `Sec-Fetch-Site: cross-site` is refused, except following a link to the
+    page itself; the page cannot be framed;
+  - a `POST` needs the header `X-Room-AI: 1` and `Content-Type: application/json`, and its `Origin`, if
+    sent, must be one of the allowed hosts. A cross-site form can send neither header.
 - `POST /api/switch {"video": false}`, `POST /api/command {"text": "隐私模式"}`, `GET /api/status`,
   `GET /snapshot.jpg`, `GET /stream.mjpg`.
 - Loopback-only self-test hooks: `/api/selftest/inject` (16 kHz PCM into the microphone path),
@@ -103,15 +112,49 @@ not offer webcam or streaming control, so it is not needed for this.
 
 ## Running it
 
+### What the machine needs
+
+- Python 3.10 or newer.
+- `capture: "linux"`: `ffmpeg`, `v4l2-ctl` (v4l-utils) and `arecord` (alsa-utils).
+- `capture: "dshow"` (the app in WSL, the devices on Windows): Windows `ffmpeg.exe` (path in `ffmpeg_exe`),
+  Windows PowerShell (built in, used for playback and for reading the default output device),
+  `llama-server.exe` from a llama.cpp Windows release with its CUDA runtime DLLs next to it, and the NVIDIA
+  driver (`nvidia-smi.exe`, used for the GPU temperature).
+
+### Models
+
+None are included. Download them yourself and check each file against the publisher's sha256.
+
+| Model | Where to get it | Where it goes (config key) |
+|---|---|---|
+| SenseVoice-Small, int8 (speech recognition) | `model.int8.onnx` and `tokens.txt` from [csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | a folder holding those two files (`asr_dir`) |
+| Silero VAD | [`silero_vad.onnx`](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx) | the file (`vad_model`) |
+| MeloTTS zh_en (speaking, optional) | [`vits-melo-tts-zh_en.tar.bz2`](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2), unpacked | the unpacked folder (`tts.model_dir`) |
+| Qwen3-VL-4B-Instruct (vision, optional) | `Qwen3VL-4B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3VL-4B-Instruct-F16.gguf` from [Qwen/Qwen3-VL-4B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF) | `llama.model`, `llama.mmproj` (Windows paths when `llama-server.exe` runs on Windows) |
+| llama.cpp server | a release from [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp/releases) (on Windows with an NVIDIA GPU: the `win-cuda` build plus the matching `cudart` archive) | `llama.exe` |
+
+```
+models/
+  sense-voice/model.int8.onnx
+  sense-voice/tokens.txt
+  silero_vad.onnx
+  tts/vits-melo-tts-zh_en/...        (optional)
+```
+
+Without the vision model the AI switch has nothing to send to, and nothing leaves the gate. Without TTS,
+reminders only go to the notifier.
+
+### Starting it
+
+Run these from `tools/room-companion`:
+
 ```
 pip install ".[all]"            # sherpa-onnx, numpy, pillow
-mkdir -p data && cp examples/config.windows-wsl.json data/config.json   # or config.linux.json
+mkdir -p data && cp examples/config.windows-wsl.json data/config.json   # or config.linux.json; then fix the paths
 ROOM_COMPANION_DATA_DIR=$PWD/data ROOM_COMPANION_WEB_TOKEN=... python -m room_companion
 ```
 
-Models are not included: SenseVoice-Small int8 + `tokens.txt`, `silero_vad.onnx`, optionally a
-sherpa-onnx TTS model, and for vision a GGUF model with its projector plus `llama-server`
-(check every download against the publisher's sha256).
+All three switches start off. State and event summaries go under the data directory.
 `examples/room-companion.service` is a systemd user unit (MemoryMax 3G); with a lingering user it
 starts whenever the machine (or WSL) starts. `examples/roomctl-remote` controls it over the network
 with the key read from a file, never from the command line.
@@ -128,13 +171,32 @@ with the key read from a file, never from the command line.
 
 ## Tests
 
+From `tools/room-companion`:
+
 ```
 python -m unittest discover -s tests -t .
 ```
 
-The tests use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
-device and make no network request. Run them with the network cut (`unshare -n`) to be sure.
+59 tests. They use fake ffmpeg/recorder scripts, a fake model server and a fake notifier; they open no
+device and make no network request. To be sure, run them with the network cut. Loopback has to be up,
+because the web tests talk to a server on 127.0.0.1:
+
+```
+unshare -rn sh -c 'ip link set lo up && python -m unittest discover -s tests -t .'
+```
 
 ## License
 
-MIT
+MIT, for the code in this folder.
+
+Nothing below is bundled; these are the things the README tells you to download, under their own terms:
+
+| Component | License |
+|---|---|
+| SenseVoice-Small weights | [FunASR Model Open Source License v1.1](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Not an OSI license: it requires attribution and keeping the model names, says the weights are "provided for reference and learning purposes only", and the licensor may revise it. Read it before any commercial use. |
+| sherpa-onnx | Apache-2.0 |
+| Silero VAD | MIT |
+| MeloTTS | MIT |
+| Qwen3-VL-4B-Instruct | Apache-2.0 |
+| llama.cpp | MIT |
+| ffmpeg | LGPL-2.1 or GPL, depending on the build |

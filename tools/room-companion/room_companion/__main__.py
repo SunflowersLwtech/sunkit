@@ -1,4 +1,4 @@
-"""room-ai entry point: python -m room_companion"""
+"""room-companion entry point: python -m room_companion"""
 from __future__ import annotations
 
 import signal
@@ -25,7 +25,7 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    print(f"room-ai listening on {cfg['listen']}:{cfg['port']}", flush=True)
+    print(f"room-companion listening on {cfg['listen']}:{cfg['port']}", flush=True)
     srv.serve_forever()
     app.shutdown()
     sys.exit(0)

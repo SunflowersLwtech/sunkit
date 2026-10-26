@@ -1,4 +1,4 @@
-"""Windows side of the capture when room-ai runs in WSL on a Windows PC.
+"""Windows side of the capture when room-companion runs in WSL on a Windows PC.
 
 The camera and microphone stay Windows devices (no USB passthrough into WSL).
 Windows ffmpeg.exe reads them through DirectShow and is started from WSL via

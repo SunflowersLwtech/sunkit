@@ -50,7 +50,7 @@ DEFAULTS = {
 
 
 def env(name: str) -> str | None:
-    """ROOM_COMPANION_<NAME>, or the older ROOMAI_<NAME>."""
+    """ROOM_COMPANION_<NAME>; the short form ROOMAI_<NAME> is accepted too."""
     return os.environ.get("ROOM_COMPANION_" + name) or os.environ.get("ROOMAI_" + name)
 
 
