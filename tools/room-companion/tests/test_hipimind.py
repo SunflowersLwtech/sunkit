@@ -211,7 +211,7 @@ class BridgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_hello_maps_state_and_never_sends_transcripts_or_hardware_names(self):
         hello = await self.welcomed()
         self.assertEqual(self.hub.auth_headers[0], "Bearer " + TOKEN)
-        self.assertEqual(hello["device"]["capabilities"], ["video", "audio", "ai", "live", "reminder_config"])
+        self.assertEqual(hello["device"]["capabilities"], ["video", "audio", "ai", "live", "reminder_config", "announce"])
         st = hello["state"]
         self.assertEqual(st["switches"], {"video": False, "audio": True, "ai": True})
         self.assertEqual(st["capture"], {"video": "off", "audio": "running"})
@@ -399,7 +399,7 @@ class InProcessTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_hello_offers_models_and_reports_all_three_slots(self):
         self.assertEqual(self.hello["device"]["capabilities"],
-                         ["video", "audio", "ai", "live", "reminder_config", "model_config", "model_test"])
+                         ["video", "audio", "ai", "live", "reminder_config", "model_config", "model_test", "announce"])
         self.assertEqual(set(self.hello["state"]["models"]), {"vision", "stt", "tts"})
         self.assertEqual(self.hello["state"]["models"]["vision"]["source"], "engine")
         self.assertEqual(self.hello["state"]["reminders"]["quiet_hours"], {"start": "23:00", "end": "08:00"})

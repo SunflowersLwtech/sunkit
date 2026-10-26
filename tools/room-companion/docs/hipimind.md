@@ -24,6 +24,10 @@ Only to your HipiMind account:
   text is written in the language chosen on the HipiMind page (`config.language`, `zh` or `en`);
   the website renders switch events from `data` in the reader's language;
 - the model settings you chose (server address and model name; **never a key**);
+- for each sentence read out in the room (from the HipiMind page, the device's own page or a message
+  channel): an `announce` event with its length and a source code (`播报了一句（12 字）`, `data:
+  {"chars": 12, "source": "web"}`), and for one typed on the HipiMind page, whether it was played,
+  on which output (`电脑喇叭`, `蓝牙音箱`…), for how long and how loud. **Never the words.**
 - JPEG frames, **only while you have the HipiMind page open and asked for live video**;
   HipiMind forwards them to your browser and keeps nothing.
 
@@ -264,6 +268,32 @@ Anything that speaks the OpenAI API: `vllm serve <model>` (`http://<host>:8000/v
 Fill in base URL, model, and key (on the website, or `api_key_file` in the config), then press
 **Test connection**. A provider bills you for what room-companion sends it: one frame per minute
 while something moves, every 5 minutes otherwise.
+
+### Read typed text out (announce)
+
+The owner types a sentence on the HipiMind page and the room reads it out, on the device's own
+speech (the `tts` slot: the built-in voice by default; with `tts` on `cloud`, HipiMind's voice,
+billed and capped like any other cloud request). Not tied to the three switches; while it plays,
+the microphone ignores the room's own voice.
+
+```json
+{"type": "announce", "req": "a-17", "text": "晚饭好了，下楼吃饭", "source": "web"}
+```
+
+The device answers at once with an `ack`: `{"ok": true, "result": {"id": "a-17", "message": "…"}}`,
+or `{"ok": false, "error": {"code": …, "message": …}}` with `empty`, `too_long` (more than 300
+characters), `rate_limited` (more than 6 a minute or 200 a day, from all sources together), `busy`
+(several sentences still waiting) or `no_output` (nothing that can make a sound). Once the sentence
+has been played, or has failed, it sends
+
+```json
+{"type": "announce_result", "req": "a-17", "ok": true, "output": "电脑喇叭", "seconds": 3.2, "peak": 0.41, "error": null}
+```
+
+where `output` is the output it played on (named in the device's language), `seconds` how long it
+took and `peak` the loudest level on that output, as evidence that it was heard. A device that can do
+this lists `announce` in `hello.device.capabilities`. In sidecar mode the connector uses the
+room-companion's own `POST /api/broadcast` and follows `GET /api/broadcast/<id>`.
 
 ## 6. Sidecar mode
 

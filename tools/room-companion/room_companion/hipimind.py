@@ -104,7 +104,7 @@ DEFAULTS = {
     "poll_seconds": 1.0,
     "platform": None,
     "live": {"max_fps": 2, "max_width": 960, "jpeg_quality": 70},
-    "events": {"reminders": True, "switches": True, "scene": True, "notices": True},
+    "events": {"reminders": True, "switches": True, "scene": True, "notices": True, "announce": True},
     "scene_event_min_minutes": 10,
 }
 
@@ -296,6 +296,42 @@ class LocalAPI:
         except ValueError:
             return code, {}
 
+    announce_capable = True
+    #: How long a sidecar follows one announcement before reporting it failed (300 characters read out
+    #: take about a minute and a half).
+    ANNOUNCE_FOLLOW_SECONDS = 150.0
+
+    def announce(self, text: str, source: str, req: str, on_done) -> dict:
+        """Hand `text` to the room-companion to read out; on_done(result) once it was played or failed."""
+        code, _, raw = self._req("POST", "/api/broadcast", {"text": text, "id": req, "source": source})
+        try:
+            res = json.loads(raw.decode("utf-8") or "{}")
+        except ValueError:
+            res = {}
+        if code == 404:
+            return {"ok": False, "code": "no_output", "message": "this room-companion cannot read text out"}
+        if not isinstance(res, dict) or "ok" not in res:
+            return {"ok": False, "code": "busy", "message": f"local answer {code}"}
+        if res.get("ok"):
+            threading.Thread(target=self._follow_announcement, args=(str(res.get("id") or req), on_done),
+                             name="announce-follow", daemon=True).start()
+        return res
+
+    def _follow_announcement(self, bid: str, on_done):
+        deadline = time.monotonic() + self.ANNOUNCE_FOLLOW_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            try:
+                code, _, raw = self._req("GET", "/api/broadcast/" + urllib.parse.quote(bid, safe=""))
+                r = json.loads(raw.decode("utf-8") or "{}") if code == 200 else {}
+            except Exception:
+                continue
+            if isinstance(r, dict) and r.get("state") in ("done", "failed"):
+                on_done({"id": bid, **{k: r.get(k) for k in ("ok", "output", "seconds", "peak", "error")}})
+                return
+        on_done({"id": bid, "ok": False, "output": None, "seconds": None, "peak": None,
+                 "error": "no result from the room-companion in time"})
+
 
 class AppDevice:
     """The same calls as LocalAPI, straight into a running App (in-process connector), plus models."""
@@ -356,6 +392,13 @@ class AppDevice:
 
     def unbind_token(self) -> list[str]:
         return self.app.unbind_token()
+
+    @property
+    def announce_capable(self) -> bool:
+        return hasattr(self.app, "broadcast")
+
+    def announce(self, text: str, source: str, req: str, on_done) -> dict:
+        return self.app.broadcast(text, source, request_id=req, on_done=on_done)
 
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
@@ -595,6 +638,11 @@ class EventDiffer:
             scene = str(e.get("scene") or "")
             return {"type": "event", "kind": "scene", "text": SCENE_LABELS[lang].get(scene, scene)[:200], "at": at,
                     "data": {"label": scene[:40]}}
+        if kind == "broadcast" and self.enabled.get("announce"):
+            chars = e.get("chars") if isinstance(e.get("chars"), int) else 0
+            text = f"播报了一句（{chars} 字）" if lang == "zh" else f"Announced a message ({chars} characters)"
+            return {"type": "event", "kind": "announce", "text": text, "at": at,
+                    "data": {"chars": chars, "source": _source_code(e.get("source"))}}
         if kind in NOTICE_TEXT["en"] and self.enabled.get("notices"):
             return {"type": "event", "kind": "notice", "text": NOTICE_TEXT[lang][kind], "at": at, "data": {}}
         return None
@@ -716,6 +764,8 @@ class Bridge:
             caps += ["model_config", "model_test"]
         if getattr(self.device, "camera_capable", False):
             caps += ["camera_config", "camera_action"]
+        if getattr(self.device, "announce_capable", False):
+            caps += ["announce"]
         return caps
 
     def _limit(self, name: str, default: int) -> int:
@@ -1039,6 +1089,10 @@ class Bridge:
             task = asyncio.create_task(self._run_test(msg))
             self.side_tasks.add(task)
             task.add_done_callback(self.side_tasks.discard)
+        elif t == "announce":
+            task = asyncio.create_task(self._run_announce(msg))
+            self.side_tasks.add(task)
+            task.add_done_callback(self.side_tasks.discard)
         elif isinstance(t, str) and t.endswith("_result") and t[:-7] in CLOUD_KINDS:
             fut = self.cloud_waiters.pop(msg.get("req"), None)
             if fut is not None and not fut.done():
@@ -1072,6 +1126,42 @@ class Bridge:
             if t != "_welcome_config":
                 await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
                                        "error": {"code": "bad_request", "message": f"could not apply ({type(e).__name__})"}})
+
+    async def _run_announce(self, msg: dict):
+        """Read the owner's typed text out in the room: ack at once (taken, or why not), then an
+        announce_result once it has been played or has failed. The text itself is never logged."""
+        req = msg.get("req")
+        text = msg.get("text")
+
+        async def refuse(code: str, message: str):
+            await self._send_json({"type": "ack", "req": req, "ok": False, "error": {"code": code, "message": message}})
+
+        if not getattr(self.device, "announce_capable", False):
+            return await refuse("no_output", "this device cannot read text out")
+        if not isinstance(text, str) or not text.strip():
+            return await refuse("empty", "nothing to read out")
+        loop = asyncio.get_running_loop()
+
+        def on_done(r: dict):  # from the speaker's thread
+            err = r.get("error")
+            body = {"type": "announce_result", "req": req, "ok": bool(r.get("ok")),
+                    "output": str(r.get("output"))[:80] if r.get("output") else None,
+                    "seconds": r.get("seconds") if isinstance(r.get("seconds"), (int, float)) else None,
+                    "peak": r.get("peak") if isinstance(r.get("peak"), (int, float)) else None,
+                    "error": str(err)[:200] if err else None}
+            asyncio.run_coroutine_threadsafe(self._send_json(body), loop)
+
+        source = f"HipiMind ({str(msg.get('source') or 'web')[:20]})"
+        try:
+            res = await asyncio.to_thread(self.device.announce, text, source, req, on_done)
+        except Exception as e:
+            log.warning("an announcement could not be handed over (%s)", type(e).__name__)
+            return await refuse("busy", f"could not start ({type(e).__name__})")
+        if not isinstance(res, dict) or not res.get("ok"):
+            res = res if isinstance(res, dict) else {}
+            return await refuse(str(res.get("code") or "busy")[:20], str(res.get("message") or "not taken")[:200])
+        await self._send_json({"type": "ack", "req": req, "ok": True,
+                               "result": {"id": str(res.get("id") or req)[:64], "message": str(res.get("message") or "")[:200]}})
 
     async def _run_test(self, msg: dict):
         try:

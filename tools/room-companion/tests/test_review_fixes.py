@@ -277,6 +277,9 @@ class SummaryNamesNoHardware(unittest.TestCase):
             def status(self):
                 return {"output": self.output}
 
+            def describe(self):  # like the real one: names the output, which must stay on the device
+                return "出声：" + self.output["name"]
+
         app.speaker = Sp()
         app.switches.set({"video": True, "audio": True}, "t")
         app.video.state, app.video.detail = "error", sentinel + " ffmpeg: Could not run graph"
