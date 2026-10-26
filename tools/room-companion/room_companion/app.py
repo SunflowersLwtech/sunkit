@@ -167,6 +167,8 @@ class App:
         if self.cfg.get("hipimind"):
             from .hipimind import start_in_process
             self.connector = start_in_process(self, self.cfg["hipimind"])
+        else:
+            self.unbind_token()  # the HipiMind link was taken out: its page's choices go with it
 
     def shutdown(self):
         self._stop.set()
@@ -272,6 +274,11 @@ class App:
         """Called with the device token in use; another token than the one the choices were made under
         resets them (reset_remote_models)."""
         return self._models_changed(self.models.bind_token(fingerprint), reason="token")
+
+    def unbind_token(self) -> list[str]:
+        """There is no device token (no hipimind section, or the token file is gone): the remote choices
+        the page made under the last one go back to this device's own config."""
+        return self._models_changed(self.models.unbind_token(), reason="token")
 
     def _models_changed(self, changed: list[str], reason: str | None = None) -> list[str]:
         if "vision" in changed:

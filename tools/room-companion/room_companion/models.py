@@ -279,6 +279,20 @@ class ModelSettings:
             _write_private_json(self.path, self.runtime)
         return changed
 
+    def unbind_token(self) -> list[str]:
+        """No device token any more (the hipimind section was taken out, or the token file is gone):
+        choices made under a token lose their account, so the remote ones are dropped (reset_remote).
+        Choices never tied to a token (none was ever seen) are left alone. Returns the slots that changed."""
+        with self._lock:
+            old = self.runtime.get("token")
+        if not isinstance(old, str):
+            return []
+        changed = self.reset_remote()
+        with self._lock:
+            self.runtime.pop("token", None)
+            _write_private_json(self.path, self.runtime)
+        return changed
+
 
 # ---------------------------------------------------------------- HTTP to OpenAI-compatible servers
 

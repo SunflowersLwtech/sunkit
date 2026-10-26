@@ -354,6 +354,9 @@ class AppDevice:
     def bind_token(self, fingerprint: str) -> list[str]:
         return self.app.bind_token(fingerprint)
 
+    def unbind_token(self) -> list[str]:
+        return self.app.unbind_token()
+
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
 
@@ -839,6 +842,9 @@ class Bridge:
                     if not waiting_logged:
                         log.warning("waiting for a device token (run the pair command; no restart needed)")
                         waiting_logged = True
+                        if not token and hasattr(self.device, "unbind_token"):
+                            # the token file is gone: the page's choices lost their account
+                            await asyncio.to_thread(self.device.unbind_token)
                     try:
                         await asyncio.wait_for(self.stopped.wait(), self.cfg.get("token_poll_seconds", 30))
                     except asyncio.TimeoutError:

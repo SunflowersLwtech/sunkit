@@ -136,10 +136,11 @@ it was typed for: moving a slot to another address does not take the key along (
 for the new server); moving back to the first address uses it again.
 
 Page choices belong to the account (device token) that made them. When HipiMind refuses the token
-(the device was removed on the website, close code `4401`) or the token is replaced (paired again,
-also while room-companion was stopped), every slot the page had set to `openai` or `cloud` goes back
-to the config file, the saved keys are deleted, and events not yet delivered to the old account are
-dropped. Choices of `engine` or `off` stay. The device's own page (`http://<device>:8790/`) says
+(the device was removed on the website, close code `4401`), the token is replaced (paired again,
+also while room-companion was stopped), or there is no token any more (the `hipimind` section was
+taken out of the config, or the token file deleted), every slot the page had set to `openai` or
+`cloud` goes back to the config file, the saved keys are deleted, and events not yet delivered to
+the old account are dropped. Choices of `engine` or `off` stay. The device's own page (`http://<device>:8790/`) says
 under the summary which jobs go to another machine and where ("注意，这些交给别的机器：…").
 
 **Language.** `config.language` (`zh` or `en`, in `welcome` and in `config`) sets the language the

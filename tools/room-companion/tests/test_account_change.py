@@ -216,6 +216,66 @@ class TokenReplacedWhileStopped(unittest.IsolatedAsyncioTestCase):
             await hub.stop()
 
 
+class LinkRemovedOnTheDevice(unittest.TestCase):
+    """Page choices belong to the token they were made under; with the hipimind section taken out (or
+    the token file deleted) there is no token, so they go back to the device's own config."""
+
+    def _bound_choices(self, d):
+        cfg = dict(DEFAULTS, data_dir=d)
+        ms = m.ModelSettings(cfg, os.path.join(d, "state"))
+        ms.set({"vision": {"source": "openai", "base_url": "http://203.0.113.9/v1", "model": "x"}}, {"vision": "sk-page"})
+        ms.bind_token(hm.token_fingerprint(TOKEN))
+        return cfg
+
+    def _app(self, cfg):
+        return App(cfg, video=Pipe("running"), audio=Pipe(), notifier=FakeNotifier(),
+                   ai_client=FakeClient("coding"), model_server=FakeServer())
+
+    def test_a_start_without_a_hipimind_section_drops_the_pages_choices(self):
+        d = tempfile.mkdtemp()
+        app = self._app(self._bound_choices(d))
+        self.assertEqual(app.models.slot("vision")["source"], "openai")
+        app.start()
+        try:
+            self.assertEqual(app.models.slot("vision"), {"source": "engine"})
+            self.assertFalse(app.models.has_key("vision"))
+            self.assertEqual(app.remote_models_text(), "")
+        finally:
+            app.shutdown()
+
+    def test_choices_never_tied_to_a_token_are_left_alone(self):
+        d = tempfile.mkdtemp()
+        cfg = dict(DEFAULTS, data_dir=d)
+        m.ModelSettings(cfg, os.path.join(d, "state")).set(
+            {"vision": {"source": "openai", "base_url": "http://203.0.113.9/v1", "model": "x"}})
+        app = self._app(cfg)
+        app.start()
+        try:
+            self.assertEqual(app.models.slot("vision")["source"], "openai")
+        finally:
+            app.shutdown()
+
+
+@unittest.skipIf(websockets is None, "websockets not installed")
+class TokenFileRemovedInTheApp(unittest.IsolatedAsyncioTestCase):
+    async def test_a_missing_token_file_drops_the_pages_choices(self):
+        d = tempfile.mkdtemp()
+        token_file = os.path.join(d, "token")          # never written: the file was deleted
+        cfg = dict(DEFAULTS, data_dir=d, hipimind={"ws_url": "ws://127.0.0.1:1/ws/room/device",
+                                                   "token_file": token_file, "token_poll_seconds": 0.1})
+        ms = m.ModelSettings(cfg, os.path.join(d, "state"))
+        ms.set({"vision": {"source": "openai", "base_url": "http://203.0.113.9/v1", "model": "x"}}, {"vision": "sk-page"})
+        ms.bind_token(hm.token_fingerprint(TOKEN))
+        app = App(cfg, video=Pipe("running"), audio=Pipe(), notifier=FakeNotifier(),
+                  ai_client=FakeClient("coding"), model_server=FakeServer())
+        conn = hm.start_in_process(app, cfg["hipimind"])
+        try:
+            await async_until(lambda: app.models.slot("vision") == {"source": "engine"}, 5)
+            self.assertFalse(app.models.has_key("vision"))
+        finally:
+            await asyncio.to_thread(conn.stop)
+
+
 # ---------------------------------------------------------------- P1-1: the local page says where things go
 
 class LocalPageShowsRemoteModels(unittest.TestCase):
@@ -315,8 +375,15 @@ class RemoteTranscriptsOnlyTurnThingsOff(unittest.TestCase):
         self.assertNotEqual(app.policy.state["mode"], "active")
         app.on_transcript("房间助手安静模式", remote=True)
         self.assertEqual(app.policy.state["mode"], "quiet")
+        app.on_transcript("房间助手平衡模式", remote=True)            # busier than quiet: an "on"
+        self.assertEqual(app.policy.state["mode"], "quiet")
+        app.policy.state["suppress_forever"] = ["sitting"]
+        app.on_transcript("房间助手恢复提醒", remote=True)            # reminders back on: an "on"
+        self.assertEqual(app.policy.state["suppress_forever"], ["sitting"])
         app.on_transcript("房间助手开视频")                          # this machine's own recognizer
         self.assertTrue(app.switches.get("video"))
+        app.on_transcript("房间助手恢复提醒")
+        self.assertEqual(app.policy.state["suppress_forever"], [])
 
 
 # ---------------------------------------------------------------- P1-2: Test connection cannot sweep the LAN
@@ -649,16 +716,25 @@ class ReconnectBackoff(unittest.TestCase):
 
 class ErrorsCarryNoResponseBody(unittest.TestCase):
     def test_test_connection_errors_never_include_the_answer_body(self):
-        secret = b'{"error": {"message": "BODY-SENTINEL-4412 model not found, internal path /srv/x"}}'
-        for status in (400, 401, 404, 500, 502):
-            srv = FakeModel(status=status, error_body=secret)
-            try:
-                for slot in ("vision", "stt", "tts"):
-                    res = m.test_slot(slot, {"source": "openai", "base_url": srv.url, "model": "x"}, None)
-                    self.assertFalse(res["ok"])
-                    self.assertNotIn("BODY-SENTINEL", json.dumps(res), (status, slot, res))
-            finally:
-                srv.close()
+        # Two bodies: one that names no model, so 400, 500 and 502 reach the plain "HTTP <code> from
+        # <host>" line, and one that does, so they take the model_not_found branch instead.
+        bodies = (b'{"error": {"message": "BODY-SENTINEL-4412 internal path /srv/x"}}',
+                  b'{"error": {"message": "BODY-SENTINEL-4412 model not found, internal path /srv/x"}}')
+        reached_plain = []
+        for body in bodies:
+            for status in (400, 401, 404, 500, 502):
+                srv = FakeModel(status=status, error_body=body)
+                try:
+                    for slot in ("vision", "stt", "tts"):
+                        res = m.test_slot(slot, {"source": "openai", "base_url": srv.url, "model": "x"}, None)
+                        self.assertFalse(res["ok"])
+                        self.assertNotIn("BODY-SENTINEL", json.dumps(res), (status, slot, res))
+                        if res["error"]["message"].startswith(f"HTTP {status} from"):
+                            reached_plain.append(status)
+                finally:
+                    srv.close()
+        self.assertTrue({400, 500, 502} <= set(reached_plain), reached_plain)
+        secret = bodies[1]
         class NotOpenAI(BaseHTTPRequestHandler):   # 200, but not an OpenAI-shaped answer
             def log_message(self, *a):
                 pass
