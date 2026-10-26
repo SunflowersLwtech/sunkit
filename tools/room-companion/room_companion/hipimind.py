@@ -88,6 +88,34 @@ DEFAULT_MESSAGE_MAX_BYTES = 65_536
 #: "Test connection" runs at most this many times a minute: each one makes this device call an address
 #: the page chose, so a stolen session must not be able to sweep the local network with it.
 TESTS_PER_MINUTE = 10
+#: An output that has no short name (a configured label, or the built-in one for the PC's own speakers) is
+#: reported as this word: output names are hardware names, and often carry the owner's name.
+GENERIC_OUTPUT = {"zh": "音箱", "en": "speaker"}
+ANNOUNCE_REFUSALS = {
+    "empty": "nothing to read out",
+    "too_long": "more than 300 characters",
+    "rate_limited": "more than 6 a minute or 200 a day",
+    "busy": "earlier sentences are still waiting",
+    "no_output": "nothing that can make a sound",
+    "ai_off": "the voice is a remote model and AI is off",
+}
+
+
+def announce_error_code(error) -> str | None:
+    """The fixed code HipiMind gets for a failed announcement; the local text (paths, PowerShell output,
+    host names) stays on the device."""
+    if not error:
+        return None
+    text = str(error)
+    if "没有能出声" in text or "no output" in text.lower():
+        return "no_output"
+    if "AI is off" in text:
+        return "ai_off"
+    if "no result" in text:
+        return "no_result"
+    if "TTS" in text or "speech model" in text:
+        return "tts_failed"
+    return "playback_failed"
 NOTICE_TEXT = {
     "en": {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
            "gpu_too_hot": "The local model is paused for 30 minutes to cool down"},
@@ -297,6 +325,11 @@ class LocalAPI:
             return code, {}
 
     announce_capable = True
+
+    def announce_labels(self) -> set[str]:
+        from .speaker import DEFAULT_LABELS
+        return {label for labels in DEFAULT_LABELS.values() for label in labels.values()}
+
     #: How long a sidecar follows one announcement before reporting it failed (300 characters read out
     #: take about a minute and a half).
     ANNOUNCE_FOLLOW_SECONDS = 150.0
@@ -398,7 +431,20 @@ class AppDevice:
         return hasattr(self.app, "broadcast")
 
     def announce(self, text: str, source: str, req: str, on_done) -> dict:
+        models = getattr(self.app, "models", None)
+        if (models is not None and models.slot("tts")["source"] in ("openai", "cloud")
+                and not self.app.switches.get("ai")):
+            # a remote voice is a remote model: nothing goes to one while AI is off
+            return {"ok": False, "code": "ai_off", "message": "the voice is a remote model and AI is off"}
         return self.app.broadcast(text, source, request_id=req, on_done=on_done)
+
+    def announce_labels(self) -> set[str]:
+        from .speaker import DEFAULT_LABELS
+        sp = getattr(self.app, "speaker", None)
+        cfg = getattr(sp, "cfg", {}) or {}
+        own = cfg.get("output_labels") if isinstance(cfg.get("output_labels"), dict) else {}
+        return {str(v) for v in own.values()} | {label for labels in DEFAULT_LABELS.values()
+                                                  for label in labels.values()}
 
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
@@ -1142,13 +1188,18 @@ class Bridge:
             return await refuse("empty", "nothing to read out")
         loop = asyncio.get_running_loop()
 
+        safe = getattr(self.device, "announce_labels", lambda: set())()
+        lang = self.lang()
+
         def on_done(r: dict):  # from the speaker's thread
-            err = r.get("error")
+            output = r.get("output")
+            if output:  # a short name the owner gave, or a plain word: never the hardware name
+                output = output if output in safe else GENERIC_OUTPUT[lang]
             body = {"type": "announce_result", "req": req, "ok": bool(r.get("ok")),
-                    "output": str(r.get("output"))[:80] if r.get("output") else None,
+                    "output": str(output)[:80] if output else None,
                     "seconds": r.get("seconds") if isinstance(r.get("seconds"), (int, float)) else None,
                     "peak": r.get("peak") if isinstance(r.get("peak"), (int, float)) else None,
-                    "error": str(err)[:200] if err else None}
+                    "error": None if r.get("ok") else (announce_error_code(r.get("error")) or "playback_failed")}
             asyncio.run_coroutine_threadsafe(self._send_json(body), loop)
 
         source = f"HipiMind ({str(msg.get('source') or 'web')[:20]})"
@@ -1159,9 +1210,11 @@ class Bridge:
             return await refuse("busy", f"could not start ({type(e).__name__})")
         if not isinstance(res, dict) or not res.get("ok"):
             res = res if isinstance(res, dict) else {}
-            return await refuse(str(res.get("code") or "busy")[:20], str(res.get("message") or "not taken")[:200])
+            code = str(res.get("code") or "busy")[:20]
+            # The local message can name the output; HipiMind gets the code and a sentence built from it.
+            return await refuse(code, ANNOUNCE_REFUSALS.get(code, ANNOUNCE_REFUSALS["busy"]))
         await self._send_json({"type": "ack", "req": req, "ok": True,
-                               "result": {"id": str(res.get("id") or req)[:64], "message": str(res.get("message") or "")[:200]}})
+                               "result": {"id": str(res.get("id") or req)[:64]}})
 
     async def _run_test(self, msg: dict):
         try:

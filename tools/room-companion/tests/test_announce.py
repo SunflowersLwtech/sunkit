@@ -72,7 +72,7 @@ class AnnounceInTheApp(unittest.IsolatedAsyncioTestCase):
                            event=ANNOUNCE_EVENT)
         ack, done, event = got["ack"], got["done"], got["event"]
         self.assertTrue(ack["ok"], ack)
-        self.assertEqual(ack["result"]["id"], "a-1")
+        self.assertEqual(ack["result"], {"id": "a-1"})  # nothing of the local message (it names the output)
         self.assertEqual(done, {"type": "announce_result", "req": "a-1", "ok": True, "output": "电脑喇叭",
                                 "seconds": 1.0, "peak": 0.3, "error": None})
         self.assertEqual(self.tts.texts, [WORDS])
@@ -108,9 +108,35 @@ class AnnounceInTheApp(unittest.IsolatedAsyncioTestCase):
         got = await expect(self.hub, ack=is_type("ack", "f-1"), done=is_type("announce_result", "f-1"))
         ack, done = got["ack"], got["done"]
         self.assertTrue(ack["ok"])
-        self.assertFalse(done["ok"])
-        self.assertTrue(done["error"])
+        self.assertEqual((done["ok"], done["error"], done["output"]), (False, "no_output", None))
         self.assertNotIn("没有喇叭", json.dumps(done, ensure_ascii=False))
+
+    async def test_hardware_names_and_local_paths_never_reach_hipimind(self):
+        """Like the summary's guard: an output with no short name is sent as a plain word, a failure as a
+        code. The sentinels must be in nothing that was sent."""
+        headphones = {"name": "Headphones (SENTINEL-HW-99 Pods)", "volume": 50, "muted": False, "default": True}
+        self.sp.list_outputs = lambda: [dict(headphones)]
+        self.sp.check_output()
+        await self.hub.socket.send(json.dumps({"type": "announce", "req": "h-1", "text": "开饭了"}))
+        played = await expect(self.hub, ack=is_type("ack", "h-1"), done=is_type("announce_result", "h-1"))
+        self.assertEqual(played["done"]["output"], "音箱")
+        def fails(path, secs, device, volume):  # what winplay.ps1's output and a WSL path look like
+            raise RuntimeError(r"playback failed: C:\Users\SENTINEL-USER\room-companion\tts\say.wav: denied")
+
+        self.sp.play = fails
+        await self.hub.socket.send(json.dumps({"type": "announce", "req": "h-2", "text": "再来"}))
+        failed = await expect(self.hub, ack=is_type("ack", "h-2"), done=is_type("announce_result", "h-2"))
+        self.assertEqual((failed["done"]["ok"], failed["done"]["error"]), (False, "playback_failed"))
+        sent = " ".join(raw for _, raw in self.hub.received if isinstance(raw, str))
+        self.assertNotIn("SENTINEL", sent)
+
+    async def test_a_remote_voice_with_ai_off_is_refused_at_once(self):
+        self.app.apply_models({"tts": {"source": "cloud"}})
+        self.assertFalse(self.app.switches.get("ai"))
+        await self.hub.socket.send(json.dumps({"type": "announce", "req": "o-1", "text": "开饭了"}))
+        ack = await self.hub.next(is_type("ack", "o-1"))
+        self.assertEqual((ack["ok"], ack["error"]["code"]), (False, "ai_off"))
+        self.assertEqual(self.tts.texts, [])
 
 
 class AnnounceEventText(unittest.TestCase):
