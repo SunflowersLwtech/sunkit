@@ -53,7 +53,9 @@ pip install 'room-companion[hipimind]'          # adds websockets (and pillow, f
    token file, exchanges the code for a device token, and writes the token to `token_file` with
    mode 600. The token is never printed. It prints which account the camera joined
    (`Paired to a***e@example.com`): if that is not your account, remove the device on the website. Pair again (with a new code) if you remove the device on
-   the website or lose the file.
+   the website or lose the file. Pairing again starts clean: every model the previous account's page
+   had moved to a remote server (`openai` or `cloud`) goes back to the config file, and the keys typed
+   on that page are deleted.
 3. If room-companion is already running with a `hipimind` section, it notices the new token
    within 30 seconds and connects; no restart is needed. Otherwise add the section and restart it.
    The website shows the device online within a few seconds of connecting.
@@ -85,7 +87,7 @@ JSON Schema of the section:
   "required": ["token_file"],
   "properties": {
     "server": { "type": "string", "format": "uri", "default": "https://api.hipimind.com",
-                "description": "HipiMind API base URL" },
+                "description": "HipiMind API base URL; https:// (http:// only to this machine itself)" },
     "ws_url": { "type": ["string", "null"], "default": null,
                 "description": "Override the WebSocket URL; default is server with ws(s):// and /ws/room/device" },
     "token_file": { "type": "string", "description": "Where `pair` writes the device token (mode 600)" },
@@ -133,6 +135,13 @@ Both files are mode 600 and HipiMind does not keep the keys. A key belongs to th
 it was typed for: moving a slot to another address does not take the key along (type it again
 for the new server); moving back to the first address uses it again.
 
+Page choices belong to the account (device token) that made them. When HipiMind refuses the token
+(the device was removed on the website, close code `4401`) or the token is replaced (paired again,
+also while room-companion was stopped), every slot the page had set to `openai` or `cloud` goes back
+to the config file, the saved keys are deleted, and events not yet delivered to the old account are
+dropped. Choices of `engine` or `off` stay. The device's own page (`http://<device>:8790/`) says
+under the summary which jobs go to another machine and where ("注意，这些交给别的机器：…").
+
 **Language.** `config.language` (`zh` or `en`, in `welcome` and in `config`) sets the language the
 device writes event text in and speaks reminders in; it is kept in `<data_dir>/state/overrides.json`.
 Without it the device keeps its own: the config file's top-level `"language"`, default `zh`.
@@ -161,8 +170,14 @@ Rules that do not change with the source:
   (spoken reminders and replies stay silent; notifications still go out). With `engine`, speech
   is recognized and spoken locally whatever the AI switch says, as before.
 - A base URL must be a plain `http://` or `https://` address with a host name — no other scheme,
-  no user name or password in it, no `#`. Redirects are not followed, an answer is read up to
+  no user name or password in it, no `?` or `#`, no control characters. A key with a control
+  character (a line break, say) is refused too. Redirects are not followed, an answer is read up to
   2 MB (8 MB for speech audio), and each request must finish within about twice its timeout.
+- **Words from a remote speech-to-text server can only turn things off.** With `stt` on `openai`
+  or `cloud`, a spoken command may turn switches off, start privacy mode or quiet mode; one that
+  would turn anything on (a switch, a busier reminder mode, reminders back on) is not carried out
+  and is logged as `voice_command_refused`. Use the page, the website or your message channel to
+  turn things on. With `engine`, voice commands work both ways, as before.
 - `cloud` requests fit HipiMind's limits: a frame is scaled to at most 768 px on the long side
   and 300 KB (Pillow needed for frames bigger than that), and an utterance longer than 30 s is
   cut to its first 30 s. A request that would still be too large is refused on the device,
@@ -195,7 +210,9 @@ time it took, or one of: `connect_failed`, `timeout` (15 s), `unauthorized` (wro
 `not_found` (usually a base URL without `/v1`), `model_not_found`, `bad_response`,
 `engine_unavailable`, `unsupported`. A `cloud` refusal is reported as `unsupported` (not on your
 plan or not enabled) or `connect_failed` (allowance used, rate limited, unavailable), with
-HipiMind's own code in the message.
+HipiMind's own code in the message. The device runs at most 10 tests a minute; more are answered
+`rate_limited`. The model name in the answer is cut to 80 characters, and an error never carries
+the server's answer text.
 
 ## 5. Connect your own model
 
@@ -267,10 +284,12 @@ events and live video; model choice and Test connection need the in-process conn
 
 | log line / website | what it means |
 |---|---|
+| `not connecting to HipiMind: … without encryption` | `server` or `ws_url` is `http://`/`ws://` to another machine: the token only goes over `https://`/`wss://` |
 | `HipiMind refused the device token` (in the app) / `stopped: 4401 …` (sidecar) | the device was removed on the website, or the token file is wrong: pair again. Inside the app the connector waits for the new token and reconnects by itself; the sidecar exits |
 | `4403 … Room is not enabled for this account` | HipiMind Room is not open to your account yet |
 | `4409 … another connection for this device replaced this one` | two copies run with the same token; stop one |
 | `reconnecting in N s` | normal after a network drop or a HipiMind restart; it backs off up to 60 s |
+| `HipiMind is closing the connection (4401: …)` | HipiMind says why before it closes (`{"type": "close", "code": …, "reason": …}`), because on the way the close frame's own code can be lost (it arrives as 1005); the device acts on this code |
 | `waiting for a device token` (in the app) / `no device token; run the pair command first` (sidecar) | `token_file` is missing or empty: run `pair` |
 | website: device offline | the app is not running, the network is down, or the token was revoked |
 | website: live view stays black | video is off, the camera is missing, or the frames are larger than the limit (lower `live.max_width`) |

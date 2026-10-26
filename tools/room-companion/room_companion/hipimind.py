@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -43,6 +45,10 @@ from datetime import datetime
 from .models import clean_base_url
 
 log = logging.getLogger("room_companion.hipimind")
+# The websockets library logs the handshake headers at DEBUG, the device token among them: the connection
+# gets its own logger, held at INFO whatever level the host application (or -v) sets.
+_WS_LOG = logging.getLogger("room_companion.hipimind.websocket")
+_WS_LOG.setLevel(logging.INFO)
 
 PROTOCOL_VERSION = 1
 SOFTWARE = "room-companion-hipimind/0.1.0"
@@ -79,6 +85,9 @@ SOURCE_NAMES = {"zh": {"web": "网页", "local": "本机网页", "voice": "语�
 DEFAULT_FRAME_MAX_BYTES = 150_000
 DEFAULT_LIVE_MAX_FPS = 3
 DEFAULT_MESSAGE_MAX_BYTES = 65_536
+#: "Test connection" runs at most this many times a minute: each one makes this device call an address
+#: the page chose, so a stolen session must not be able to sweep the local network with it.
+TESTS_PER_MINUTE = 10
 NOTICE_TEXT = {
     "en": {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
            "gpu_too_hot": "The local model is paused for 30 minutes to cool down"},
@@ -128,6 +137,37 @@ def ws_url_for(cfg: dict) -> str:
     return urllib.parse.urlunsplit((scheme, u.netloc, u.path + "/ws/room/device", "", ""))
 
 
+def _is_loopback(host: str | None) -> bool:
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def plain_text_refused(url: str) -> str | None:
+    """Why the device token must not be sent to this URL, or None. The token goes only over TLS
+    (https://, wss://); plain http:// or ws:// is allowed to this machine itself (tests, a local tunnel)."""
+    try:
+        u = urllib.parse.urlsplit(str(url))
+        host = u.hostname
+    except ValueError:
+        return "the HipiMind address is not a valid URL"
+    if u.scheme in ("https", "wss") and host:
+        return None
+    if u.scheme in ("http", "ws") and _is_loopback(host):
+        return None
+    return (f"{u.scheme or '(no scheme)'}://{host or ''} would carry the device token without encryption; "
+            f"use an https:// (wss://) address")
+
+
+def token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def write_secret(path: str, value: str):
     """Write a secret readable only by this user (file 600, new parent dirs 700)."""
     path = os.path.expanduser(path)
@@ -170,6 +210,9 @@ def default_platform() -> str:
 
 def pair(server: str, code: str, name: str, token_file: str, platform: str | None = None,
          urlopen=urllib.request.urlopen) -> dict:
+    why = plain_text_refused(server)
+    if why:
+        raise PairError(0, "insecure", why)
     body = json.dumps({"code": code, "name": name, "software": SOFTWARE,
                        "platform": platform or default_platform()}).encode()
     req = urllib.request.Request(server.rstrip("/") + "/api/room/pair", data=body, method="POST",
@@ -304,6 +347,12 @@ class AppDevice:
 
     def test_model(self, slot: str, model: dict, key: str | None) -> dict:
         return self.app.test_model(slot, model, key)
+
+    def reset_remote_models(self) -> list[str]:
+        return self.app.reset_remote_models()
+
+    def bind_token(self, fingerprint: str) -> list[str]:
+        return self.app.bind_token(fingerprint)
 
     def set_cloud(self, cloud) -> None:
         self.app.cloud = cloud
@@ -637,6 +686,13 @@ class Bridge:
         self.control_q: asyncio.Queue | None = None
         self.side_tasks: set[asyncio.Task] = set()
         self.test_slots: asyncio.Semaphore | None = None
+        self.test_times: list[float] = []
+        self._tests_refused = 0
+        # The token of the last session, and the close code HipiMind announced in-band in this one
+        # ({"type": "close", "code": …} before closing: on the way, every close frame may arrive as 1005).
+        self._session_token: str | None = None
+        self._closed_for_token: str | None = None
+        self._inband_close: int | None = None
 
     def lang(self) -> str:
         if self.language in LANGUAGES:
@@ -692,6 +748,7 @@ class Bridge:
     async def poll_forever(self):
         while not self.stopped.is_set():
             await self.poll_once()
+            await self._close_if_token_replaced()
             try:
                 await asyncio.wait_for(self.stopped.wait(), self.cfg.get("poll_seconds", 1.0))
             except asyncio.TimeoutError:
@@ -719,10 +776,51 @@ class Bridge:
             return self._connect(self.ws_url, token)
         from websockets.asyncio.client import connect
         return connect(self.ws_url, additional_headers={"Authorization": "Bearer " + token},
-                       max_size=2 ** 20, open_timeout=20, ping_interval=30, ping_timeout=30)
+                       max_size=2 ** 20, open_timeout=20, ping_interval=30, ping_timeout=30, logger=_WS_LOG)
+
+    async def _pause(self, seconds: float):
+        """The wait before reconnecting; stop() ends it early."""
+        try:
+            await asyncio.wait_for(self.stopped.wait(), seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _forget_account(self, why: str, reset_models: bool = True):
+        """The account this device was connected to refused it, or another token takes over: nothing of
+        the old account goes to the next one — not its unsent events, not the device id their ids are
+        made from, and (reset_models) not the remote models and keys its page chose."""
+        log.warning("%s: unsent events, the device id and models chosen on the page are dropped", why)
+        self.unacked.clear()
+        self.device_id = None
+        self.limits = {}
+        self.events.seen.clear()
+        self.events.baselined = False  # what is in the local list now is history for the next account
+        if reset_models and hasattr(self.device, "reset_remote_models"):
+            await asyncio.to_thread(self.device.reset_remote_models)
+
+    async def _close_if_token_replaced(self):
+        """`pair` wrote a new token while connected with the old one: end this session, so the next one
+        uses the new token (and leaves the old account behind)."""
+        ws, current = self.ws, self._session_token
+        if ws is None or current is None:
+            return
+        token = read_secret(self.cfg["token_file"])
+        if token and token != current and token != self._closed_for_token:
+            log.info("the device token was replaced; reconnecting with the new one")
+            self._closed_for_token = token
+            try:
+                await ws.close(1000, "device token replaced")
+            except Exception:
+                pass
 
     async def run_forever(self) -> str | None:
         """Keep a connection up until a permanent refusal or stop(); returns why it stopped for good."""
+        why = plain_text_refused(self.ws_url)
+        if why:
+            self.stop_reason = why
+            log.error("not connecting to HipiMind: %s", why)
+            self.stopped.set()
+            return self.stop_reason
         self.loop = asyncio.get_running_loop()
         if hasattr(self.device, "set_cloud"):
             self.device.set_cloud(self.cloud_threadsafe)
@@ -747,8 +845,16 @@ class Bridge:
                         pass
                     continue
                 waiting_logged = False
+                if self._session_token is not None and token != self._session_token:
+                    await self._forget_account("the device token changed", reset_models=False)
+                self._session_token = token
+                if hasattr(self.device, "bind_token"):
+                    # models chosen under another token (also before a restart) are dropped here
+                    await asyncio.to_thread(self.device.bind_token, token_fingerprint(token))
                 started = self.clock()
                 code = await self.session(token)
+                if code == 4401:
+                    await self._forget_account("HipiMind refused the device token")
                 if code == 4401 and self.cfg.get("wait_for_token"):
                     refused = token
                     log.error("HipiMind refused the device token (%s)", PERMANENT_CLOSE[4401])
@@ -763,10 +869,7 @@ class Bridge:
                     backoff = 1.0
                 delay = backoff * random.uniform(0.8, 1.2)
                 log.info("reconnecting in %.1f s (last close %s)", delay, code)
-                try:
-                    await asyncio.wait_for(self.stopped.wait(), delay)
-                except asyncio.TimeoutError:
-                    pass
+                await self._pause(delay)
                 backoff = min(backoff * 2, 60.0)
         finally:
             self.stopped.set()
@@ -800,6 +903,7 @@ class Bridge:
             log.warning("could not connect to HipiMind (%s)", type(e).__name__)
             return None
         self.ws, self.ready = ws, False
+        self._inband_close = None
         sender = watcher = None
         self.control_q = asyncio.Queue()
         self.test_slots = asyncio.Semaphore(2)
@@ -815,7 +919,10 @@ class Bridge:
                                      ensure_ascii=False))
             watcher = asyncio.create_task(self._close_when_stopped(ws))
             first = json.loads(await asyncio.wait_for(ws.recv(), 20))
-            if not isinstance(first, dict) or first.get("type") != "welcome":
+            if isinstance(first, dict) and first.get("type") == "close":
+                await self.handle(first)  # refused right after hello (an unknown token, say)
+                await ws.close()
+            elif not isinstance(first, dict) or first.get("type") != "welcome":
                 log.warning("HipiMind did not welcome the device (%s)",
                             str(first.get("code") if isinstance(first, dict) else "")[:60])
                 await ws.close()
@@ -830,7 +937,10 @@ class Bridge:
                 except ValueError:
                     continue
                 if isinstance(msg, dict):
-                    await self.handle(msg)
+                    try:
+                        await self.handle(msg)
+                    except Exception as e:  # one odd message never ends the connection
+                        log.warning("ignored a %s message (%s)", str(msg.get("type"))[:30], type(e).__name__)
         except Exception as e:
             if not hasattr(e, "rcvd") and not hasattr(e, "code"):
                 log.warning("connection error (%s)", type(e).__name__)
@@ -839,12 +949,18 @@ class Bridge:
                 if task is not None:
                     task.cancel()
             self.side_tasks.clear()
+            try:  # a session that ended on an error must not leave the socket open behind it
+                await asyncio.wait_for(ws.close(), 5)
+            except Exception:
+                pass
             self.ws, self.ready = None, False
             await self._stop_live()
             for fut in self.cloud_waiters.values():
                 if not fut.done():
                     fut.set_result({"ok": False, "error": {"code": "unavailable", "message": "disconnected"}})
             self.cloud_waiters.clear()
+        if self._inband_close is not None:
+            return self._inband_close
         code = getattr(ws, "close_code", None)
         if code is None:
             code = getattr(getattr(ws, "close_rcvd", None), "code", None)
@@ -867,10 +983,16 @@ class Bridge:
     # ---- messages ----
     async def handle(self, msg: dict):
         """Called from the receive loop: anything that can take time is handed to a lane, so this
-        returns at once and pings and cloud answers are never stuck behind a command."""
+        returns at once and pings and cloud answers are never stuck behind a command.
+
+        Ids from the server (`req`, an event's `id`) are strings; a message with another kind of id is
+        ignored, never allowed to end the connection."""
         t = msg.get("type")
+        if msg.get("req") is not None and not isinstance(msg.get("req"), str):
+            log.debug("ignored a %s message with a malformed req", str(t)[:30])
+            return
         if t == "welcome":
-            self.device_id = msg.get("device_id")
+            self.device_id = msg.get("device_id") if isinstance(msg.get("device_id"), str) else None
             self.limits = msg.get("limits") if isinstance(msg.get("limits"), dict) else {}
             self.ready = True
             log.info("connected to HipiMind as device %s", self.device_id)
@@ -883,13 +1005,31 @@ class Bridge:
         elif t == "ping":
             await self._send_json({"type": "pong", "t": msg.get("t")})
         elif t == "event_ack":
-            self.unacked.pop(msg.get("id"), None)
+            if isinstance(msg.get("id"), str):
+                self.unacked.pop(msg["id"], None)
+        elif t == "close":
+            code = msg.get("code")
+            if isinstance(code, int) and not isinstance(code, bool) and 1000 <= code <= 4999:
+                self._inband_close = code
+                log.info("HipiMind is closing the connection (%s: %s)", code, str(msg.get("reason") or "")[:120])
         elif t in ("set", "config", "live", "camera_action"):
             if self.control_q is not None:
                 self.control_q.put_nowait(msg)
             else:
                 await self._run_command(msg)
         elif t == "test_model":
+            now = time.monotonic()
+            self.test_times = [x for x in self.test_times if now - x < 60]
+            if len(self.test_times) >= TESTS_PER_MINUTE:
+                if not self._tests_refused:
+                    log.warning("Test connection refused: more than %d this minute", TESTS_PER_MINUTE)
+                self._tests_refused += 1
+                await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False, "error": {
+                    "code": "rate_limited",
+                    "message": f"at most {TESTS_PER_MINUTE} connection tests a minute; try again in a minute"}})
+                return
+            self._tests_refused = 0
+            self.test_times.append(now)
             task = asyncio.create_task(self._run_test(msg))
             self.side_tasks.add(task)
             task.add_done_callback(self.side_tasks.discard)
@@ -1008,7 +1148,10 @@ class Bridge:
         models = cfg.get("models") if isinstance(cfg.get("models"), dict) else None
         if models is not None or keys:
             if self.models_capable:
-                changed = await asyncio.to_thread(self.device.apply_models, models or {}, keys)
+                try:
+                    changed = await asyncio.to_thread(self.device.apply_models, models or {}, keys)
+                except ValueError as e:  # a key or address with a control character; the text names no key
+                    return False, {"code": "bad_request", "message": str(e)[:200]}, ignored
                 log.info("models changed for %s", ",".join(changed) or "nothing")
             else:
                 ignored.append("models")
@@ -1182,6 +1325,13 @@ def pair_from_app_config(argv, app_cfg: dict) -> int:
         print(f"pairing failed: {e.code}: {e.message}", file=sys.stderr)
         return 2
     print(paired_message(res))
+    if app_cfg.get("data_dir"):
+        # a new pairing is a new owner: remote models and keys chosen on the previous account's page go
+        from .models import ModelSettings
+        dropped = ModelSettings(app_cfg, os.path.join(app_cfg["data_dir"], "state")).reset_remote()
+        if dropped:
+            print("models chosen on the previous account's page are back to this device's config: "
+                  + ", ".join(dropped))
     if not app_cfg.get("hipimind"):
         print('add a "hipimind" section to the config so the app connects (see docs/hipimind.md)', file=sys.stderr)
     return 0
@@ -1202,6 +1352,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(args, "verbose", False) else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    # -v is for this connector's own lines: the websockets library would log the handshake, token included
+    logging.getLogger("websockets").setLevel(logging.INFO)
     if args.cmd == "pair":
         server, token_file = args.server, args.token_file
         if args.config:

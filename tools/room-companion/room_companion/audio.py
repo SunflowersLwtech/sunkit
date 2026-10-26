@@ -132,7 +132,7 @@ class AudioPipeline:
         self.switches = switches
         self.events = events
         self.cfg = cfg
-        self.on_transcript = on_transcript or (lambda text: None)
+        self.on_transcript = on_transcript or (lambda text, remote=False: None)
         # is_echo(start, end): our own speaker was playing at some point in [start, end]; such speech is
         # dropped before recognition
         self.is_echo = is_echo or (lambda start, end: False)
@@ -400,7 +400,11 @@ class AudioPipeline:
                     continue
                 self.transcripts.append({"t": time.time(), "text": text})
             try:
-                self.on_transcript(text)
+                # words from a remote speech-to-text server are marked: their commands may only turn things off
+                if getattr(speech, "remote", False):
+                    self.on_transcript(text, remote=True)
+                else:
+                    self.on_transcript(text)
             except Exception:
                 pass
 

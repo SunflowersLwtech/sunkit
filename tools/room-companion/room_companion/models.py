@@ -46,14 +46,22 @@ TEST_JPEG = base64.b64decode(
     "oooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA/9k=")
 
 
-BAD_BASE_URL = "the server address must be http:// or https:// with a host name, no user name or password, no #"
+BAD_BASE_URL = ("the server address must be http:// or https:// with a host name, no user name or password, "
+                "no ? or #")
+#: Longest model name "Test connection" reports back (the server's own answer is not echoed in full).
+MAX_REPORTED_NAME = 80
+
+
+def has_control_chars(text: str) -> bool:
+    return any(ord(c) < 32 or ord(c) == 127 for c in text)
 
 
 def clean_base_url(url) -> str | None:
     """The base URL if it is a plain http(s) address with a host, else None.
 
     The address comes from the HipiMind page, so it must not be able to make this device read a
-    local file (file://), use another protocol, or carry credentials in the URL.
+    local file (file://), use another protocol, carry credentials in the URL, or pick an arbitrary
+    path on a host with a query string (`http://host/any/path?` + `/chat/completions`).
     """
     from urllib.parse import urlsplit
     if not isinstance(url, str) or not url.strip() or len(url) > 300:
@@ -64,9 +72,9 @@ def clean_base_url(url) -> str | None:
         port = u.port  # noqa: F841 - raises on a malformed port
     except ValueError:
         return None
-    if u.scheme not in ("http", "https") or not u.hostname or "@" in u.netloc or "#" in url:
+    if u.scheme not in ("http", "https") or not u.hostname or "@" in u.netloc or "#" in url or "?" in url:
         return None
-    if any(c.isspace() for c in url):
+    if any(c.isspace() for c in url) or has_control_chars(url):
         return None
     return url.rstrip("/")
 
@@ -187,8 +195,25 @@ class ModelSettings:
     def has_key(self, name: str) -> bool:
         return bool(self.key(name))
 
+    def from_page(self, name: str) -> bool:
+        """True when the slot's setting is a run-time choice (from the HipiMind page), not the config file."""
+        with self._lock:
+            return name in self.runtime
+
     def set(self, models: dict, keys: dict | None = None) -> list[str]:
-        """Apply a run-time choice; returns the slots that changed. Keys: "" clears one."""
+        """Apply a run-time choice; returns the slots that changed. Keys: "" clears one.
+
+        A key or server address with a control character (a line break, say) is refused with
+        ValueError and nothing is changed: such a key would only end up in an error message.
+        """
+        for name in SLOTS:
+            v = (keys or {}).get(name)
+            if isinstance(v, str) and has_control_chars(v):
+                raise ValueError(f"the {name} key contains a control character")
+            d = (models or {}).get(name)
+            base = d.get("base_url") if isinstance(d, dict) else None
+            if isinstance(base, str) and has_control_chars(base):
+                raise ValueError(f"the {name} server address contains a control character")
         changed = []
         with self._lock:
             for name in SLOTS:
@@ -213,6 +238,45 @@ class ModelSettings:
                         if name not in changed:
                             changed.append(name)
                 _write_private_json(self.keys_path, self._keys)
+        return changed
+
+    def reset_remote(self) -> list[str]:
+        """Back to the config file for every slot the page moved to a remote source (openai or cloud),
+        and every saved key deleted. For when the account that chose them is gone (token refused or
+        replaced): a stolen session must not keep frames and speech going to its server.
+        Returns the slots that changed."""
+        changed = []
+        with self._lock:
+            for name in SLOTS:
+                if name in self.runtime and normalize_slot(self.runtime[name])["source"] in ("openai", "cloud"):
+                    old = normalize_slot(self.runtime.pop(name))
+                    if old != normalize_slot(self.static.get(name)):
+                        changed.append(name)
+            if changed:
+                self.runtime.pop("preset", None)
+            for name in self._keys:
+                if name not in changed:
+                    changed.append(name)
+            self._keys = {}
+            _write_private_json(self.path, self.runtime)
+            try:
+                os.remove(self.keys_path)
+            except FileNotFoundError:
+                pass
+        return changed
+
+    def bind_token(self, fingerprint: str) -> list[str]:
+        """Run-time choices belong to the device token that made them. With another token (paired
+        again, or the file replaced, also while the app was stopped) the remote ones are dropped
+        (reset_remote). The first token seen is adopted as it is. Returns the slots that changed."""
+        with self._lock:
+            old = self.runtime.get("token")
+        if old == fingerprint:
+            return []
+        changed = self.reset_remote() if isinstance(old, str) else []
+        with self._lock:
+            self.runtime["token"] = fingerprint
+            _write_private_json(self.path, self.runtime)
         return changed
 
 
@@ -285,8 +349,8 @@ def http_call(url: str, data: bytes, headers: dict, timeout: float, urlopen=None
         raise ModelCallError("connect_failed", BAD_BASE_URL)
     urlopen = urlopen or _default_urlopen
     deadline = time.monotonic() + 2 * timeout
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
         with urlopen(req, timeout=timeout) as r:
             return r.status, r.headers.get("Content-Type", ""), _read_capped(r, max_bytes, deadline, url)
     except ModelCallError:
@@ -317,6 +381,10 @@ def http_call(url: str, data: bytes, headers: dict, timeout: float, urlopen=None
         raise ModelCallError("connect_failed", f"Could not connect to {_host_of(url)} ({why})") from None
     except OSError as e:
         raise ModelCallError("connect_failed", f"Could not connect to {_host_of(url)} ({type(e).__name__})") from None
+    except ValueError:
+        # e.g. "Invalid header value b'Bearer <the key>'": the text would carry the key, so it is dropped
+        raise ModelCallError("connect_failed", f"the request to {_host_of(url)} could not be sent "
+                                               f"(the key or address has a character a request cannot carry)") from None
 
 
 def _auth(key: str | None) -> dict:
@@ -561,7 +629,11 @@ class RemoteSpeech:
     """Speech-to-text on a server: the local VAD still cuts utterances; only the cut segment is sent.
 
     Sent only while `allowed()` is true (the AI switch): with AI off, speech leaves the machine for nobody.
+    What it hears is marked `remote`: a server, not this machine, decided the words, so a command in
+    them may only turn things off.
     """
+
+    remote = True
 
     def __init__(self, vad, transcribe, allowed):
         self.vad, self._transcribe, self.allowed = vad, transcribe, allowed
@@ -687,6 +759,7 @@ def test_slot(slot_name: str, slot: dict, key: str | None, cloud=None, engine_ch
         else:
             wav = speech_wav(base, model, key, "test", slot.get("voice"), timeout, urlopen)
             detail, name = f"HTTP 200, {len(wav)} bytes of audio", model
+        name = name[:MAX_REPORTED_NAME] if isinstance(name, str) else None
         return {"ok": True, "result": {"model": name, "latency_ms": int((time.time() - t0) * 1000), "detail": detail}}
     except ModelCallError as e:
         return {"ok": False, "error": {"code": _test_code(e.code), "message": e.message[:300]}}

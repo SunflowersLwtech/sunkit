@@ -211,9 +211,9 @@ the HipiMind page):
 `llama-server` elsewhere, a speech server such as Speaches, or a hosted provider with a key
 (`api_key_file`). `cloud` uses HipiMind's models through the HipiMind connector, and `off` turns
 the job off. Nothing goes to any remote model while the AI switch is off; with `stt` or `tts` on
-`openai` or `cloud` that includes speech, so voice commands and spoken reminders then need AI on.
-A base URL must be a plain `http(s)://` address (no credentials, no `#`), and a key stays with the
-address it was typed for. With no `models` section every slot is `engine` and nothing changes. Details, config examples and the recommended downloads with
+`openai` or `cloud` that includes speech, so voice commands and spoken reminders then need AI on,
+and a command heard that way can only turn things off. A base URL must be a plain `http(s)://`
+address (no credentials, no `?` or `#`), and a key stays with the address it was typed for. With no `models` section every slot is `engine` and nothing changes. Details, config examples and the recommended downloads with
 their checksums: [docs/hipimind.md](docs/hipimind.md#4-models).
 
 ```json

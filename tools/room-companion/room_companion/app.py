@@ -22,6 +22,8 @@ from .policy import CATEGORIES, Policy, parse_policy_command
 from .switches import KEYS, LABELS, Switches, SwitchWriteError, describe
 from .video import VideoPipeline
 
+REMOTE_JOB = {"vision": "看画面", "stt": "听写", "tts": "说话"}
+
 DEFAULTS = {
     "data_dir": "/data",
     "listen": "0.0.0.0",
@@ -259,7 +261,19 @@ class App:
 
     def apply_models(self, models: dict, keys: dict | None = None) -> list[str]:
         """A run-time model choice (from the HipiMind page). Returns the slots that changed."""
-        changed = self.models.set(models or {}, keys)
+        return self._models_changed(self.models.set(models or {}, keys))
+
+    def reset_remote_models(self) -> list[str]:
+        """The account that chose the models is gone (its token was refused or replaced): every slot the
+        page moved to a remote server goes back to this device's own config, and the keys are deleted."""
+        return self._models_changed(self.models.reset_remote(), reason="token")
+
+    def bind_token(self, fingerprint: str) -> list[str]:
+        """Called with the device token in use; another token than the one the choices were made under
+        resets them (reset_remote_models)."""
+        return self._models_changed(self.models.bind_token(fingerprint), reason="token")
+
+    def _models_changed(self, changed: list[str], reason: str | None = None) -> list[str]:
         if "vision" in changed:
             self._apply_vision()
         if "stt" in changed and hasattr(self.audio, "_speech_lock"):
@@ -269,8 +283,24 @@ class App:
             self.speaker.tts = None
         if changed:
             self.events.add("models_changed", slots=changed,
-                            sources={k: self.models.slot(k)["source"] for k in changed})
+                            sources={k: self.models.slot(k)["source"] for k in changed},
+                            **({"reason": reason} if reason else {}))
         return changed
+
+    def remote_models_text(self) -> str:
+        """For the local page: which jobs go to another machine right now, and where. Empty when none."""
+        parts = []
+        for name in SLOTS:
+            slot = self.models.slot(name)
+            if slot["source"] == "openai" and slot.get("base_url"):
+                where = slot["base_url"]
+            elif slot["source"] == "cloud":
+                where = "HipiMind 云"
+            else:
+                continue
+            by = "（HipiMind 网页选的）" if self.models.from_page(name) else ""
+            parts.append(f"{REMOTE_JOB[name]} → {where}{by}")
+        return ("注意，这些交给别的机器：" + "；".join(parts)) if parts else ""
 
     def models_state(self) -> dict:
         out = {}
@@ -405,9 +435,9 @@ class App:
         """"zh" or "en": the language reminders are written and spoken in (raises ValueError otherwise)."""
         if lang not in ("zh", "en"):
             raise ValueError("language must be zh or en")
+        self._save_override("language", lang)  # kept first, so a language in use is always one on disk
         self.language = lang
         self.policy.language = lang
-        self._save_override("language", lang)
 
     def set_quiet_hours(self, start: str | None, end: str | None):
         """None/None means no quiet hours."""
@@ -623,6 +653,7 @@ class App:
             "speaker": self.speaker.status() if self.speaker is not None else None,
             "broadcast": self.broadcast_status(),
             "models": self.models_state(),
+            "remote_text": self.remote_models_text(),
             "windows": self.windows_evidence() if evidence and self.evidence is not None else None,
             "interop": self.interop.status() if self.interop is not None else None,
             "feishu": {"configured": getattr(self.notifier, "configured", False),
@@ -750,13 +781,20 @@ class App:
         return {"ok": True, "changes": {k: new for k, (old, new) in diff.items()},
                 "message": self.plain_status(), "summary": self.plain_status()}
 
-    def on_transcript(self, text: str):
+    def on_transcript(self, text: str, remote: bool = False):
+        """One utterance. `remote`: a remote speech-to-text server (openai or cloud) wrote these words, so
+        a command in them may only turn things off — a server we do not control must not be able to
+        switch the camera back on by "hearing" it."""
         if self.speaker is not None and self.speaker.echo():
             return  # our own voice coming back through the mic
         rest = commands.strip_wake(text, self.cfg.get("wake_words", []), self.cfg.get("wake_fuzzy_suffix"))
         # Without the wake word only a reply to a reminder just given counts ("不用", "别再提醒这个");
         # mode changes need the wake word.
         if rest is not None:
+            pc = parse_policy_command(rest)
+            if remote and pc and pc != ("mode", "quiet"):
+                self._refuse_remote(pc[0], " ".join(pc))  # more reminders: an "on", refused
+                return
             reply = self._policy_text(rest, within_s=self.cfg.get("reply_window_s", 180))
         else:
             reply = self.policy.on_reply(text, within_s=self.cfg.get("reply_window_s", 180))
@@ -769,6 +807,13 @@ class App:
         if self.cfg.get("voice_commands", True):
             if rest is not None:
                 r = commands.parse(rest) if rest else {"error": "只听到唤醒词"}
+                if r.get("changes") and remote:
+                    turn_on = {k: v for k, v in r["changes"].items() if v}
+                    if turn_on:
+                        self._refuse_remote("switch", turn_on)
+                    r["changes"] = {k: v for k, v in r["changes"].items() if not v}
+                    if not r["changes"]:
+                        return
                 if r.get("changes"):
                     self.events.add("voice_command", changes=r["changes"])
                     try:
@@ -782,6 +827,9 @@ class App:
                     self.notifier.send("房间AI：听到了唤醒词，但没听懂要开还是关哪一个。")
                 return  # commands are never forwarded to the AI
         self.ai.submit("transcript", {"t": time.time(), "text": text})
+
+    def _refuse_remote(self, what: str, detail):
+        self.events.add("voice_command_refused", what=what, detail=detail, why="remote_stt")
 
 
 def _sherpa_missing() -> list[str]:
