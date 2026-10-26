@@ -1,0 +1,22 @@
+[Unit]
+Description=room-companion (camera, mic, three privacy switches, local AI)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/room-companion/app
+EnvironmentFile=%h/room-companion/secrets.env
+Environment=ROOM_COMPANION_DATA_DIR=%h/room-companion/data
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/room-companion/.venv/bin/python -m room_companion
+Restart=always
+RestartSec=5
+# SIGTERM first so the app releases the camera and mic (and stops the model) itself.
+KillMode=mixed
+TimeoutStopSec=25
+# Everything on the WSL side stays under 3 GB; the model itself runs on the GPU.
+MemoryMax=3G
+MemorySwapMax=0
+Nice=5
+
+[Install]
+WantedBy=default.target

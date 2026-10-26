@@ -1,0 +1,28 @@
+[project]
+name = "room-companion"
+version = "0.1.0"
+description = "A camera + microphone room companion with three hard privacy switches, local speech recognition and a local vision model."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# speech recognition (VAD + SenseVoice) and text-to-speech
+speech = ["sherpa-onnx>=1.13", "numpy"]
+# motion scoring from JPEG frames (Windows/DirectShow capture)
+motion = ["pillow"]
+all = ["sherpa-onnx>=1.13", "numpy", "pillow"]
+
+[project.scripts]
+room-companion = "room_companion.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["room_companion", "room_companion.notifiers"]
+
+[tool.setuptools.package-data]
+room_companion = ["winplay.ps1"]
