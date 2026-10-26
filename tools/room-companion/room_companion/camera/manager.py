@@ -212,7 +212,7 @@ class DumlBle(BleControl):
 
 class CameraManager:
     def __init__(self, cfg: dict, video, events, notify=None, bridge=None, clock=time.time, sleep=time.sleep,
-                 monotonic=time.monotonic):
+                 monotonic=time.monotonic, interop=None):
         self.cfg = cfg
         d = cfg["data_dir"]
         self.choice_path = os.path.join(d, "state", "camera.json")
@@ -224,6 +224,7 @@ class CameraManager:
         self.clock = clock
         self.sleep = sleep
         self.monotonic = monotonic
+        self.interop = interop
         self.host = cfg.get("camera_host") or {}
         self.recover_after_s = float(self.host.get("recover_after_s", 20))
         self.uvc_wait_s = float(self.host.get("uvc_wait_s", 25))
@@ -298,7 +299,7 @@ class CameraManager:
     def bridge(self) -> BleBridge:
         if self._bridge is None:
             self._bridge = BleBridge(python=self.host.get("python"), helper_dir=self.host.get("helper_dir"),
-                                     on_event=self._on_event)
+                                     on_event=self._on_event, interop=self.interop)
         return self._bridge
 
     def start(self):

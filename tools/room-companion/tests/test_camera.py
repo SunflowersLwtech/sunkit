@@ -636,5 +636,88 @@ class CameraIdentityTest(unittest.TestCase):
         self.assertLess(now[0], 90)
 
 
+class CameraWebTest(unittest.TestCase):
+    """The camera routes behind the web server's own checks (Host, Origin, Sec-Fetch-Site, header, JSON)."""
+    from tests.test_pipelines import WebTest as _W
+    setUp, tearDown, req, raw = _W.setUp, _W.tearDown, _W.req, _W.raw
+
+    def use_camera(self):
+        self.bridge = RecordingBridge()
+        d = self.app.cfg["data_dir"]
+        self.app.camera = CameraManager(dict(self.app.cfg), FakeVideo(os.path.join(d, "none.json")), Events(),
+                                        bridge=self.bridge, sleep=lambda s: None)
+        self.assertTrue(self.app.camera.ble_available())
+        self.bridge.kw.clear()
+
+    def test_cross_site_post_cannot_turn_on_the_community_protocol(self):
+        self.use_camera()
+        form = {"Content-Type": "text/plain", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+        code, _ = self.raw("/api/camera", b'{"driver":"dji-duml","allow_unofficial":true,"x":"="}', form)
+        self.assertEqual(code, 403)
+        self.assertEqual((self.app.camera.config["driver"], self.app.camera.config["allow_unofficial"]), ("auto", False))
+        self.assertFalse(os.path.exists(self.app.camera.choice_path))
+
+    def test_cross_site_post_cannot_start_pairing(self):
+        self.use_camera()
+        form = {"Content-Type": "text/plain", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+        self.assertEqual(self.raw("/api/camera/action", b'{"action":"pair","x":"="}', form)[0], 403)
+        self.assertEqual(self.bridge.kw, [], "the Bluetooth helper was called")
+
+    def test_rebinding_cannot_read_the_camera_settings(self):
+        self.use_camera()
+        self.assertEqual(self.req("/api/camera", headers={"Host": "evil.example:8790"})[0], 403)
+        code, body = self.req("/api/camera", headers={"Host": f"127.0.0.1:{self.port}"})
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["status"]["driver"], "auto")
+
+    def test_own_page_can_still_choose_and_act(self):
+        self.use_camera()
+        own = {"X-Room-AI": "1", "Origin": f"http://127.0.0.1:{self.port}"}
+        code, body = self.req("/api/camera", {"driver": "dji-duml", "allow_unofficial": True}, headers=own)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.app.camera.config["driver"], "dji-duml")
+        code, body = self.req("/api/camera/action", {"action": "pair"}, headers=own)
+        self.assertIn("connect", [c for c, _ in self.bridge.kw])
+
+
+class BridgeInteropTest(unittest.TestCase):
+    def test_windows_python_retries_on_another_interop_channel(self):
+        from room_companion.camera.bridge import BleBridge, BridgeError
+        d = tempfile.mkdtemp()
+
+        class Interop:
+            calls = []
+
+            def ensure(self, force=False):
+                self.calls.append(force)
+                return True
+        tries = []
+
+        def popen(cmd, **kw):
+            tries.append(cmd[0])
+            if len(tries) == 1:
+                raise OSError(22, "Invalid argument")  # what a broken channel looks like
+            return __import__("subprocess").Popen([sys.executable, "-u", os.path.join(HERE, "..", "room_companion", "camera", "ble_helper.py"),
+                                                   "--fake", FAKE], stdin=-1, stdout=-1, stderr=-1)
+        conf = os.path.join(d, "c.json")
+        with open(conf, "w") as f:
+            json.dump({}, f)
+        old = os.environ.get("FAKE_DJI_CONF")
+        os.environ["FAKE_DJI_CONF"] = conf
+        try:
+            ip = Interop()
+            b = BleBridge(python="/mnt/c/x/python.exe", helper_dir=os.path.join(d, "mnt", "c", "h"), popen=popen, interop=ip)
+            b._script = lambda: "C:\\h\\ble_helper.py"
+            self.assertEqual(b.start().get("ev"), "ready")
+            self.assertEqual(ip.calls, [False, True])
+            self.assertEqual(len(tries), 2)
+            b.stop()
+        finally:
+            if old is None:
+                os.environ.pop("FAKE_DJI_CONF", None)
+            else:
+                os.environ["FAKE_DJI_CONF"] = old
+
+
 if __name__ == "__main__":
     unittest.main()

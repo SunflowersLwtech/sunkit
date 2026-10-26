@@ -38,13 +38,14 @@ def win_path(wsl_path: str) -> str:
 
 class BleBridge:
     def __init__(self, python: str | None = None, helper_dir: str | None = None, on_event=None,
-                 extra_args=(), popen=subprocess.Popen):
+                 extra_args=(), popen=subprocess.Popen, interop=None):
         self.python = python or sys.executable
         self.windows = self.python.lower().endswith(".exe")
         self.helper_dir = helper_dir
         self.on_event = on_event or (lambda ev: None)
         self.extra_args = list(extra_args)
         self.popen = popen
+        self.interop = interop  # windows.Interop: a WSL channel that can start Windows programs
         self.proc = None
         self.ready = None
         self._ids = 0
@@ -69,6 +70,18 @@ class BleBridge:
     def start(self, timeout: float = 20.0) -> dict:
         if self.proc is not None and self.proc.poll() is None:
             return self.ready or {}
+        if not (self.windows and self.interop is not None):
+            return self._start(timeout)
+        self.interop.ensure()
+        try:
+            return self._start(timeout)
+        except BridgeError:
+            # Windows Python may not start because the WSL interop channel broke: pick another, retry once
+            if not self.interop.ensure(force=True):
+                raise
+            return self._start(timeout)
+
+    def _start(self, timeout: float) -> dict:
         self.ready = None
         ready_q: queue.Queue = queue.Queue()
         cmd = [self.python, "-u", self._script(), *self.extra_args]

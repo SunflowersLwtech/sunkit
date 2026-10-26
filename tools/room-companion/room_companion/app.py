@@ -122,7 +122,8 @@ class App:
                                             on_device_change=self._on_mic_change,
                                             is_echo=lambda a, b: self.speaker is not None and self.speaker.echo(now=b, since=a),
                                             **akw)
-        self.camera = camera or CameraManager(cfg, self.video, self.events, notify=self.notifier.send)
+        self.camera = camera or CameraManager(cfg, self.video, self.events, notify=self.notifier.send,
+                                              interop=self.interop)
         if speaker is None and cfg.get("tts"):
             from .speaker import Speaker
             speaker = Speaker({"language": cfg.get("language", "zh"), **cfg["tts"]}, self.events,
