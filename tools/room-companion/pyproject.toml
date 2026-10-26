@@ -13,9 +13,12 @@ speech = ["sherpa-onnx>=1.13", "numpy"]
 # motion scoring from JPEG frames (Windows/DirectShow capture)
 motion = ["pillow"]
 all = ["sherpa-onnx>=1.13", "numpy", "pillow"]
+# the HipiMind connector (websockets) and scaling live frames (pillow)
+hipimind = ["websockets>=13", "pillow"]
 
 [project.scripts]
 room-companion = "room_companion.__main__:main"
+room-companion-hipimind = "room_companion.hipimind:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -349,7 +349,7 @@ textarea{resize:vertical;min-height:64px;margin:6px 0}
  <button id="b-audio" data-k="audio">声音<b>…</b></button>
  <button id="b-ai" data-k="ai">AI<b>…</b></button>
 </div>
-<div class="card"><div id="summary">读取中…</div><div id="err" class="warn"></div></div>
+<div class="card"><div id="summary">读取中…</div><div id="remote" class="warn"></div><div id="err" class="warn"></div></div>
 <div class="card"><div id="scene">AI 看到的：还不知道</div><div class="muted" id="pinfo"></div></div>
 <div class="card"><img id="live" alt="实时画面"><div id="nolive">视频关着，摄像头没有在用。</div>
  <div class="muted" id="vinfo"></div></div>
@@ -362,7 +362,7 @@ textarea{resize:vertical;min-height:64px;margin:6px 0}
  <div style="margin-top:10px">从哪出声</div><select id="outsel" aria-label="从哪出声"></select>
  <div class="muted" id="outinfo"></div><div id="bc"></div></div>
 <div class="card"><div>最近发生的事（只记摘要，不存画面和录音）</div><ul id="ev"></ul></div>
-<p class="muted">语音口令：先说「房间助手」，再说「关视频」「关声音」「关AI」「隐私模式」（三个全关），或「安静模式」（只发通知不出声）、「平衡模式」、「主动模式」。听到提醒后说「不用」今天不再提这类，说「别再提醒这个」以后都不提。声音关着时听不到口令，要用这里或你配置的消息渠道打开。上面「念出来」框里打的字会在房间里念出来；文字命令「播报：要念的话」也一样。念的时候不用开视频或声音，房间里念的话也不会被当成口令。</p>
+<p class="muted">语音口令：先说「房间助手」，再说「关视频」「关声音」「关AI」「隐私模式」（三个全关），或「安静模式」（只发通知不出声）、「平衡模式」、「主动模式」。听到提醒后说「不用」今天不再提这类，说「别再提醒这个」以后都不提。声音关着时听不到口令，要用这里或你配置的消息渠道打开。上面「念出来」框里打的字会在房间里念出来；文字命令「播报：要念的话」也一样。念的时候不用开视频或声音，房间里念的话也不会被当成口令。听写交给别的机器（自选服务器或 HipiMind 云）时，语音口令只能关、不能开。</p>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -372,7 +372,8 @@ const KIND={switch:"开关",video_on:"摄像头开始用",video_off:"摄像头�
  service_start:"服务启动",state_load:"开关状态读取",scene:"AI 判断场景",reminder:"说了一条提醒",reminder_queued:"有一条提醒在等时机",
  reminder_off:"关掉了一类提醒",model_on:"本地模型启动",model_ready:"本地模型就绪",model_off:"本地模型已停",mic_change:"换了麦克风",
  spoke:"念了一句",summary:"早报",camera_missing_reminder:"提醒点相机",reminder_setting:"提醒设置",
- broadcast:"播报了一句",output_choice:"换了出声设备",interop:"和 Windows 的连接"};
+ broadcast:"播报了一句",output_choice:"换了出声设备",interop:"和 Windows 的连接",
+ models_changed:"换了模型",voice_command_refused:"远端听写的打开口令，没执行"};
 const SCN={laundry:"洗衣服",cooking:"做饭",coding:"写代码",router:"配置路由器",yoga:"瑜伽",sofa_phone:"沙发上玩手机",sleeping:"睡觉",other:"其他",empty:"没人"};
 function fmtEv(e){let t=e.ts.slice(11,16)+" "+(KIND[e.kind]||e.kind);
  if(e.kind==="switch"){t+=" · "+e.source+"："+Object.entries(e.changes).map(([k,v])=>({video:"视频",audio:"声音",ai:"AI"}[k])+(v?"开":"关")).join("、")}
@@ -389,7 +390,7 @@ async function refresh(){
  for(const k of ["video","audio","ai"]){const b=$("b-"+k); b.className=s.switches[k]?"on":"off"; b.querySelector("b").textContent=s.switches[k]?"开":"关"}
  const p=s.policy||{}; $("scene").textContent="AI 看到的："+(s.switches.ai?(p.scene_text||"还不知道")+(p.scene_minutes!=null?"（约 "+p.scene_minutes+" 分钟）":"")+(p.note?" · "+p.note:""):"AI 关着，不看画面");
  $("pinfo").textContent=s.switches.ai?("提醒：今天 "+p.delivered_today+"/"+p.max_per_day+" 条 · "+p.mode_text+(p.pending&&p.pending.length?" · 等时机："+p.pending.join("、")+(p.blocked_now?"（"+p.blocked_now+"）":""):"")):"";
- $("summary").textContent=s.summary; $("err").textContent=s.state_load_error&&s.state_load_error!=="no state file yet"?("开关状态文件有问题，已按全关处理："+s.state_load_error):"";
+ $("summary").textContent=s.summary; $("remote").textContent=s.remote_text||""; $("err").textContent=s.state_load_error&&s.state_load_error!=="no state file yet"?("开关状态文件有问题，已按全关处理："+s.state_load_error):"";
  const v=s.video; const want=s.switches.video&&v.state==="running";
  if(want&&!liveOn){$("live").src="/stream.mjpg?t="+Date.now();$("live").style.display="block";$("nolive").style.display="none";liveOn=true}
  if(!want&&liveOn){$("live").removeAttribute("src");$("live").style.display="none";$("nolive").style.display="block";liveOn=false}

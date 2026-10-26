@@ -1,0 +1,16 @@
+{
+  "server": "https://api.hipimind.com",
+  "token_file": "/home/you/.config/room-companion/hipimind.token",
+  "local_api": "http://127.0.0.1:8790",
+  "live": {
+    "max_fps": 2,
+    "max_width": 960,
+    "jpeg_quality": 70
+  },
+  "events": {
+    "reminders": true,
+    "switches": true,
+    "scene": true,
+    "notices": true
+  }
+}

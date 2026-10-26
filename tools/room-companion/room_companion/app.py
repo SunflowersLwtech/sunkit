@@ -14,10 +14,15 @@ from . import commands
 from .ai import AIGate
 from .audio import AudioPipeline
 from .events import EventLog
+from .models import (SLOTS, TEST_JPEG, CloudVision, ModelCallError, ModelSettings, OpenAIVision, RemoteSpeech,
+                     RemoteTTS, chat_image, clean_base_url, cloud_synth, cloud_transcriber, speech_wav, test_slot,
+                     transcribe_wav)
 from .notifiers import make_notifier
 from .policy import CATEGORIES, Policy, parse_policy_command
 from .switches import KEYS, LABELS, Switches, SwitchWriteError, describe
 from .video import VideoPipeline
+
+REMOTE_JOB = {"vision": "看画面", "stt": "听写", "tts": "说话"}
 
 DEFAULTS = {
     "data_dir": "/data",
@@ -86,6 +91,13 @@ class App:
             self.model_server = model_server or LlamaServer(cfg["llama"], self.events)
             ai_client = LocalVision(self.model_server, cfg["llama"]["key_file"])
         self.ai = AIGate(self.switches, ai_client)
+        # Which model does each job (models.py). With no "models" config and nothing chosen at run time,
+        # every slot is "engine": exactly the clients built above.
+        self.models = ModelSettings(cfg, os.path.join(d, "state"))
+        self.cloud = None  # set by the HipiMind connector: cloud(kind, payload) -> result dict
+        self.connector = None
+        self._engine_server, self._engine_ai = self.model_server, ai_client
+        self._apply_vision()
         self.evidence = evidence
         self.interop = None
         vkw, akw = {}, {}
@@ -100,6 +112,7 @@ class App:
             akw = dict(find_device=lambda: ds.find("audio", [w for w in cfg["audio_prefer"]
                                                              if not self._muted(w) and not self._hidden(w)]),
                        build_cmd=ds.audio_cmd)
+        akw["speech_factory"] = self._make_speech
         self.video = video or VideoPipeline(self.switches, self.events, cfg, **vkw)
         self.audio = audio or AudioPipeline(self.switches, self.events, cfg, on_transcript=self.on_transcript,
                                             on_device_change=self._on_mic_change,
@@ -108,10 +121,16 @@ class App:
         if speaker is None and cfg.get("tts"):
             from .speaker import Speaker
             speaker = Speaker({"language": cfg.get("language", "zh"), **cfg["tts"]}, self.events,
-                              state_path=os.path.join(d, "state", "output.json"))
+                              tts_factory=self._make_tts, state_path=os.path.join(d, "state", "output.json"))
         self.speaker = speaker
         self.policy = Policy(os.path.join(d, "state", "policy.json"), cfg.get("policy", {}), self._deliver,
                              self.events)
+        self._overrides_path = os.path.join(d, "state", "overrides.json")
+        # The language reminders are written and spoken in: the config's "language" (default Chinese),
+        # or the one chosen on the HipiMind page (kept in state/overrides.json).
+        self.language = cfg.get("language") if cfg.get("language") in ("zh", "en") else "zh"
+        self._load_overrides()
+        self.policy.language = self.language
         self.web_token = env("WEB_TOKEN") or None
         self.started = time.time()
         self.last_obs_at = 0.0
@@ -145,13 +164,299 @@ class App:
         self.audio.start()
         threading.Thread(target=self._observe_loop, name="observer", daemon=True).start()
         self.events.add("service_start", switches={k: self.switches.get(k) for k in KEYS})
+        if self.cfg.get("hipimind"):
+            from .hipimind import start_in_process
+            self.connector = start_in_process(self, self.cfg["hipimind"])
+        else:
+            self.unbind_token()  # the HipiMind link was taken out: its page's choices go with it
 
     def shutdown(self):
         self._stop.set()
+        if self.connector is not None:
+            self.connector.stop()
         self.video.shutdown()
         self.audio.shutdown()
         if self.model_server is not None:
             self.model_server.stop()
+        if self._engine_server is not None and self._engine_server is not self.model_server:
+            self._engine_server.stop()
+
+    # ---- models (models.py): one source per job ----
+    def _cloud_call(self, request_type: str, **payload) -> dict:
+        cloud = self.cloud
+        if cloud is None:
+            return {"ok": False, "error": {"code": "unavailable", "message": "not connected to HipiMind"}}
+        return cloud(request_type, payload)
+
+    def _park_engine(self):
+        if self._engine_server is not None:
+            self._engine_server.ensure(False)
+        self.model_server = None
+
+    def _apply_vision(self):
+        slot = self.models.slot("vision")
+        src = slot["source"]
+        if src == "engine":
+            self.model_server, self.ai.client = self._engine_server, self._engine_ai
+        elif src == "openai":
+            self._park_engine()
+            self.ai.client = OpenAIVision(slot, lambda: self.models.key("vision")) if slot.get("base_url") else None
+        elif src == "cloud":
+            self._park_engine()
+            self.ai.client = CloudVision(self._cloud_call)
+        else:
+            self._park_engine()
+            self.ai.client = None
+
+    def _vad_only(self):
+        from .audio import EnergyVAD, SherpaSpeech
+        try:
+            return SherpaSpeech(None, self.cfg["vad_model"], self.cfg.get("asr_threads", 2))
+        except Exception:
+            return EnergyVAD()
+
+    def _make_speech(self):
+        """The audio pipeline's speech object for the current speech-to-text slot."""
+        slot = self.models.slot("stt")
+        src = slot["source"]
+        if src == "engine":
+            return self.audio._default_speech()
+        vad = self._vad_only()
+        if src == "off":
+            return vad
+        if src == "openai":
+            if not slot.get("base_url"):
+                return vad  # no usable server address: hear nothing rather than send anywhere
+            def transcribe(wav, slot=slot):
+                return transcribe_wav(slot["base_url"], slot.get("model"), self.models.key("stt"), wav, 30,
+                                      language=slot.get("language"))
+        else:
+            transcribe = cloud_transcriber(self._cloud_call)
+        # Speech leaves the machine only while the AI switch is on.
+        return RemoteSpeech(vad, transcribe, allowed=lambda: self.switches.get("ai"))
+
+    def _make_tts(self):
+        slot = self.models.slot("tts")
+        src = slot["source"]
+        # Like remote speech-to-text: text leaves for a remote speech model only while the AI switch is on.
+        ai_on = lambda: bool(self.switches.get("ai"))  # noqa: E731
+        if src == "openai":
+            if not slot.get("base_url"):
+                raise ModelCallError("connect_failed", slot.get("base_url_error") or "no server address for speech")
+            return RemoteTTS(lambda text, slot=slot: speech_wav(slot["base_url"], slot.get("model"),
+                                                                self.models.key("tts"), text, slot.get("voice"), 30),
+                             allowed=ai_on)
+        if src == "cloud":
+            return RemoteTTS(cloud_synth(self._cloud_call), allowed=ai_on)
+        if src == "off":
+            raise ModelCallError("unsupported", "speech is off")
+        return self.speaker._default_tts()
+
+    def _can_speak(self) -> bool:
+        if self.speaker is None:
+            return False
+        src = self.models.slot("tts")["source"]
+        if src == "off":
+            return False
+        # a remote speech model hears nothing while the AI switch is off; the built-in engine may still speak
+        return src == "engine" or bool(self.switches.get("ai"))
+
+    def apply_models(self, models: dict, keys: dict | None = None) -> list[str]:
+        """A run-time model choice (from the HipiMind page). Returns the slots that changed."""
+        return self._models_changed(self.models.set(models or {}, keys))
+
+    def reset_remote_models(self) -> list[str]:
+        """The account that chose the models is gone (its token was refused or replaced): every slot the
+        page moved to a remote server goes back to this device's own config, and the keys are deleted."""
+        return self._models_changed(self.models.reset_remote(), reason="token")
+
+    def bind_token(self, fingerprint: str) -> list[str]:
+        """Called with the device token in use; another token than the one the choices were made under
+        resets them (reset_remote_models)."""
+        return self._models_changed(self.models.bind_token(fingerprint), reason="token")
+
+    def unbind_token(self) -> list[str]:
+        """There is no device token (no hipimind section, or the token file is gone): the remote choices
+        the page made under the last one go back to this device's own config."""
+        return self._models_changed(self.models.unbind_token(), reason="token")
+
+    def _models_changed(self, changed: list[str], reason: str | None = None) -> list[str]:
+        if "vision" in changed:
+            self._apply_vision()
+        if "stt" in changed and hasattr(self.audio, "_speech_lock"):
+            with self.audio._speech_lock:
+                self.audio.speech = None  # the next utterance builds the new one
+        if "tts" in changed and self.speaker is not None:
+            self.speaker.tts = None
+        if changed:
+            self.events.add("models_changed", slots=changed,
+                            sources={k: self.models.slot(k)["source"] for k in changed},
+                            **({"reason": reason} if reason else {}))
+        return changed
+
+    def remote_models_text(self) -> str:
+        """For the local page: which jobs go to another machine right now, and where. Empty when none."""
+        parts = []
+        for name in SLOTS:
+            slot = self.models.slot(name)
+            if slot["source"] == "openai" and slot.get("base_url"):
+                where = slot["base_url"]
+            elif slot["source"] == "cloud":
+                where = "HipiMind 云"
+            else:
+                continue
+            by = "（HipiMind 网页选的）" if self.models.from_page(name) else ""
+            parts.append(f"{REMOTE_JOB[name]} → {where}{by}")
+        return ("注意，这些交给别的机器：" + "；".join(parts)) if parts else ""
+
+    def models_state(self) -> dict:
+        out = {}
+        for name in SLOTS:
+            slot = self.models.slot(name)
+            st = {"source": slot["source"]}
+            if slot["source"] == "openai":
+                st["base_url"] = slot.get("base_url")
+                if slot.get("model"):
+                    st["name"] = slot["model"]
+                st["has_key"] = self.models.has_key(name)
+            st["state"] = self._slot_state(name, slot)
+            if slot["source"] == "engine":
+                n = self._engine_name(name)
+                if n:
+                    st["name"] = n
+            out[name] = st
+        return out
+
+    def _slot_state(self, name, slot) -> str:
+        src = slot["source"]
+        if src == "off":
+            return "off"
+        if src == "openai" and not slot.get("base_url"):
+            return "error"
+        if name == "vision":
+            if src == "engine":
+                if self._engine_server is not None:
+                    return {"ready": "ready", "starting": "starting", "error": "error"}.get(self._engine_server.state, "off")
+                return "ready" if self._engine_ai is not None else "error"
+            return "error" if getattr(self.ai.client, "ok", None) is False else "ready"
+        if name == "stt":
+            sp = getattr(self.audio, "speech", None)
+            if src == "engine":
+                st = (self.audio.status() or {}).get("asr") if hasattr(self.audio, "status") else None
+                return "ready" if st == "ready" else ("error" if isinstance(st, str) and "unavailable" in st else "off")
+            return "error" if getattr(sp, "last_error", None) and getattr(sp, "errors", 0) else "ready"
+        if self.speaker is None:
+            return "off"
+        return "error" if self.speaker.error else ("ready" if self.speaker.tts is not None or src != "engine" else "off")
+
+    def _engine_name(self, name):
+        if name == "vision" and self.cfg.get("llama"):
+            base = str(self.cfg["llama"].get("model", "")).replace("\\", "/").split("/")[-1]
+            return base[:-5] if base.endswith(".gguf") else base or None
+        if name == "stt":
+            return "SenseVoice-Small" if self.cfg.get("asr_dir") else None
+        if name == "tts" and self.cfg.get("tts"):
+            return str(self.cfg["tts"].get("model_dir", "")).rstrip("/").split("/")[-1] or None
+        return None
+
+    def _engine_check(self, name) -> dict:
+        """The built-in engine's side of "Test connection": a real call when it is running, else its files."""
+        if name == "vision":
+            srv = self._engine_server
+            if srv is None:
+                if self._engine_ai is not None:
+                    return {"model": None, "detail": "built-in vision client present"}
+                raise ModelCallError("engine_unavailable", "no built-in vision engine is configured (llama)")
+            if srv.ready():
+                key = None
+                try:
+                    with open(self.cfg["llama"]["key_file"], "r", encoding="utf-8") as f:
+                        key = f.read().strip()
+                except OSError:
+                    pass
+                chat_image(srv.base + "/v1", None, key, TEST_JPEG, "Reply with OK", 15)
+                return {"model": self._engine_name("vision"), "detail": "HTTP 200 from the running engine"}
+            missing = [k for k in ("exe", "key_file") if not os.path.exists(str(self.cfg["llama"].get(k, "")))]
+            if missing:
+                raise ModelCallError("engine_unavailable", "engine files missing: " + ", ".join(missing))
+            return {"model": self._engine_name("vision"),
+                    "detail": "engine files present; it starts when AI and video are both on"}
+        if name == "stt":
+            sp = getattr(self.audio, "speech", None)
+            if getattr(sp, "rec", None) is not None:
+                sp.transcribe(sp.np.zeros(16000, dtype=sp.np.float32))
+                return {"model": "SenseVoice-Small", "detail": "transcribed 1 s of silence"}
+            need = [self.cfg.get("vad_model", "")]
+            if self.cfg.get("asr_dir"):
+                need += [os.path.join(self.cfg["asr_dir"], "model.int8.onnx"), os.path.join(self.cfg["asr_dir"], "tokens.txt")]
+            missing = [os.path.basename(p) or p for p in need if not os.path.exists(str(p))] + _sherpa_missing()
+            if missing:
+                raise ModelCallError("engine_unavailable", "engine files missing: " + ", ".join(missing))
+            return {"model": "SenseVoice-Small", "detail": "engine files present"}
+        if self.speaker is None:
+            raise ModelCallError("engine_unavailable", "no speaker is configured (tts)")
+        d = self.cfg["tts"].get("model_dir", "")
+        missing = [f for f in ("model.onnx", "tokens.txt") if not os.path.exists(os.path.join(d, f))] + _sherpa_missing()
+        if missing:
+            raise ModelCallError("engine_unavailable", "engine files missing: " + ", ".join(missing))
+        return {"model": self._engine_name("tts"), "detail": "engine files present"}
+
+    def test_model(self, name: str, slot: dict, key: str | None = None) -> dict:
+        """ "Test connection" for one slot with exactly this setting; nothing is saved."""
+        if name not in SLOTS:
+            return {"ok": False, "error": {"code": "bad_request", "message": "unknown slot"}}
+        if key is None:
+            base = clean_base_url((slot or {}).get("base_url"))
+            if base:
+                key = self.models.key(name, base_url=base)  # only a key that was entered for this very server
+        return test_slot(name, slot, key, cloud=self._cloud_call, engine_check=self._engine_check)
+
+    # ---- reminder settings changed at run time ----
+    def _load_overrides(self):
+        try:
+            with open(self._overrides_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return
+        qh = d.get("quiet_hours") if isinstance(d, dict) else None
+        if isinstance(qh, list) and len(qh) == 2:
+            self.policy.cfg["quiet_hours"] = qh
+        if isinstance(d, dict) and d.get("language") in ("zh", "en"):
+            self.language = d["language"]
+
+    def _save_override(self, key, value):
+        try:
+            with open(self._overrides_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            d = d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            d = {}
+        d[key] = value
+        os.makedirs(os.path.dirname(self._overrides_path), exist_ok=True)
+        tmp = self._overrides_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+        os.replace(tmp, self._overrides_path)
+
+    def set_language(self, lang: str):
+        """"zh" or "en": the language reminders are written and spoken in (raises ValueError otherwise)."""
+        if lang not in ("zh", "en"):
+            raise ValueError("language must be zh or en")
+        self._save_override("language", lang)  # kept first, so a language in use is always one on disk
+        self.language = lang
+        self.policy.language = lang
+
+    def set_quiet_hours(self, start: str | None, end: str | None):
+        """None/None means no quiet hours."""
+        from .policy import _hm
+        qh = [start, end] if start and end else ["00:00", "00:00"]
+        _hm(qh[0]), _hm(qh[1])  # raises ValueError on a bad time
+        self.policy.cfg["quiet_hours"] = qh
+        self._save_override("quiet_hours", qh)
+
+    def quiet_hours(self):
+        qh = self.policy.cfg.get("quiet_hours", ["23:00", "08:00"])
+        return None if qh[0] == qh[1] else {"start": qh[0], "end": qh[1]}
 
     # ---- looking (AI) ----
     def _hidden(self, word: str) -> bool:
@@ -243,7 +548,7 @@ class App:
             self._tap_reminded = False
 
     def _deliver(self, text: str, category: str, speak: bool):
-        if speak and self.speaker is not None:
+        if speak and self._can_speak():
             self.speaker.say(text)
         head = "房间AI 早报：" if category == "早报" else "房间AI 提醒："
         tail = "" if category == "早报" else "\n（回「不用」今天不再提这类；回「别再提醒这个」以后都不提）"
@@ -325,13 +630,20 @@ class App:
             st = self.model_server.state
             parts.append("AI 开（本地模型" + {"ready": "在看", "starting": "正在启动", "error": "出错了",
                                                "off": "待命：视频开着才会看"}.get(st, st) + "）")
+        elif self.models.slot("vision")["source"] == "openai":
+            parts.append("AI 开（自选模型）")
+        elif self.models.slot("vision")["source"] == "cloud":
+            parts.append("AI 开（HipiMind 云模型）")
         else:
             parts.append("AI 开")
         if self.speaker is not None:
             parts.append(self.speaker.describe())
         return "；".join(parts)
 
-    def status(self) -> dict:
+    def status(self, evidence: bool = True) -> dict:
+        """Everything the local page shows. `evidence=False` skips the Windows evidence (process lists,
+        camera/microphone usage), which starts helper processes: the HipiMind connector polls every
+        second and needs none of it."""
         snap = self.switches.snapshot()
         return {
             "switches": {k: snap[k] for k in KEYS},
@@ -347,7 +659,9 @@ class App:
             "policy": self.policy.status(),
             "speaker": self.speaker.status() if self.speaker is not None else None,
             "broadcast": self.broadcast_status(),
-            "windows": self.windows_evidence() if self.evidence is not None else None,
+            "models": self.models_state(),
+            "remote_text": self.remote_models_text(),
+            "windows": self.windows_evidence() if evidence and self.evidence is not None else None,
             "interop": self.interop.status() if self.interop is not None else None,
             "feishu": {"configured": getattr(self.notifier, "configured", False),
                        "sent": getattr(self.notifier, "sent", 0),
@@ -474,25 +788,39 @@ class App:
         return {"ok": True, "changes": {k: new for k, (old, new) in diff.items()},
                 "message": self.plain_status(), "summary": self.plain_status()}
 
-    def on_transcript(self, text: str):
+    def on_transcript(self, text: str, remote: bool = False):
+        """One utterance. `remote`: a remote speech-to-text server (openai or cloud) wrote these words, so
+        a command in them may only turn things off — a server we do not control must not be able to
+        switch the camera back on by "hearing" it."""
         if self.speaker is not None and self.speaker.echo():
             return  # our own voice coming back through the mic
         rest = commands.strip_wake(text, self.cfg.get("wake_words", []), self.cfg.get("wake_fuzzy_suffix"))
         # Without the wake word only a reply to a reminder just given counts ("不用", "别再提醒这个");
         # mode changes need the wake word.
         if rest is not None:
+            pc = parse_policy_command(rest)
+            if remote and pc and pc != ("mode", "quiet"):
+                self._refuse_remote(pc[0], " ".join(pc))  # more reminders: an "on", refused
+                return
             reply = self._policy_text(rest, within_s=self.cfg.get("reply_window_s", 180))
         else:
             reply = self.policy.on_reply(text, within_s=self.cfg.get("reply_window_s", 180))
         if reply:
             self.events.add("reminder_setting", source="语音")
             self.notifier.send("房间AI：" + reply)
-            if self.speaker is not None and self.policy.state["mode"] != "quiet":
+            if self._can_speak() and self.policy.state["mode"] != "quiet":
                 self.speaker.say(reply)
             return
         if self.cfg.get("voice_commands", True):
             if rest is not None:
                 r = commands.parse(rest) if rest else {"error": "只听到唤醒词"}
+                if r.get("changes") and remote:
+                    turn_on = {k: v for k, v in r["changes"].items() if v}
+                    if turn_on:
+                        self._refuse_remote("switch", turn_on)
+                    r["changes"] = {k: v for k, v in r["changes"].items() if not v}
+                    if not r["changes"]:
+                        return
                 if r.get("changes"):
                     self.events.add("voice_command", changes=r["changes"])
                     try:
@@ -506,6 +834,17 @@ class App:
                     self.notifier.send("房间AI：听到了唤醒词，但没听懂要开还是关哪一个。")
                 return  # commands are never forwarded to the AI
         self.ai.submit("transcript", {"t": time.time(), "text": text})
+
+    def _refuse_remote(self, what: str, detail):
+        self.events.add("voice_command_refused", what=what, detail=detail, why="remote_stt")
+
+
+def _sherpa_missing() -> list[str]:
+    try:
+        import sherpa_onnx  # noqa: F401
+    except ImportError:
+        return ["sherpa-onnx (pip)"]
+    return []
 
 
 def _nvidia_smi():
