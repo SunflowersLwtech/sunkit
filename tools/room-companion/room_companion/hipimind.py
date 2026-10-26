@@ -91,6 +91,7 @@ TESTS_PER_MINUTE = 10
 #: An output that has no short name (a configured label, or the built-in one for the PC's own speakers) is
 #: reported as this word: output names are hardware names, and often carry the owner's name.
 GENERIC_OUTPUT = {"zh": "音箱", "en": "speaker"}
+ANNOUNCE_ERROR_CODES = ("no_output", "ai_off", "tts_failed", "playback_failed", "no_result")
 ANNOUNCE_REFUSALS = {
     "empty": "nothing to read out",
     "too_long": "more than 300 characters",
@@ -107,6 +108,8 @@ def announce_error_code(error) -> str | None:
     if not error:
         return None
     text = str(error)
+    if text in ANNOUNCE_ERROR_CODES:  # the speaker already reports a code
+        return text
     if "没有能出声" in text or "no output" in text.lower():
         return "no_output"
     if "AI is off" in text:
@@ -118,6 +121,8 @@ def announce_error_code(error) -> str | None:
     if text.startswith("playback failed") or "[Errno" in text:
         return "playback_failed"
     return "tts_failed"
+
+
 NOTICE_TEXT = {
     "en": {"camera_missing_reminder": "Video is on but the camera has been missing for a few minutes",
            "gpu_too_hot": "The local model is paused for 30 minutes to cool down"},
