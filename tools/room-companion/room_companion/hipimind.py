@@ -438,12 +438,22 @@ class AppDevice:
         return hasattr(self.app, "broadcast")
 
     def announce(self, text: str, source: str, req: str, on_done) -> dict:
-        models = getattr(self.app, "models", None)
-        if (models is not None and models.slot("tts")["source"] in ("openai", "cloud")
-                and not self.app.switches.get("ai")):
+        if self._remote_voice_blocked():
             # a remote voice is a remote model: nothing goes to one while AI is off
             return {"ok": False, "code": "ai_off", "message": "the voice is a remote model and AI is off"}
-        return self.app.broadcast(text, source, request_id=req, on_done=on_done)
+
+        def done(r: dict):
+            # AI switched off after the ack: the speaker reports a voice failure, the reason is AI off
+            if not r.get("ok") and r.get("error") == "tts_failed" and self._remote_voice_blocked():
+                r = {**r, "error": "ai_off"}
+            on_done(r)
+
+        return self.app.broadcast(text, source, request_id=req, on_done=done)
+
+    def _remote_voice_blocked(self) -> bool:
+        models = getattr(self.app, "models", None)
+        return (models is not None and models.slot("tts")["source"] in ("openai", "cloud")
+                and not self.app.switches.get("ai"))
 
     def announce_labels(self) -> set[str]:
         from .speaker import DEFAULT_LABELS

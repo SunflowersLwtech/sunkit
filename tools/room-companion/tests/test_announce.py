@@ -141,6 +141,23 @@ class AnnounceInTheApp(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((ack["ok"], ack["error"]["code"]), (False, "ai_off"), name)
         self.assertEqual(self.tts.texts, [])
 
+    async def test_ai_switched_off_after_the_ack_is_reported_as_ai_off(self):
+        self.app.set_switches({"ai": True}, "test")
+        self.app.apply_models({"tts": {"source": "cloud"}})
+        app = self.app
+
+        class OffMidway:
+            def generate(self, text, sid=0, speed=1.0):
+                app.set_switches({"ai": False}, "test")  # the owner turns AI off while it is queued
+                raise RuntimeError("AI is off: nothing goes to a remote speech model")
+
+        self.sp.tts = OffMidway()
+        self.sp.tts_factory = lambda: OffMidway()
+        await self.hub.socket.send(json.dumps({"type": "announce", "req": "m-1", "text": "开饭了"}))
+        got = await expect(self.hub, ack=is_type("ack", "m-1"), done=is_type("announce_result", "m-1"))
+        self.assertTrue(got["ack"]["ok"])
+        self.assertEqual((got["done"]["ok"], got["done"]["error"]), (False, "ai_off"))
+
     async def test_a_voice_that_cannot_be_made_is_tts_failed_without_its_host(self):
         from room_companion.models import ModelCallError
 

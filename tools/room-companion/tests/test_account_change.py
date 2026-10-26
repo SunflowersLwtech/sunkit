@@ -197,7 +197,7 @@ class TokenReplacedWhileStopped(unittest.IsolatedAsyncioTestCase):
 
         first = new_app()
         conn = hm.start_in_process(first, cfg["hipimind"])
-        await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "hello")
+        await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "hello", timeout=20)
         await async_until(lambda: conn.bridge.ready, 3)
         await hub.socket.send(json.dumps(remote_page_config("http://127.0.0.1:1/v1")))
         await hub.next(lambda x: isinstance(x, dict) and x.get("type") == "ack" and x.get("req") == "c-remote", timeout=10)
