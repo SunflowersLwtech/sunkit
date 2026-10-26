@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import tempfile
 import time
 import unittest
@@ -276,17 +277,52 @@ class StatusWordsTest(unittest.TestCase):
 
 class InteropTest(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
+        # real unix sockets, like WSL's (owned by this user here, so the tests pass owner_uid=os.getuid())
+        self.dir = tempfile.mkdtemp(dir="/tmp")
+        self.socks = []
         for i, n in enumerate(("1_interop", "2_interop", "1190_interop")):
             path = os.path.join(self.dir, n)
-            open(path, "w").close()
+            s = socket.socket(socket.AF_UNIX)
+            s.bind(path)
+            self.socks.append(s)
             os.utime(path, (1000 + i, 1000 + i))
         self.good = os.path.join(self.dir, "1190_interop")
+
+    def tearDown(self):
+        for s in self.socks:
+            s.close()
+
+    def test_only_sockets_of_the_expected_owner_are_tried(self):
+        open(os.path.join(self.dir, "9_interop"), "w").close()  # a plain file with a socket's name
+        env = {}
+        tried = []
+
+        def run(args, env=None, **kw):
+            tried.append(env.get("WSL_INTEROP"))
+            return subprocess.CompletedProcess(args, 1, b"", f"{args[0]}: Invalid argument\n".encode())
+        Interop(run=run, sock_dir=self.dir, environ=env, owner_uid=os.getuid()).ensure()
+        self.assertNotIn(os.path.join(self.dir, "9_interop"), tried)
+        self.assertIn(self.good, tried)
+        tried.clear()
+        Interop(run=run, sock_dir=self.dir, environ=env, owner_uid=os.getuid() + 1).ensure()
+        self.assertEqual(tried, [None], "sockets of another owner are not tried")
+
+    def test_evidence_is_unknown_when_windows_cannot_be_asked(self):
+        env = {}
+        win = FakeWindows(env, "/nowhere")
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, owner_uid=os.getuid(), min_retry=0)
+        ev = Evidence(run=win.run, interop=io)
+        self.assertIsNone(ev.pids("ffmpeg.exe"), "a failed look is not 'nothing running'")
+        self.assertIsNone(ev.usage("webcam"))
+        self.assertIsNone(ev.in_use_by_others("webcam"))
+        win.good = self.good
+        ev._cache.clear()
+        self.assertEqual(ev.pids("llama-server.exe"), [], "Windows answered: none running")
 
     def test_broken_default_moves_to_a_working_socket(self):
         env = {}
         win = FakeWindows(env, self.good)
-        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, owner_uid=os.getuid())
         self.assertTrue(io.ensure(now=100))
         self.assertEqual(env["WSL_INTEROP"], self.good)
         self.assertEqual(io.status(), {"ok": True, "socket": self.good, "repairs": 1})
@@ -297,7 +333,7 @@ class InteropTest(unittest.TestCase):
     def test_working_default_is_left_alone(self):
         env = {}
         win = FakeWindows(env, self.good, default_works=True)
-        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, owner_uid=os.getuid())
         self.assertTrue(io.ensure(now=100))
         self.assertNotIn("WSL_INTEROP", env)
         self.assertEqual(win.calls, [("cmd.exe", None)])
@@ -306,7 +342,7 @@ class InteropTest(unittest.TestCase):
     def test_nothing_works(self):
         env = {"WSL_INTEROP": "/gone"}
         win = FakeWindows(env, "/nowhere")
-        io = Interop(run=win.run, sock_dir=self.dir, environ=env)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, owner_uid=os.getuid())
         self.assertFalse(io.ensure(now=100))
         self.assertEqual(env, {"WSL_INTEROP": "/gone"})
         n = len(win.calls)
@@ -319,7 +355,7 @@ class InteropTest(unittest.TestCase):
     def test_device_list_and_evidence_recover_after_the_channel_breaks(self):
         env = {}
         win = FakeWindows(env, self.good, default_works=True)
-        io = Interop(run=win.run, sock_dir=self.dir, environ=env, min_retry=0)
+        io = Interop(run=win.run, sock_dir=self.dir, environ=env, min_retry=0, owner_uid=os.getuid())
         self.assertTrue(io.ensure())
         win.default_works = False  # WSL restarted: the default channel now fails
         ds = Dshow("/mnt/c/ffmpeg/bin/ffmpeg.exe", run=win.run, interop=io)
@@ -395,6 +431,15 @@ class Pipe:
 
 
 class ObserverTest(unittest.TestCase):
+    def set_and_confirm(self, app, changes):
+        """Flip switches and wait for the confirmation (sent from another thread) before counting messages."""
+        before = len(self.notifier.messages)
+        app.switches.set(changes, "t")
+        end = time.time() + 15
+        while len(self.notifier.messages) == before and time.time() < end:
+            time.sleep(0.02)
+        self.assertEqual(len(self.notifier.messages), before + 1, "one confirmation per change")
+
     def make(self, scene="empty"):
         cfg = dict(DEFAULTS, data_dir=tempfile.mkdtemp())
         self.client, self.server, self.notifier = FakeClient(scene), FakeServer(), FakeNotifier()
@@ -419,7 +464,7 @@ class ObserverTest(unittest.TestCase):
 
     def test_empty_room_half_hour_no_push(self):
         app = self.make("empty")
-        app.switches.set({"video": True, "ai": True}, "t")
+        self.set_and_confirm(app, {"video": True, "ai": True})
         sent_before = len(self.notifier.messages)
         for i in range(0, 31 * 60, 5):
             app.observe_once(now=at(15) + i)
@@ -446,7 +491,7 @@ class ObserverTest(unittest.TestCase):
     def test_camera_tap_reminder_once(self):
         app = self.make()
         app.video.state, app.video.waiting_since = "waiting_device", at(15)
-        app.switches.set({"video": True}, "t")
+        self.set_and_confirm(app, {"video": True})
         n = len(self.notifier.messages)
         app.observe_once(now=at(15, 1))
         self.assertEqual(len(self.notifier.messages), n)

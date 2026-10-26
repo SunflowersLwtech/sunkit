@@ -108,7 +108,10 @@ public static class WinPlay {
       var rid = typeof(IAudioRenderClient).GUID; object ro; Ok(ac.GetService(ref rid, out ro), "GetService"); var rc = (IAudioRenderClient)ro;
       var meter = Act<IAudioMeterInformation>(d);
       int pos = 0; bool started = false;
+      // our own deadline, well inside the caller's timeout, so the finally below always puts the volume back
+      var stop = DateTime.UtcNow.AddSeconds((double)total / rate + 5);
       while (pos < total) {
+        if (DateTime.UtcNow > stop) throw new Exception("output stopped taking audio");
         uint pad; Ok(ac.GetCurrentPadding(out pad), "GetCurrentPadding");
         int k = Math.Min((int)(buf - pad), total - pos);
         if (k > 0) { IntPtr dst; Ok(rc.GetBuffer((uint)k, out dst), "GetBuffer"); Marshal.Copy(all, dataOff + pos * frameBytes, dst, k * frameBytes); Ok(rc.ReleaseBuffer((uint)k, 0), "ReleaseBuffer"); pos += k; }

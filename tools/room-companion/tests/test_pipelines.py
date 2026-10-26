@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 import socket
 import threading
@@ -269,7 +270,7 @@ class WebTest(unittest.TestCase):
         self.assertTrue(self.app.switches.get("video"))
         # a remote caller cannot pretend to be Feishu
         self.req("/api/switch", {"video": False, "source": "飞书"}, headers={**ok, "X-Room-AI": "1"})
-        self.assertTrue(self.app.switches.snapshot()["source"].startswith("网页"))
+        self.assertEqual(self.app.switches.snapshot()["source"], "网页（另一台设备）")  # no address: it goes into messages
         # unless its address is configured as that service
         self.app.cfg["source_names"] = {"127.0.0.1": "手机助手"}
         self.srv.RequestHandlerClass = make_handler(self.app)
@@ -374,6 +375,15 @@ class WebTest(unittest.TestCase):
         self.assertEqual(json.loads(body)["code"], "no_output")
         self.assertIn("没有配置出声", json.loads(body)["message"])
         self.assertEqual(self.req("/api/broadcast/abc")[0], 404)
+        # the id comes back URL-encoded from clients that quote it
+        from tests.test_speaker import REALTEK, make_speaker
+        self.app.speaker, _, _ = make_speaker([REALTEK])
+        self.app.speaker.check_output()
+        code, body = self.req("/api/broadcast", {"text": "hi", "id": "a/b c?"}, headers={"X-Room-AI": "1"})
+        self.assertEqual(code, 200, body)
+        code, body = self.req("/api/broadcast/" + urllib.parse.quote("a/b c?", safe=""))
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(body)["id"], "a/b c?")
         self.assertEqual(self.req("/api/broadcast/abc", headers={"Host": "evil.example"})[0], 403)
 
     def test_stream_refused_when_video_off(self):

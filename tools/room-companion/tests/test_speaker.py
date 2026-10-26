@@ -83,7 +83,9 @@ class SpeakerTest(unittest.TestCase):
         self.assertEqual(sp.label(BT_SPEAKER["name"]), "蓝牙音箱")  # the owner's own label wins
         sp2, _, _ = make_speaker([REALTEK], output_prefer=[], output_labels={}, missing_notes={})
         self.assertEqual(sp2.check_output()["name"], REALTEK["name"])  # nothing preferred: Windows' default
-        self.assertEqual(sp2.label("Speakers (Other)"), "Speakers (Other)")
+        self.assertEqual(sp2.label("Speakers (Somebody's Headphones)"), "音箱", "never the hardware name")
+        sp3, _, _ = make_speaker([REALTEK], language="en", output_labels={})
+        self.assertEqual(sp3.label("Headphones (X)"), "speaker")
         self.assertEqual(sp2.notes(), ["电脑喇叭平时静音或音量低，念的时候临时开到 70%，念完恢复原样"])
 
     def test_manual_choice_is_kept_and_reloaded(self):
@@ -164,6 +166,54 @@ class SpeakerTest(unittest.TestCase):
         self.assertIsNone(parse_played("error no active output matching 'BT Speaker'"))
 
 
+class NothingIdentifyingLeavesTest(unittest.TestCase):
+    """Confirmations, replies and results go to other services: no hardware names, error text or paths."""
+
+    SENTINEL = {"name": "Headphones (SENTINEL-HW-99 Pods)", "volume": 0, "muted": True, "default": True}
+
+    def test_messages_that_leave_the_machine(self):
+        def failing_play(path, secs, device, volume):
+            raise RuntimeError("playback failed: Exception: C:\\Users\\SENTINEL-USER\\tts\\say.wav")
+
+        sp, _, _ = make_speaker([self.SENTINEL], play=failing_play, output_prefer=[], output_labels={}, missing_notes={})
+        notifier = FakeNotifier()
+        video = Pipe()
+        app = App(dict(DEFAULTS, data_dir=tempfile.mkdtemp()), video=video, audio=Pipe(), notifier=notifier, speaker=sp)
+        sp.check_output()
+        video.state, video.detail = "error", "SENTINEL-CAM broke: device busy"
+        app.start()
+        try:
+            app.set_switches({"video": True}, "网页（另一台设备）")
+            self.assertTrue(wait_for(lambda: notifier.messages))
+            got = []
+            r = app.broadcast("你好", "网页（另一台设备）", on_done=got.append)
+            self.assertTrue(wait_for(lambda: got))
+            out = notifier.messages + [r["message"], app.run_command("状态", "手机")["message"],
+                                       json.dumps(app.broadcast_result(r["id"]), ensure_ascii=False), json.dumps(got)]
+            for text in out:
+                self.assertNotIn("SENTINEL", text)
+            self.assertIn("出声：音箱", notifier.messages[0])
+            self.assertIn("出错了（详情看网页）", notifier.messages[0])
+            self.assertEqual(got[0]["error"], "playback_failed")
+            # the local page still has the details
+            self.assertIn("SENTINEL-CAM", app.status()["summary"])
+            self.assertIn("SENTINEL-USER", sp.error)
+        finally:
+            app.shutdown()
+
+    def test_failure_codes(self):
+        class BrokenTTS:
+            def generate(self, *a, **k):
+                raise RuntimeError("model file /home/SENTINEL/x.onnx missing")
+        sp, _, _ = make_speaker([REALTEK])
+        sp.tts_factory = lambda: BrokenTTS()
+        sp.tts = None
+        got = []
+        sp.say("x", on_done=got.append)
+        self.assertTrue(wait_for(lambda: got))
+        self.assertEqual(got[0], {"ok": False, "error": "tts_failed"})
+
+
 class BroadcastTest(unittest.TestCase):
     def make(self, **cfg):
         self.sp, self.tts, self.played = make_speaker([REALTEK])
@@ -203,7 +253,8 @@ class BroadcastTest(unittest.TestCase):
         app.broadcast("没有喇叭", "网页", on_done=got.append)
         self.assertTrue(wait_for(lambda: got))
         self.assertFalse(got[0]["ok"])
-        self.assertIn("没有能出声的设备", got[0]["error"])
+        self.assertEqual(got[0]["error"], "no_output")
+        self.assertIn("没有能出声的设备", self.sp.error)  # the words stay on the local page
         self.assertEqual(app.broadcast_result(got[0]["id"])["state"], "failed")
 
     def test_length_and_empty(self):

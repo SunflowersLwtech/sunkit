@@ -149,7 +149,8 @@ def make_handler(app):
                 return (body or {}).get("source") or "本机"
             if self.headers.get("X-Forwarded-For"):
                 return "网页（经反向代理）"
-            return source_names.get(self.client_address[0]) or f"网页（{self.client_address[0]}）"
+            # the address is not named in confirmations, which leave the machine
+            return source_names.get(self.client_address[0]) or "网页（另一台设备）"
 
         # ---- helpers ----
         def _unread_body(self) -> bool:
@@ -225,7 +226,7 @@ def make_handler(app):
             if u.path == "/stream.mjpg":
                 return self._stream()
             if u.path.startswith("/api/broadcast/"):
-                r = app.broadcast_result(u.path.rsplit("/", 1)[-1])
+                r = app.broadcast_result(urllib.parse.unquote(u.path.rsplit("/", 1)[-1]))
                 return self._json(200, r) if r else self._json(404, {"ok": False, "message": "没有这一条"})
             return self._send(404, "text/plain", b"not found")
 

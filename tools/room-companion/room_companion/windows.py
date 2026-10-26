@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import threading
 import time
@@ -30,12 +31,14 @@ class Interop:
     program started afterwards (ffmpeg.exe, powershell.exe, tasklist.exe, llama-server.exe, ...) uses it.
     """
 
-    def __init__(self, run=subprocess.run, sock_dir="/run/WSL", environ=None, min_interval=600.0, min_retry=10.0):
+    def __init__(self, run=subprocess.run, sock_dir="/run/WSL", environ=None, min_interval=600.0, min_retry=10.0,
+                 owner_uid=0):
         self.run = run
         self.sock_dir = sock_dir
         self.environ = os.environ if environ is None else environ
         self.min_interval = min_interval  # re-check a working choice this often
         self.min_retry = min_retry  # after a failure, don't probe again sooner than this
+        self.owner_uid = owner_uid  # WSL's own sockets belong to root; anything else in that folder is ignored
         self.ok = None
         self.socket = None  # None: the default (no WSL_INTEROP)
         self.repairs = 0
@@ -59,11 +62,20 @@ class Interop:
         out = [cur] if cur else []
         out.append(None)
         try:
-            socks = [os.path.join(self.sock_dir, n) for n in os.listdir(self.sock_dir) if n.endswith("_interop")]
+            names = [n for n in os.listdir(self.sock_dir) if n.endswith("_interop")]
         except OSError:
-            socks = []
-        socks.sort(key=lambda p: os.stat(p).st_mtime if os.path.exists(p) else 0, reverse=True)
-        out += [s for s in socks if s != cur]
+            names = []
+        socks = []
+        for n in names:
+            p = os.path.join(self.sock_dir, n)
+            try:
+                st = os.stat(p)  # follows 1_interop -> 2_interop; one call, so a socket that just went away is skipped
+            except OSError:
+                continue
+            if stat.S_ISSOCK(st.st_mode) and st.st_uid == self.owner_uid:
+                socks.append((st.st_mtime, p))
+        socks.sort(reverse=True)
+        out += [p for _, p in socks if p != cur]
         return out
 
     def ensure(self, force=False, now=None) -> bool:
@@ -140,7 +152,7 @@ class Dshow:
 
     def _ffmpeg_out(self, args, timeout=15) -> str:
         return run_windows(self.run, [self.ffmpeg, "-hide_banner", *args], self.interop, timeout,
-                           lambda p: (p.stdout + p.stderr).decode("utf-8", "replace"))
+                           lambda p: (p.stdout + p.stderr).decode("utf-8", "replace")) or ""
 
     def devices(self, max_age=5.0) -> list[DshowDevice]:
         t, devs = self._cache
@@ -187,22 +199,22 @@ def interop_failed(args, p) -> bool:
 
 
 def run_windows(run, args, interop, timeout, read):
-    """Run a Windows program and return read(result), or "" on failure. If it could not start because the
-    interop channel is broken, let `interop` find a working one and try once more."""
+    """Run a Windows program and return read(result), or None when it could not be run. If it could not
+    start because the interop channel is broken, let `interop` find a working one and try once more."""
     for attempt in (0, 1):
         try:
             p = run(args, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return ""
+            return None
         except FileNotFoundError:
-            return ""  # wrong path, not a channel problem
+            return None  # wrong path, not a channel problem
         except OSError:
             p = None
         if p is not None and not interop_failed(args, p):
             return read(p)
         if attempt or interop is None or not interop.ensure(force=True):
-            return ""
-    return ""
+            return None
+    return None
 
 
 # ---- evidence ----
@@ -251,7 +263,8 @@ class Evidence:
         self.interop = interop
         self._cache = {}
 
-    def _cmd(self, args, timeout=10) -> str:
+    def _cmd(self, args, timeout=10) -> str | None:
+        """The program's output, or None when it could not be asked (then the answer is unknown, not empty)."""
         return run_windows(self.run, args, self.interop, timeout,
                            lambda p: p.stdout.decode("utf-8", "replace") if isinstance(p.stdout, bytes) else (p.stdout or ""))
 
@@ -263,20 +276,27 @@ class Evidence:
         self._cache[key] = (time.time(), v)
         return v
 
-    def pids(self, image: str) -> list[int]:
-        return self._cached(("pids", image), lambda: parse_tasklist_csv(
-            self._cmd([f"{SYS32}/tasklist.exe", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"]), image))
+    def pids(self, image: str) -> list[int] | None:
+        """PIDs of `image`; None when Windows could not be asked (not the same as "none running")."""
+        def probe():
+            text = self._cmd([f"{SYS32}/tasklist.exe", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"])
+            return None if text is None else parse_tasklist_csv(text, image)
+        return self._cached(("pids", image), probe)
 
     def usage(self, capability: str) -> dict | None:
-        return self._cached(("usage", capability), lambda: parse_consent(
-            self._cmd([f"{SYS32}/reg.exe", "query", f"{CONSENT}\\{capability}\\NonPackaged", "/s"]), self.app_key))
+        def probe():
+            text = self._cmd([f"{SYS32}/reg.exe", "query", f"{CONSENT}\\{capability}\\NonPackaged", "/s"])
+            return None if text is None else parse_consent(text, self.app_key)
+        return self._cached(("usage", capability), probe)
 
-    def in_use_by_others(self, capability: str) -> list[str]:
-        """Apps (other than ours) that Windows says are using the camera or mic right now."""
+    def in_use_by_others(self, capability: str) -> list[str] | None:
+        """Apps (other than ours) that Windows says are using the camera or mic right now; None if unknown."""
         def probe():
             out = []
             for sub in ("", "\\NonPackaged"):
                 text = self._cmd([f"{SYS32}/reg.exe", "query", f"{CONSENT}\\{capability}{sub}", "/s"])
+                if text is None:
+                    return None
                 for b in re.split(r"\r?\n(?=HKEY_)", text):
                     head = b.splitlines()[0] if b else ""
                     if not head or self.app_key.lower() in head.lower():

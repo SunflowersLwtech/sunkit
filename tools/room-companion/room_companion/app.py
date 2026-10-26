@@ -300,7 +300,9 @@ class App:
         self.notifier.send(text)
 
     # ---- plain-language status ----
-    def plain_status(self) -> str:
+    def plain_status(self, local: bool = False) -> str:
+        """The status in one line. It goes into messages that leave the machine, so error details are
+        left out unless `local` (the page itself)."""
         s = self.switches
         parts = []
         v = self.video
@@ -308,13 +310,13 @@ class App:
             parts.append("视频关（摄像头已释放）" if v.proc is None else "视频关（正在停止）")
         else:
             parts.append({"running": "视频开（正在看）", "waiting_device": "视频开，但没接上相机", "off": "视频开（正在启动）"}
-                         .get(v.state, f"视频开，但出错：{v.detail[:60]}"))
+                         .get(v.state, f"视频开，但出错：{v.detail[:60]}" if local else "视频开，但出错了（详情看网页）"))
         a = self.audio
         if not s.get("audio"):
             parts.append("声音关（麦克风已释放）" if a.proc is None else "声音关（正在停止）")
         else:
             parts.append({"running": "声音开（正在听）", "waiting_device": "声音开，但没接上麦克风", "off": "声音开（正在启动）"}
-                         .get(a.state, f"声音开，但出错：{a.detail[:60]}"))
+                         .get(a.state, f"声音开，但出错：{a.detail[:60]}" if local else "声音开，但出错了（详情看网页）"))
         if not s.get("ai"):
             parts.append("AI 关（不发给任何模型）")
         elif not self.ai.client:
@@ -336,7 +338,7 @@ class App:
             "switch_updated_at": snap.get("updated_at"),
             "switch_source": snap.get("source"),
             "state_load_error": self.switches.load_error,
-            "summary": self.plain_status(),
+            "summary": self.plain_status(local=True),
             "video": self.video.status(),
             "audio": self.audio.status(),
             "ai": self.ai.status(),

@@ -21,8 +21,19 @@ import wave
 
 SYS32 = "/mnt/c/Windows/System32"
 PS = f"{SYS32}/WindowsPowerShell/v1.0/powershell.exe"
-# built-in short names, by the device's language; `output_labels` in the config adds to and overrides them
+# built-in short names, by the device's language; `output_labels` in the config adds to and overrides them.
+# An output that matches none of them is called by a plain word, never by its hardware name (which can
+# carry the owner's name), because labels go into messages that leave the machine.
 DEFAULT_LABELS = {"zh": {"Realtek": "电脑喇叭"}, "en": {"Realtek": "Computer speakers"}}
+PLAIN_WORD = {"zh": "音箱", "en": "speaker"}
+
+
+class SpeakError(Exception):
+    """A failed utterance: `code` may leave the machine, `detail` stays on the local page."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code, self.detail = code, detail
 
 
 class Speaker:
@@ -108,9 +119,11 @@ class Speaker:
         return self.output
 
     def label(self, name: str) -> str:
-        base = DEFAULT_LABELS.get(str(self.cfg.get("language", "zh"))[:2], DEFAULT_LABELS["zh"])
-        return output_label(name, {**self.cfg.get("output_labels", {}), **{k: v for k, v in base.items()
-                                                                            if k not in self.cfg.get("output_labels", {})}})
+        lang = str(self.cfg.get("language", "zh"))[:2]
+        own = self.cfg.get("output_labels", {})
+        base = DEFAULT_LABELS.get(lang, DEFAULT_LABELS["zh"])
+        return output_label(name, {**own, **{k: v for k, v in base.items() if k not in own}},
+                            fallback=PLAIN_WORD.get(lang, PLAIN_WORD["zh"]))
 
     def notes(self) -> list[str]:
         names = " ".join(o["name"].lower() for o in self.outputs)
@@ -173,9 +186,10 @@ class Speaker:
             try:
                 r = self._speak(text, hear)
             except Exception as e:
-                self.error = str(e)[:200]
+                code = e.code if isinstance(e, SpeakError) else "playback_failed"
+                self.error = (e.detail if isinstance(e, SpeakError) else str(e))[:200]  # local page only
                 self.speaking_until = time.time()
-                r = {"ok": False, "error": self.error}
+                r = {"ok": False, "error": code}
             finally:
                 self.current = None
             if on_done is not None:
@@ -189,10 +203,13 @@ class Speaker:
             self.check_output()  # a speaker may have connected or gone since the last look
         out = self.output
         if out is None:
-            raise RuntimeError("没有能出声的设备")
-        if self.tts is None:
-            self.tts = self.tts_factory()
-        audio = self.tts.generate(text, sid=self.cfg.get("speaker_id", 0), speed=self.cfg.get("speed", 1.0))
+            raise SpeakError("no_output", "没有能出声的设备")
+        try:
+            if self.tts is None:
+                self.tts = self.tts_factory()
+            audio = self.tts.generate(text, sid=self.cfg.get("speaker_id", 0), speed=self.cfg.get("speed", 1.0))
+        except Exception as e:
+            raise SpeakError("tts_failed", f"TTS failed: {e}") from e
         path = os.path.join(self.cfg["win_dir_wsl"], "say.wav")
         _write_wav(path, audio.samples, audio.sample_rate)
         secs = len(audio.samples) / audio.sample_rate
@@ -201,6 +218,8 @@ class Speaker:
         self._cur = (start, self.speaking_until, hear)  # before playback starts: the mic may already hear it
         try:
             self.last_play = dict(self.play(path, secs, out["name"], self.volume()) or {}, at=time.time())
+        except Exception as e:
+            raise SpeakError("playback_failed", str(e)) from e
         finally:
             self.speaking_until = time.time()
             if not hear:
@@ -253,13 +272,14 @@ class Speaker:
                 "choice": self.choice, "volume": self.volume(), "notes": self.notes(), "last_play": self.last_play}
 
 
-def output_label(name: str, labels=None) -> str:
-    """A short name for an output: the label of the first word (of `labels`) its name contains."""
+def output_label(name: str, labels=None, fallback: str = PLAIN_WORD["zh"]) -> str:
+    """A short name for an output: the label of the first word (of `labels`) its name contains,
+    else `fallback`, never the hardware name."""
     n = name.lower()
     for word, label in (DEFAULT_LABELS["zh"] if labels is None else labels).items():
         if word.lower() in n:
             return label
-    return name
+    return fallback
 
 
 def parse_outputs(text: str) -> list[dict]:
