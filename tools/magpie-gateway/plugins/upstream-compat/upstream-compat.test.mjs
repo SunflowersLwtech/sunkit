@@ -114,3 +114,81 @@ test("a 3 MB history with one bad name is fixed well inside the 250 ms hook limi
   assert.match(names(b)[0], legal)
   assert.ok(ms < 100, `${ms} ms`)
 })
+
+// a Claude Code request of about `chars` characters of history, asking for 40,000 tokens
+const long = (chars, text = "x") => ({
+  model: "claude-opus-5-5",
+  max_tokens: 40000,
+  thinking: { type: "enabled", budget_tokens: 31999 },
+  tools: [{ name: "Bash", input_schema: { type: "object" } }],
+  messages: [{ role: "user", content: [{ type: "text", text: text.repeat(Math.ceil(chars / text.length)) }] }],
+})
+
+test("bedrock-glm5: the reply asked for is lowered to what its 202,752-token window leaves", () => {
+  // ~650K ASCII characters: GLM counts ~160K tokens (10-27's failing requests were 163-169K)
+  const b = onProvider(long(650000), to("bedrock-glm5"))
+  const estimate = Math.ceil(JSON.stringify(b).length / 3.8)
+  assert.ok(b.max_tokens < 40000 && b.max_tokens >= 8192, String(b.max_tokens))
+  assert.ok(estimate + b.max_tokens <= 202752, `${estimate} + ${b.max_tokens}`)
+  assert.ok(b.thinking.budget_tokens < b.max_tokens && b.thinking.budget_tokens >= 1024)
+})
+
+test("bedrock-glm5: a request that fits keeps its max_tokens and thinking budget", () => {
+  const body = long(200000)
+  const before = structuredClone(body)
+  assert.equal(onProvider(body, to("bedrock-glm5")), undefined)
+  assert.deepEqual(body, before)
+})
+
+test("bedrock-glm5: non-ASCII text counts a token per character, not per 3.8", () => {
+  // 175K Chinese characters fit by the ASCII rate (~46K) but not by the per-character one
+  const b = onProvider(long(175000, "网关"), to("bedrock-glm5"))
+  assert.ok(b && b.max_tokens <= 202752 - 175000, String(b && b.max_tokens))
+  // the same past 256K characters, where it is sampled: 120K Chinese among 600K ASCII
+  const mixed = long(600000)
+  mixed.messages.push({ role: "user", content: [{ type: "text", text: "网关".repeat(60000) }] })
+  const m = onProvider(mixed, to("bedrock-glm5"))
+  const ascii = Math.ceil(JSON.stringify(m).length / 3.8)
+  assert.ok(m.max_tokens < 202752 - ascii - 1024, `${m.max_tokens} vs ${202752 - ascii - 1024} by the ASCII rate`)
+})
+
+test("bedrock-glm5: never under 8,192, and a body without max_tokens is left alone", () => {
+  assert.equal(onProvider(long(900000), to("bedrock-glm5")).max_tokens, 8192)
+  const body = long(900000)
+  delete body.max_tokens
+  assert.equal(onProvider(body, to("bedrock-glm5")), undefined)
+})
+
+test("other providers keep the max_tokens the agent sent", () => {
+  for (const id of ["deepseek", "devin"]) assert.equal(onProvider(long(650000), to(id)), undefined)
+})
+
+test("windows in options set or override a provider's window", () => {
+  const ctx = { ...to("deepseek"), options: { windows: { deepseek: 128000 } } }
+  assert.ok(onProvider(long(450000), ctx).max_tokens < 40000)
+  const glm = { ...to("bedrock-glm5"), options: { windows: { "bedrock-glm5": 1000000 } } }
+  assert.equal(onProvider(long(650000), glm), undefined)
+})
+
+test("fitting a 3 MB request stays well inside the 250 ms hook limit", () => {
+  const t = performance.now()
+  onProvider(long(3000000, "ab网"), to("bedrock-glm5"))
+  const ms = performance.now() - t
+  assert.ok(ms < 100, `${ms} ms`)
+})
+
+test("a failing window fit keeps the other fixes", () => {
+  const body = poisoned()
+  body.max_tokens = 40000
+  body.messages.push({ role: "user", content: [{ type: "text", text: "x".repeat(700000) }] })
+  const real = JSON.stringify
+  JSON.stringify = () => { throw new Error("not in this engine") }
+  let b
+  try {
+    b = onProvider(body, to("bedrock-glm5"))
+  } finally {
+    JSON.stringify = real
+  }
+  assert.match(names(b)[0], legal)
+  assert.equal(b.max_tokens, 40000)
+})

@@ -34,13 +34,29 @@
 //
 // Devin takes the deferred-tool blocks as they are, so it keeps them.
 //
-//   {"providers": ["bedrock-glm5", "deepseek", "devin"], "off": false}
+// bedrock-glm5's window is 202,752 tokens and counts the reply a request asks
+// for. Claude Code asks for 40,000, so every request with more than about 162K
+// of prompt failed with 400 "This model's maximum context length is 202752
+// tokens. However, you requested 40000 output tokens and your prompt contains at
+// least 162754 tokens". On 10-27, 17:20-17:23, all three Claude seats were held
+// at magpie's 95% and GLM-5 was the only member of long-opus left; magpie does
+// not retry that 400, so those agents' turns failed. The reply a request asks
+// for is now lowered to what the window leaves, by an estimate that errs high:
+// one token per 3.8 ASCII characters of the request as JSON and one per other
+// character (magpie's own estimate is a token per 4 bytes, and GLM counted
+// 162,754 tokens in a request magpie put at 168,198). It never goes under
+// 8,192 (a prompt that leaves less fails as before), and a thinking budget
+// follows it down. Other providers keep the max_tokens the agent sent.
+//
+//   {"providers": ["bedrock-glm5", "deepseek", "devin"], "windows": {"bedrock-glm5": 202752}, "off": false}
 
 const DEFERRED = ["tool_addition", "tool_removal", "tool_reference"]
 const DEFAULT = ["bedrock-glm5", "deepseek", "devin"]
 // what each provider needs beyond legal tool names
 const STRIP = new Set(["bedrock-glm5", "deepseek"])
 const AS_TEXT = new Set(["bedrock-glm5"])
+// the windows that count the reply asked for (the vendor's own number)
+const WINDOWS = { "bedrock-glm5": 202752 }
 const NAME_OK = /^[a-zA-Z0-9_-]{1,64}$/
 const asText = (x) => ({ type: "text", text: typeof x === "string" ? x : JSON.stringify(x) })
 
@@ -130,6 +146,34 @@ function resultsAsText(body) {
   return changed
 }
 
+// how many characters of json are not ASCII; past 256K characters, from 64 slices
+// of 4K spread over it, so a long history stays well inside the 250 ms hook limit
+// (a hook that runs over loses every change it made, tool names included)
+function nonAscii(json) {
+  const count = (part) => part.length - part.replace(/[^\x00-\x7f]+/g, "").length
+  const N = 64
+  const W = 4096
+  if (json.length <= N * W) return count(json)
+  const step = Math.floor(json.length / N)
+  let seen = 0
+  for (let i = 0; i < N; i++) seen += count(json.slice(i * step, i * step + W))
+  return Math.round((seen * json.length) / (N * W))
+}
+
+function fitWindow(body, window) {
+  if (typeof body.max_tokens !== "number") return false
+  const json = JSON.stringify(body)
+  if (json.length + body.max_tokens + 1024 <= window) return false // fits even at a token a character
+  const other = nonAscii(json)
+  const estimate = Math.ceil((json.length - other) / 3.8) + other
+  const room = Math.max(8192, window - estimate - 1024)
+  if (body.max_tokens <= room) return false
+  body.max_tokens = room
+  const t = body.thinking
+  if (t && typeof t.budget_tokens === "number" && t.budget_tokens >= room) t.budget_tokens = Math.max(1024, room - 4096)
+  return true
+}
+
 export function onProvider(body, ctx) {
   const o = (ctx && ctx.options) || {}
   if (o.off) return
@@ -141,5 +185,11 @@ export function onProvider(body, ctx) {
   let changed = STRIP.has(id) && withoutDeferred(body)
   if (fixToolNames(body)) changed = true
   if (AS_TEXT.has(id) && resultsAsText(body)) changed = true
+  const window = Object.assign({}, WINDOWS, o.windows || {})[id]
+  try {
+    if (window && fitWindow(body, window)) changed = true
+  } catch (e) {
+    // the engine magpie runs this in is not V8: a failure here must not cost the fixes above
+  }
   return changed ? body : undefined
 }
