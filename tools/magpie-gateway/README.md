@@ -45,7 +45,7 @@ $M plugin add /plugins/long-off-seats.middleware.js
 
 ## Routing groups
 
-The group ids are Claude's own model names. A request for `claude-opus-5-5` reaches the group, and Claude Code still recognises the model by name, so its effort levels and context window behave as on Anthropic. `stays=session` keeps a conversation on the account that first answered it.
+The group ids are Claude's own model names. A request for `claude-opus-5-5` reaches the group, and Claude Code still recognises the model by name, so its effort levels and context window behave as on Anthropic. Since 2026-10-27 every group has `stays=auto`, magpie's default: a conversation stays with the account or key that answered it while its cache there is worth keeping, and is routed afresh after that. With `stays=session` before, a session that fell to GLM-5 or SWE-2 while the seats were full stayed there for the rest of its life (back: `magpie group set <id> stays=session`).
 
 | group | members, in order |
 |---|---|
@@ -71,6 +71,24 @@ Rollback: `magpie group set claude-opus-5-5 models=kiro/claude-opus-5.5,group/cl
 Checked on 2026-10-25 with a three-turn Claude Code session through the gateway: Read and Bash on the client machine, recalling the previous turn with no tool, then a subagent. The hostname and a nonce that exists only in a local file came back right, and the transcript has structured `tool_use` and no `<invoke>` text. `zed/claude-sonnet-5-5` passes with `zed-compat`. A Copilot student account answers only `copilot/auto`; any named model gets 400 "The requested model is not supported".
 
 Checked again after the chains above, with `claude -p --allowedTools Bash` running `echo TOOLCHECK-$((6*7))` on each id: all five groups and 15 single models answered `TOOLCHECK-42` (Zed Claude and GPT-6.1/6 Sol, Grok 4.7, Doubao, WorkBuddy GLM, the `auto/` Kimi, GLM, DeepSeek, Qwen, MiniMax, `copilot/auto`). `claude-opus-5-5` went Kiro 429 (monthly credits used up) → Zed Sonnet. OpenCode Go was out of its weekly allowance and Trae Global was rate-limited. Gemini on Zed fails under Claude Code: the Zed plugin sends the thinking level as `high` and the tool mode as `AUTO`, where Zed wants `HIGH` and `auto` (plugin 0.1.11), so no group carries Gemini.
+
+## Health alerts
+
+`server/fleet-watch.py` runs on the gateway host every 5 minutes (`magpie-fleet-watch.timer`). It reads the day's routing log. A group whose answers to clients in the last 15 minutes hold at least 3 failures, and at least half failures, gets an ntfy saying it is broken (a 499, the client hanging up, isn't a failure), and one more when it recovers. A group with no success for 60 minutes gets one tiny real request ("reply PONG") with its own gateway key, `fleet-watch`, user agent `fleet-watch/1`; two failed probes in a row also count as broken. The groups are busy, so nearly every run sends nothing. The probes go one at a time: with the seats full every group falls to the same paid member, and six probes at once pushed it into 429 on 10-27. The day's probes, tokens and the providers they landed on go into `/var/lib/magpie-fleet-watch/daily.jsonl`. Alerts go through the ntfy relay in `/etc/llm-gateway/ops.env`.
+
+On 10-27, its first evening: down `long-opus` 20:00 and `claude-opus-5-5` 20:06 (68 failures, 57 successes in 15 minutes, every seat at its cap and the fallbacks out of credits), up 20:24 and 20:42. Its 42 probes that day came to 26.7K tokens, 241 of them on the paid GLM-5.
+
+Install: `fleet-watch.py` to `/opt/magpie/monitor/` (root, 700), the key in `/etc/llm-gateway/fleet-watch.key` (600), the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-fleet-watch.timer`. Off: `systemctl disable --now magpie-fleet-watch.timer`. Tests: `python3 server/fleet-watch.test.py`.
+
+## Feishu assistant fallback (N150)
+
+The Feishu assistant on N150 is pinned to `provider=magpie`, so a gateway outage took the assistant down with it (the nights of 10-26 and 10-27). Three files keep it reachable:
+
+- `client/gw-fallback.n150.py`, in the container as `/feishu-cc/bin/gw-fallback.py`. Every 5 minutes it sends one tiny request with the assistant's own gateway key, model and address (on a seat about 25 s and 1.7K tokens, about 0.5M seat tokens a day). After a failure it checks every minute. Three failures in a row write the flag `/feishu-cc/gw-fallback/direct`, holding the gateway address, and send an ntfy. When the assistant is idle (its last turn finished and 60 s with nothing new, or 20 minutes into the outage regardless) it ends the claude process still on the gateway, and cc-connect resumes the same session with `--resume` on the next message. Five good checks in a row remove the flag and send an ntfy, and the direct process is ended when idle so the next one is back on the gateway. It never edits `config.toml` or restarts cc-connect or the container. With another provider selected it only checks.
+- `client/claude-bypass.n150.sh`, the `cmd` cc-connect starts (`/opt/data/feishu-cc/bin/claude-bypass`). When the flag holds the gateway address the process was given, it drops the gateway variables, so claude goes straight to the seat signed in in the container, a gateway-only model name (`frontier`, `auto/…`) becomes Opus, and `GW_FALLBACK_DIRECT=1` is set.
+- `client/gw-fallback.n150.sh`, on the host as `/opt/data/feishu-cc/bin/gw-fallback`, from cron every minute (`* * * * * /opt/data/feishu-cc/bin/gw-fallback >/dev/null 2>&1`). It holds the lock, feeds the container's recent log in for the idle check, and hands the checker's ntfy lines to `/opt/data/sre/notify.sh`. Off: remove the cron line, then delete the flag.
+
+Log `gw-fallback/log`, state `gw-fallback/state.json`; `"drill": true` in the state marks the ntfy titles as a drill until it switches back. Tests: `python3 client/gw-fallback.test.py`.
 
 ## Client
 
