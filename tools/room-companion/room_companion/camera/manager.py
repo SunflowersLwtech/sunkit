@@ -75,7 +75,7 @@ class BleControl:
         """Connect to our camera. A camera we know is reached by its address only (never by a scan that
         could pick another camera nearby); a new one by a scan that must find exactly one, or the name
         set in `ble.device`. The address is saved only after a handshake succeeded (`_confirmed`)."""
-        b = self.m.bridge
+        b = self.m
         known = self.m.ble_state.get("addr")
         self.pending_addr = None
         if known:
@@ -101,7 +101,10 @@ class BleControl:
         self.m.remember(addr=self.pending_addr or self.m.ble_state.get("addr"), **state)
 
     def _disconnect(self):
-        self.m.bridge.call("disconnect", timeout=15)
+        if not self.m.helper_up():
+            return  # a request ran into its timeout and the helper was stopped: nothing is connected
+        d = self.m.deadline
+        self.m.bridge.call("disconnect", timeout=15.0 if d is None else max(1.0, min(15.0, d - self.m.monotonic())))
 
 
 class OfficialBle(BleControl):
@@ -111,7 +114,7 @@ class OfficialBle(BleControl):
         st = self.m.ble_state
         if "sender_mac" not in st:
             self.m.remember(sender_mac=secrets.token_hex(6), sender_id=0x5A000000 | secrets.randbelow(1 << 16))
-        r = self.m.bridge.call("rsdk_connect", timeout=wait + 20, sender_id=self.m.ble_state["sender_id"],
+        r = self.m.call("rsdk_connect", timeout=wait + 20, sender_id=self.m.ble_state["sender_id"],
                                sender_mac=self.m.ble_state["sender_mac"], verify_mode=0, wait=wait)
         self.m.note(self.id, "connect", r)
         if r.get("ok"):
@@ -128,12 +131,12 @@ class OfficialBle(BleControl):
         self._connect(self.m.config["recover"]["wake"])
         try:
             self.handshake(wait=5)
-            self.m.bridge.call("rsdk_subscribe", timeout=10, mode=1)
+            self.m.call("rsdk_subscribe", timeout=10, mode=1)
             self.m.sleep(1.0)
             if (self.m.camera_info.get("power_mode") == "sleep") and self.m.config["recover"]["wake"]:
-                self.m.note(self.id, "power_normal", self.m.bridge.call(
+                self.m.note(self.id, "power_normal", self.m.call(
                     "rsdk", timeout=15, set=0x00, cid=0x1A, payload=rsdk.power_mode(False).hex(), reply_s=3))
-            r = self.m.bridge.call("rsdk", timeout=15, set=0x1D, cid=0x04, payload=rsdk.mode_switch(UVC_MODE).hex(), reply_s=5)
+            r = self.m.call("rsdk", timeout=15, set=0x1D, cid=0x04, payload=rsdk.mode_switch(UVC_MODE).hex(), reply_s=5)
             self.m.note(self.id, "mode_uvc", r)
             ret = rsdk.ret_code(bytes.fromhex(r["reply"])) if r.get("reply") else None
             if ret is None:
@@ -155,9 +158,9 @@ class OfficialBle(BleControl):
         try:
             self.handshake(wait=5)
             if action == "sleep":
-                r = self.m.bridge.call("rsdk", timeout=15, set=0x00, cid=0x1A, payload=rsdk.power_mode(True).hex(), reply_s=3)
+                r = self.m.call("rsdk", timeout=15, set=0x00, cid=0x1A, payload=rsdk.power_mode(True).hex(), reply_s=3)
             elif action == "stop_recording":
-                r = self.m.bridge.call("rsdk", timeout=15, set=0x1D, cid=0x03, payload=rsdk.record(False).hex(), reply_s=3)
+                r = self.m.call("rsdk", timeout=15, set=0x1D, cid=0x03, payload=rsdk.record(False).hex(), reply_s=3)
             else:
                 raise ValueError(f"unknown action {action}")
             self.m.note(self.id, action, r)
@@ -174,7 +177,7 @@ class DumlBle(BleControl):
     def handshake(self, wait: float):
         if "identifier" not in self.m.ble_state:
             self.m.remember(identifier=secrets.token_hex(16))
-        r = self.m.bridge.call("duml_pair", timeout=wait + 30, identifier=self.m.ble_state["identifier"],
+        r = self.m.call("duml_pair", timeout=wait + 30, identifier=self.m.ble_state["identifier"],
                                token="ROOM", wait=wait)
         self.m.note(self.id, "pair", r)
         if r.get("ok"):
@@ -191,7 +194,7 @@ class DumlBle(BleControl):
             self.handshake(wait=5)
             ok = False
             for to in (duml.ADDR_CAMERA, duml.ADDR_DM368_0):
-                r = self.m.bridge.call("duml", timeout=15, to=to, set=0x02, cid=0xE1,
+                r = self.m.call("duml", timeout=15, to=to, set=0x02, cid=0xE1,
                                        payload=bytes([duml.MODES["uvc_webcam"]]).hex(), reply_s=3)
                 self.m.note(self.id, f"mode_uvc_to_{to:02x}", r)
                 if r.get("reply") == "00":
@@ -250,6 +253,7 @@ class CameraManager:
         self.gave_up = False      # recovery tried every allowed driver and the camera is still missing
         self.next_try_at = 0.0
         self.backoff = 60.0
+        self.deadline = None      # monotonic end of an action someone is waiting for
         self.attempts = deque(maxlen=12)
         self.need_tap = None
         self._lock = threading.Lock()
@@ -320,11 +324,28 @@ class CameraManager:
         if self._bridge is not None:
             self._bridge.stop()
 
+    def helper_up(self) -> bool:
+        return bool(getattr(self.bridge, "running", True))
+
+    def call(self, cmd: str, timeout: float = 30.0, **kw) -> dict:
+        """A helper request. Inside an action someone waits for it ends with the budget (3 s stay for the
+        disconnect), and a helper that was stopped after a timeout is not started again: that start is not
+        bounded by the request, and the check at the beginning of the next action starts it."""
+        if self.deadline is not None:
+            left = self.deadline - self.monotonic() - 3
+            if left < 1:
+                raise StepFailed("no_time")
+            if not self.helper_up():
+                raise StepFailed("helper")
+            timeout = min(timeout, left)
+        return self.bridge.call(cmd, timeout=timeout, **kw)
+
     def ble_available(self, timeout: float = 30.0) -> bool:
         """Whether the Bluetooth helper works here. Waits for a check already running; a failed check is
-        tried again after a minute (Bluetooth may come up after the app, Windows Python may be slow)."""
+        tried again after a minute (Bluetooth may come up after the app, Windows Python may be slow), and a
+        helper stopped after a timeout is checked (started) again."""
         with self._check_lock:
-            if self._ble_ok or (self._ble_ok is False and self.monotonic() - self._ble_checked_at < 60):
+            if (self._ble_ok and self.helper_up()) or (self._ble_ok is False and self.monotonic() - self._ble_checked_at < 60):
                 return bool(self._ble_ok)
             ok, err = False, None
             if self.host.get("bluetooth", True) is False:
@@ -483,13 +504,14 @@ class CameraManager:
             return False, t("no_helper", lang)
         if not self._claim(name):
             return False, t("busy", lang, what=self.busy)
+        self.deadline = deadline
         try:
             if name == "recover":
                 return self.recover(deadline)
             if name == "wake":
                 if not self.ble_state.get("addr"):
                     return False, t("no_addr", lang)
-                r = self.bridge.call("wake_adv", timeout=20, addr=self.ble_state["addr"], seconds=2)
+                r = self.call("wake_adv", timeout=20, addr=self.ble_state["addr"], seconds=2)
                 self.note("dji-ble-official", "wake", r)
                 return bool(r.get("ok")), t("wake_sent" if r.get("ok") else "wake_failed", lang)
             chain = control_chain(self.config)
@@ -518,6 +540,7 @@ class CameraManager:
             except (StepFailed, BridgeError) as e:
                 return False, _failure(e).text(lang)
         finally:
+            self.deadline = None
             self.busy = None
             self.need_tap = None
 

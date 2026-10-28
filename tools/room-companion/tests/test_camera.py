@@ -341,6 +341,7 @@ class ManagerRulesTest(unittest.TestCase):
         self.assertFalse(m.ble_available())
         st = json.dumps(m.status(), ensure_ascii=False)
         self.assertNotIn("SOMEONE", st)
+        self.assertNotIn("{", m.status()["drivers"]["dji-ble-official"]["last_error"])
         self.assertIn("SOMEONE", json.dumps(m.events.items))  # the local event log keeps the detail
         b.raise_on = None
         self.assertFalse(m.ble_available())   # within a minute: not asked again
@@ -524,6 +525,68 @@ class ActionBudgetTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("正在忙", detail)
         self.assertEqual(m.busy, "recover")
+
+    def hung(self, check_s=0.0, addr=True):
+        now = [0.0]
+        d = tempfile.mkdtemp()
+        b = HungHelper(now, check_s)
+        m = CameraManager({"data_dir": d, "camera": {"allow_unofficial": True}}, FakeVideo(os.path.join(d, "x")),
+                          Events(), bridge=b, sleep=lambda s: now.__setitem__(0, now[0] + s), monotonic=lambda: now[0])
+        if addr:
+            m.remember(addr=FAKE_ADDR)
+        return m, b, now
+
+    def test_a_hanging_helper_cannot_hold_an_action_past_the_budget(self):
+        # the real drivers this time: a slow helper check, then every request hangs until its timeout
+        for addr in (True, False):
+            for action in ("recover", "pair"):
+                m, b, now = self.hung(check_s=40, addr=addr)
+                ok, detail = m.action(action)
+                self.assertFalse(ok)
+                self.assertLessEqual(now[0], 85, (addr, action, b.calls))
+                self.assertIsNone(m.deadline)
+
+    def test_a_helper_stopped_inside_an_action_is_not_started_again_there(self):
+        m, b, now = self.hung()
+        m.action("recover")                   # the first connect hangs and the helper is stopped
+        self.assertNotIn("start", b.calls)
+        self.assertLessEqual(now[0], 85)
+
+    def test_the_next_action_starts_a_stopped_helper_in_its_check(self):
+        m, b, now = self.hung()
+        m.action("pair")
+        self.assertFalse(b.running)
+        b.answers = True                      # the camera is back
+        ok, detail = m.action("pair")
+        self.assertTrue(ok, detail)
+        self.assertEqual(b.calls.count("start"), 1)
+
+
+class HungHelper:
+    """Like BleBridge over a Bluetooth stack that hangs: each request runs into its timeout, which stops the
+    helper, and the next request starts it again (up to 20 s). With `answers` the camera answers."""
+
+    def __init__(self, now, check_s=0.0):
+        self.now, self.check_s, self.answers = now, check_s, False
+        self.running, self.calls = True, []
+
+    def call(self, cmd, timeout=30, **kw):
+        if not self.running:
+            self.now[0] += 20
+            self.running = True
+            self.calls.append("start")
+        self.calls.append(cmd)
+        if cmd == "check":
+            self.now[0] += min(timeout, self.check_s)
+            return {"ok": True}
+        if self.answers:
+            return {"ok": True, "addr": kw.get("addr") or FAKE_ADDR, "model": "Osmo Action 5 Pro"}
+        self.now[0] += timeout
+        self.running = False
+        return {"ok": False, "error": "timeout"}
+
+    def stop(self):
+        self.running = False
 
 
 class RecordingBridge(StubBridge):
