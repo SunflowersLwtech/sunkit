@@ -1,110 +1,302 @@
 #!/usr/bin/env node
-// dsh-mesh — join the claude-mesh as a non-Claude (DSH) peer.
+// dsh-mesh — put a DeepSeek Harness session on a claude-mesh, without channels.
 //
-//   join  run a persistent peer: inbound messages land in <dir>/inbox.jsonl,
-//         lines written to <dir>/outbox.jsonl are sent ({to, message}).
-//   say   one-shot send (send-only identity), same as mesh-say.
+//   join    run the bridge: a real (push) mesh session whose inbound mail is
+//           spooled to inbox.jsonl and whose outbox.jsonl is sent as written.
+//   say     one-shot send as a send-only identity.
+//   read    one-shot pull-mode read (read_messages) for hosts that prefer polling.
+//   status  what the running bridge is doing.
 //
-// The relay + wire format come from sunkit/mesh (claude-mesh). This file only
-// adapts it: DSH has no channels, so the peer is kept alive here and inbound
-// notifications are spooled to a file the agent can read between turns.
+// Exit codes: 0 ok · 2 usage · 3 peer failed · 4 timeout · 5 already running.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { REPO_PEER, meshHome, sanitizeName, backoffMs, parseOutbox, inboxRecord, shouldRotate, parseFlags } from "./lib.mjs";
 
-const PEER = path.join(os.homedir(), "Developer/opensource/sunkit/mesh/plugins/mesh/server/mesh-peer.mjs");
-const [mode, ...rest] = process.argv.slice(2);
+const EXIT = { ok: 0, usage: 2, peer: 3, timeout: 4, lock: 5 };
+const INBOX_MAX = 5 * 1024 * 1024;
+const REQUEST_TIMEOUT = 30_000;
 
-if (mode === "say") {
-  const [to, ...words] = rest;
-  const text = words.join(" ");
-  if (!to || !text) { console.error("usage: dsh-mesh say <to> <message...>"); process.exit(2); }
-  const name = (process.env.MESH_AS || "m4-dsh").toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 32);
-  const dir = path.join(os.homedir(), ".mesh-names", name);
-  fs.mkdirSync(dir, { recursive: true });
-  const p = spawn(process.execPath, [PEER], { cwd: dir, env: { ...process.env, MESH_JOIN: "never" }, stdio: ["pipe", "pipe", "inherit"] });
-  const send = (o) => p.stdin.write(JSON.stringify(o) + "\n");
+const USAGE = `usage:
+  dsh-mesh join   [--name NAME] [--dir DIR] [--peer FILE]
+  dsh-mesh say    <to> <message...> [--reply-to MSG_ID] [--as NAME]
+  dsh-mesh read   [--name NAME]
+  dsh-mesh status [--dir DIR]
+
+join keeps a push session alive next to the agent and spools mail to
+<dir>/inbox.jsonl; append {"to":"session","message":"…"} lines to
+<dir>/outbox.jsonl to send. Defaults: --name $MESH_AS or m4-dsh,
+--dir ~/.mesh-names/<name>, --peer <this repo>/plugins/mesh/server/mesh-peer.mjs.
+
+Identity (relay URL, token, handle) is read by the peer from ~/.claude-mesh
+(MESH_HOME). Run \`mesh pair\` first, exactly as for any other host.`;
+
+function log(...a) {
+  process.stderr.write(`${new Date().toISOString()} dsh-mesh ${a.join(" ")}\n`);
+}
+
+function fail(code, msg) {
+  log(msg);
+  process.exit(code);
+}
+
+/** A peer process behind a tiny MCP client: init, request/response, notifications. */
+function startPeer({ peerPath, joinMode, name, dir, onNotification, onExit }) {
+  const child = spawn(process.execPath, [peerPath], {
+    cwd: dir,
+    env: { ...process.env, MESH_JOIN: joinMode, MESH_SESSION_NAME: name },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const pending = new Map();
+  let nextId = 1;
   let buf = "";
-  p.stdout.on("data", (d) => {
+
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (d) => {
     buf += d;
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, i); buf = buf.slice(i + 1);
-      let m; try { m = JSON.parse(line); } catch { continue; }
-      if (m.id === 1) {
-        send({ jsonrpc: "2.0", method: "notifications/initialized" });
-        send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "send_message", arguments: { to, message: text } } });
-      } else if (m.id === 2) {
-        const t = (m.result?.content || []).map((c) => c.text).join("\n") || JSON.stringify(m.error || m.result);
-        console.log(t);
-        p.kill(); process.exit(m.error ? 1 : 0);
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      let m;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (m.id && pending.has(m.id)) {
+        const { resolve, timer } = pending.get(m.id);
+        clearTimeout(timer);
+        pending.delete(m.id);
+        resolve(m);
+      } else if (m.method && onNotification) {
+        onNotification(m);
       }
     }
   });
-  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "dsh-mesh", version: "0.1" } } });
-  setTimeout(() => { console.error("timeout"); p.kill(); process.exit(3); }, 30000);
-  process.exit(0);
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (d) => process.stderr.write(d));
+  child.on("exit", (code, signal) => onExit?.(code, signal));
+
+  const write = (o) => child.stdin.write(JSON.stringify(o) + "\n");
+  const request = (method, params) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, REQUEST_TIMEOUT);
+      pending.set(id, { resolve, timer });
+      write({ jsonrpc: "2.0", id, method, params });
+    });
+
+  return {
+    request,
+    init: async () => {
+      await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "dsh-mesh", version: "0.2" } });
+      write({ jsonrpc: "2.0", method: "notifications/initialized" });
+    },
+    kill: () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    },
+  };
 }
 
-if (mode !== "join") { console.error("usage: dsh-mesh join [--name N] [--dir D]  |  dsh-mesh say <to> <msg...>"); process.exit(2); }
+function toolText(res) {
+  const text = (res?.result?.content ?? []).map((c) => c.text).filter(Boolean).join("\n");
+  if (res?.error) throw new Error(res.error.message ?? JSON.stringify(res.error));
+  if (res?.result?.isError) throw new Error(text || "tool failed");
+  return text;
+}
 
-const arg = (k, d) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : d; };
-const name = (arg("--name", process.env.MESH_AS || "m4-dsh")).toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 32);
-const dir = arg("--dir", path.join(os.homedir(), ".mesh-names", name));
-fs.mkdirSync(dir, { recursive: true });
-const inbox = path.join(dir, "inbox.jsonl");
-const outbox = path.join(dir, "outbox.jsonl");
-fs.writeFileSync(outbox, "");
+async function oneShot({ peerPath, name, joinMode, dir, tool, args }) {
+  const peer = startPeer({ peerPath, joinMode, name, dir, onExit: () => {} });
+  try {
+    await peer.init();
+    return toolText(await peer.request("tools/call", { name: tool, arguments: args }));
+  } finally {
+    peer.kill();
+  }
+}
 
-const log = (...a) => console.log(new Date().toISOString(), ...a);
-const p = spawn(process.execPath, [PEER], {
-  cwd: dir,
-  env: { ...process.env, MESH_JOIN: "always", MESH_SESSION_NAME: name },
-  stdio: ["pipe", "pipe", "inherit"],
-});
-const send = (o) => p.stdin.write(JSON.stringify(o) + "\n");
-let nextId = 10;
-const pending = new Map();
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-let buf = "";
-p.stdout.on("data", (d) => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    let m; try { m = JSON.parse(line); } catch { continue; }
-    if (m.id === 1) {
-      send({ jsonrpc: "2.0", method: "notifications/initialized" });
-      send({ jsonrpc: "2.0", method: "tools/list" });
-      log("joined as", name);
-    } else if (m.id && pending.has(m.id)) {
-      pending.get(m.id)(m); pending.delete(m.id);
-    } else if (m.method === "notifications/claude/channel") {
-      const meta = m.params?.meta || {};
-      const rec = { ts: new Date().toISOString(), from: meta.from, msg_id: meta.msg_id, content: m.params?.content || "" };
-      fs.appendFileSync(inbox, JSON.stringify(rec) + "\n");
-      log("inbox <-", meta.from, JSON.stringify(rec.content).slice(0, 80));
+function acquireLock(pidFile) {
+  try {
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    if (pid && pidAlive(pid)) return false;
+  } catch {}
+  fs.writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
+  return true;
+}
+
+function appendInbox(file, record) {
+  try {
+    if (shouldRotate(fs.statSync(file).size, INBOX_MAX)) fs.renameSync(file, `${file}.1`);
+  } catch {}
+  fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
+}
+
+async function cmdJoin(argv) {
+  const { flags } = parseFlags(argv, ["name", "dir", "peer", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const name = sanitizeName(flags.name ?? process.env.MESH_AS ?? "m4-dsh");
+  if (!name) fail(EXIT.usage, "a session name is required");
+  const peerPath = String(flags.peer ?? REPO_PEER);
+  if (!fs.existsSync(peerPath)) fail(EXIT.peer, `peer not found: ${peerPath}`);
+  if (!fs.existsSync(path.join(meshHome(), "config.json"))) fail(EXIT.peer, `not paired: ${path.join(meshHome(), "config.json")} is missing (run \`mesh pair\`)`);
+
+  const dir = path.resolve(String(flags.dir ?? path.join(process.env.HOME ?? ".", ".mesh-names", name)));
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const inbox = path.join(dir, "inbox.jsonl");
+  const outbox = path.join(dir, "outbox.jsonl");
+  const failed = path.join(dir, "outbox.failed.jsonl");
+  const stateFile = path.join(dir, "outbox.offset");
+  const pidFile = path.join(dir, "bridge.pid");
+  if (!acquireLock(pidFile)) fail(EXIT.lock, `already running (${pidFile})`);
+
+  let stopping = false;
+  let offset = 0;
+  try {
+    offset = Number(fs.readFileSync(stateFile, "utf8").trim() || 0) || 0;
+  } catch {}
+  const cleanup = () => {
+    try {
+      if (Number(fs.readFileSync(pidFile, "utf8").trim()) === process.pid) fs.unlinkSync(pidFile);
+    } catch {}
+  };
+  process.on("exit", cleanup);
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+      stopping = true;
+      peer?.kill();
+      setTimeout(() => process.exit(EXIT.ok), 300).unref();
+    });
+  }
+
+  let peer;
+  let attempt = 0;
+  const pump = setInterval(async () => {
+    let text;
+    try {
+      text = fs.readFileSync(outbox, "utf8");
+    } catch {
+      return;
     }
-  }
-});
+    const { records, nextOffset, bad } = parseOutbox(text, offset);
+    if (bad) log(`skipped ${bad} malformed outbox line(s)`);
+    if (nextOffset !== offset) {
+      offset = nextOffset;
+      fs.writeFileSync(stateFile, String(offset), { mode: 0o600 });
+    }
+    for (const r of records) {
+      try {
+        const res = await peer.request("tools/call", { name: "send_message", arguments: r });
+        log(`sent -> ${r.to}: ${toolText(res).slice(0, 120)}`);
+      } catch (err) {
+        fs.appendFileSync(failed, JSON.stringify({ ...r, error: String(err.message ?? err) }) + "\n", { mode: 0o600 });
+        log(`send failed -> ${r.to}: ${err.message ?? err}`);
+      }
+    }
+  }, 500);
+  pump.unref();
 
-// outbox: {to, message} one per line
-let sent = 0;
-setInterval(() => {
-  let body;
-  try { body = fs.readFileSync(outbox, "utf8"); } catch { return; }
-  const lines = body.split("\n").filter(Boolean);
-  if (lines.length <= sent) return;
-  for (const line of lines.slice(sent)) {
-    let o; try { o = JSON.parse(line); } catch { continue; }
-    const id = nextId++;
-    pending.set(id, (m) => log("sent ->", o.to, JSON.stringify(m.result?.content?.[0]?.text || m.error || "").slice(0, 120)));
-    send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "send_message", arguments: { to: o.to, message: o.message } } });
-  }
-  sent = lines.length;
-}, 500);
+  const run = async () => {
+    peer = startPeer({
+      peerPath,
+      joinMode: "always",
+      name,
+      dir,
+      onNotification: (m) => {
+        if (m.method !== "notifications/claude/channel") return;
+        const rec = inboxRecord(m.params);
+        appendInbox(inbox, rec);
+        log(`inbox <- ${rec.from}: ${JSON.stringify(rec.content.slice(0, 80))}`);
+      },
+      onExit: (code) => {
+        if (stopping) return;
+        log(`peer exited (${code}); reconnecting in ${backoffMs(attempt)}ms`);
+        setTimeout(() => {
+          attempt++;
+          run().catch((e) => log(`reconnect failed: ${e.message}`));
+        }, backoffMs(attempt)).unref();
+      },
+    });
+    await peer.init();
+    attempt = 0;
+    log(`joined as ${name} · inbox ${inbox} · outbox ${outbox}`);
+  };
+  await run();
+}
 
-send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "dsh-mesh", version: "0.1" } } });
-p.on("exit", (c) => { log("peer exited", c); process.exit(c ?? 0); });
-process.on("SIGTERM", () => { try { p.kill(); } catch {} process.exit(0); });
+function cmdSay(argv) {
+  const { flags, rest } = parseFlags(argv, ["reply-to", "as", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const [to, ...words] = rest;
+  const message = words.join(" ");
+  if (!to || !message) fail(EXIT.usage, "usage: dsh-mesh say <to> <message...>");
+  const name = sanitizeName(flags.as ?? process.env.MESH_AS ?? "m4-dsh");
+  const args = { to, message };
+  if (flags["reply-to"]) args.in_reply_to = String(flags["reply-to"]);
+  const dir = path.join(process.env.HOME ?? ".", ".mesh-names", name);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  oneShot({ peerPath: REPO_PEER, name, joinMode: "never", dir, tool: "send_message", args })
+    .then((t) => console.log(t))
+    .catch((e) => fail(EXIT.peer, e.message));
+}
+
+async function cmdRead(argv) {
+  const { flags } = parseFlags(argv, ["name", "as", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const name = sanitizeName(flags.name ?? flags.as ?? process.env.MESH_AS ?? "m4-dsh");
+  const dir = path.join(process.env.HOME ?? ".", ".mesh-names", name);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    const t = await oneShot({ peerPath: REPO_PEER, name, joinMode: "pull", dir, tool: "read_messages", args: {} });
+    console.log(t || "(no unread messages)");
+  } catch (e) {
+    fail(EXIT.peer, e.message);
+  }
+}
+
+function cmdStatus(argv) {
+  const { flags } = parseFlags(argv, ["dir", "name", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const name = sanitizeName(flags.name ?? process.env.MESH_AS ?? "m4-dsh");
+  const dir = path.resolve(String(flags.dir ?? path.join(process.env.HOME ?? ".", ".mesh-names", name)));
+  const read = (f) => {
+    try {
+      return fs.readFileSync(path.join(dir, f), "utf8");
+    } catch {
+      return "";
+    }
+  };
+  const pid = Number(read("bridge.pid").trim() || 0);
+  const inbox = read("inbox.jsonl").trim().split("\n").filter(Boolean);
+  let last = null;
+  try {
+    last = inbox.length ? JSON.parse(inbox[inbox.length - 1]) : null;
+  } catch {}
+  console.log(JSON.stringify({ dir, running: pid ? pidAlive(pid) : false, pid: pid || null, inbox_lines: inbox.length, last, outbox_offset: Number(read("outbox.offset").trim() || 0) }, null, 2));
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+try {
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") console.log(USAGE);
+  else if (cmd === "join") await cmdJoin(rest);
+  else if (cmd === "say") cmdSay(rest);
+  else if (cmd === "read") await cmdRead(rest);
+  else if (cmd === "status") cmdStatus(rest);
+  else fail(EXIT.usage, `unknown command: ${cmd}\n${USAGE}`);
+} catch (e) {
+  fail(EXIT.peer, e.message ?? String(e));
+}
