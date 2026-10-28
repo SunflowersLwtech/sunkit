@@ -29,6 +29,10 @@ Only to your HipiMind account:
   {"chars": 12, "source": "web"}`), and for one typed on the HipiMind page, whether it was played,
   on which output (a short name you gave it, `电脑喇叭` for the PC's own speakers, otherwise just `音箱` /
   `speaker`, never the hardware name), for how long and how loud, or a failure code. **Never the words.**
+- the camera driver status (`state.camera`: which driver is chosen and in use, why one was skipped,
+  plain-language detail, each driver's availability and last error) and, in `hello`, the list of
+  drivers with their plain-language descriptions. Never the camera's Bluetooth address, a serial
+  number, the capture device's name or capture error output;
 - JPEG frames, **only while you have the HipiMind page open and asked for live video**;
   HipiMind forwards them to your browser and keeps nothing.
 
@@ -300,6 +304,17 @@ code in `error`, never the local text: `no_output`, `ai_off`, `tts_failed`, `pla
 `no_result` (a sidecar that never heard back). A device that can do
 this lists `announce` in `hello.device.capabilities`. In sidecar mode the connector uses the
 room-companion's own `POST /api/broadcast` and follows `GET /api/broadcast/<id>`.
+
+### Camera driver (Room → Camera)
+
+The page lists the drivers from `hello.device.camera_drivers` (`auto`, `uvc`, `dji-ble-official`,
+`dji-duml`, each with what it does and what it needs) and sends the choice as `config.camera`:
+`{"driver", "allow_unofficial", "ble": {"device"}, "recover": {"auto_webcam", "wake"}, "options"?}`.
+The device keeps it in `state/camera.json` (it wins over the config file) and answers
+`unofficial_not_allowed` if `dji-duml` comes without `allow_unofficial`. **Pair** and **Switch back
+now** send `camera_action` (`pair`, `recover`, `wake`); pairing waits 25 s per protocol for a tap on
+the camera (two prompts when the community protocol is allowed), so the ack can take up to about 90 s. HipiMind never talks to the camera. See the README's "Cameras" section for what each driver
+does.
 
 ## 6. Sidecar mode
 

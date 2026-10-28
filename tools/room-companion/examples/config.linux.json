@@ -4,5 +4,6 @@
   "allowed_cidrs": ["100.64.0.0/10", "fd7a:115c:a1e0::/48"],
   "asr_dir": "/models/sense-voice",
   "vad_model": "/models/silero_vad.onnx",
-  "notifier": {"type": "log"}
+  "notifier": {"type": "log"},
+  "camera": {"driver": "auto", "allow_unofficial": false}
 }
