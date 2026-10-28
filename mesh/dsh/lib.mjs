@@ -64,6 +64,35 @@ export function inboxRecord(params, now = new Date()) {
   };
 }
 
+/**
+ * Inbox lines from `cursor` (a count of lines already read) onward. The cursor
+ * only ever counts complete lines, so a torn write is read on the next call
+ * instead of half-parsed; a shrink (rotated file) restarts at 0.
+ */
+export function readInbox(text, cursor = 0) {
+  const lines = text.split("\n");
+  const complete = lines.slice(0, -1); // last element is "" or a torn fragment
+  const start = cursor > complete.length ? 0 : cursor;
+  const messages = [];
+  let bad = 0;
+  for (const line of complete.slice(start)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      messages.push(JSON.parse(trimmed));
+    } catch {
+      bad++;
+    }
+  }
+  return { messages, nextCursor: complete.length, bad, restarted: start === 0 && cursor > 0 };
+}
+
+/** Where the next inbox read starts, kept beside the inbox. */
+export function cursorFrom(raw) {
+  const n = Number(String(raw ?? "").trim());
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
 /** Rotate a file to `<file>.1` once it grows past `maxBytes`; true when rotated. */
 export function shouldRotate(size, maxBytes) {
   return Number.isFinite(size) && size > maxBytes;

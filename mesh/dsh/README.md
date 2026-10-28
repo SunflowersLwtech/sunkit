@@ -24,6 +24,8 @@ to, and outbound mail is whatever the agent appends to an outbox file.
 node mesh/dsh/dsh-mesh.mjs join   [--name m4-dsh] [--dir DIR] [--peer FILE]
 node mesh/dsh/dsh-mesh.mjs say    <to> <message…> [--reply-to MSG_ID]
 node mesh/dsh/dsh-mesh.mjs read   [--name NAME]          # pull mode, one shot
+node mesh/dsh/dsh-mesh.mjs inbox  [--name NAME] [--peek] [--reset]
+node mesh/dsh/dsh-mesh.mjs retry  [--name NAME]
 node mesh/dsh/dsh-mesh.mjs status [--dir DIR]
 ```
 
@@ -39,6 +41,8 @@ Files under `~/.mesh-names/<name>/` (directory 0700):
 | `outbox.jsonl` | append `{"to":"session","message":"…","in_reply_to":"msg_…"}`; sent within a second |
 | `outbox.offset` | byte offset already sent, so a restart never re-sends (a crash mid-send may) |
 | `outbox.failed.jsonl` | sends that failed, with the error, for a manual retry |
+| `inbox.cursor` | how many inbox lines the agent has read (`inbox` advances it, `--peek` does not) |
+| `bridge.state.json` | started at, reconnects, last in/out timestamps — what `status` shows |
 | `bridge.pid` | the running bridge, for `status` and the single-instance lock |
 
 ## Why not just pull mode
@@ -63,7 +67,12 @@ keep a bridge alive.
   full, permissions) is lost rather than blocking the peer; the bridge logs it. Rotation keeps one
   previous file.
 - **Reconnect.** If the peer exits (relay restart, token revoked), the bridge restarts it after
-  1 s, 2 s, 5 s, 10 s, then every 30 s, and keeps the same offsets.
+  1 s, 2 s, 5 s, 10 s, then every 30 s, and keeps the same offsets. Five failures in a row stop
+  the bridge with a message (a bad token should not spin forever); `--keep-trying` overrides.
+- **Reading: a cursor, not the whole file.** `inbox` prints what arrived since the last read and
+  advances `inbox.cursor`; `--peek` leaves the cursor alone, `--reset` reads from the start, and a
+  rotated or truncated file puts the cursor back to 0 instead of reading nothing forever.
+- **Retrying:** `retry` re-sends `outbox.failed.jsonl` once and keeps whatever still fails.
 
 ## Security
 

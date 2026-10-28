@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeName, backoffMs, parseOutbox, inboxRecord, shouldRotate, parseFlags } from "./lib.mjs";
+import { sanitizeName, backoffMs, parseOutbox, inboxRecord, shouldRotate, parseFlags, readInbox, cursorFrom } from "./lib.mjs";
 
 test("sanitizeName keeps a relay-safe name", () => {
   assert.equal(sanitizeName("M4-DSH"), "m4-dsh");
@@ -67,4 +67,37 @@ test("parseFlags accepts both forms and rejects unknown flags", () => {
   assert.deepEqual(flags, { name: "x", dir: "/tmp/d" });
   assert.deepEqual(rest, ["to", "hello"]);
   assert.throws(() => parseFlags(["--nope"], ["name"]), /unknown option/);
+});
+
+test("readInbox returns complete lines and a stable cursor", () => {
+  const text = '{"ts":"t1","from":"a","content":"one"}\n{"ts":"t2","from":"b","content":"two"}\n{"ts":"t3"';
+  const { messages, nextCursor } = readInbox(text, 0);
+  assert.equal(messages.length, 2);
+  assert.equal(nextCursor, 2);
+  const again = readInbox(text, nextCursor);
+  assert.equal(again.messages.length, 0);
+  assert.equal(again.nextCursor, 2);
+});
+
+test("readInbox restarts when the cursor is past the end", () => {
+  const text = '{"ts":"t1","from":"a","content":"one"}\n';
+  const r = readInbox(text, 99);
+  assert.equal(r.messages.length, 1);
+  assert.equal(r.restarted, true);
+});
+
+test("readInbox counts unreadable lines without moving past them twice", () => {
+  const text = 'not json\n{"ts":"t1","from":"a","content":"one"}\n';
+  const r = readInbox(text, 0);
+  assert.equal(r.messages.length, 1);
+  assert.equal(r.bad, 1);
+  assert.equal(r.nextCursor, 2);
+});
+
+test("cursorFrom ignores junk and negatives", () => {
+  assert.equal(cursorFrom("3"), 3);
+  assert.equal(cursorFrom("3.9"), 3);
+  assert.equal(cursorFrom("x"), 0);
+  assert.equal(cursorFrom("-1"), 0);
+  assert.equal(cursorFrom(""), 0);
 });

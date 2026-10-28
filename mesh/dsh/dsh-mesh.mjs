@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { REPO_PEER, meshHome, sanitizeName, backoffMs, parseOutbox, inboxRecord, shouldRotate, parseFlags } from "./lib.mjs";
+import { REPO_PEER, meshHome, sanitizeName, backoffMs, parseOutbox, inboxRecord, shouldRotate, parseFlags, readInbox, cursorFrom } from "./lib.mjs";
 
 const EXIT = { ok: 0, usage: 2, peer: 3, timeout: 4, lock: 5 };
 const INBOX_MAX = 5 * 1024 * 1024;
@@ -21,8 +21,12 @@ const USAGE = `usage:
   dsh-mesh join   [--name NAME] [--dir DIR] [--peer FILE]
   dsh-mesh say    <to> <message...> [--reply-to MSG_ID] [--as NAME]
   dsh-mesh read   [--name NAME]
+  dsh-mesh inbox  [--name NAME] [--peek] [--reset]
+  dsh-mesh retry  [--name NAME]
   dsh-mesh status [--dir DIR]
 
+inbox prints unread mail (a cursor file keeps the position; --peek does not
+advance it, --reset reads from the start). retry re-sends outbox.failed.jsonl.
 join keeps a push session alive next to the agent and spools mail to
 <dir>/inbox.jsonl; append {"to":"session","message":"…"} lines to
 <dir>/outbox.jsonl to send. Defaults: --name $MESH_AS or m4-dsh,
@@ -146,8 +150,33 @@ function appendInbox(file, record) {
   fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
 }
 
+function writeState(dir, patch) {
+  const file = path.join(dir, "bridge.state.json");
+  let cur = {};
+  try {
+    cur = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  try {
+    fs.writeFileSync(file, JSON.stringify({ ...cur, ...patch, updated_at: new Date().toISOString() }), { mode: 0o600 });
+  } catch {}
+}
+
+function readState(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "bridge.state.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the directory a name's files live in, the same way join does. */
+function dirFor(flags) {
+  const name = sanitizeName(flags.name ?? flags.as ?? process.env.MESH_AS ?? "m4-dsh");
+  return { name, dir: path.resolve(String(flags.dir ?? path.join(process.env.HOME ?? ".", ".mesh-names", name))) };
+}
+
 async function cmdJoin(argv) {
-  const { flags } = parseFlags(argv, ["name", "dir", "peer", "help"]);
+  const { flags } = parseFlags(argv, ["name", "dir", "peer", "help", "keep-trying"]);
   if (flags.help) return console.log(USAGE);
   const name = sanitizeName(flags.name ?? process.env.MESH_AS ?? "m4-dsh");
   if (!name) fail(EXIT.usage, "a session name is required");
@@ -185,6 +214,8 @@ async function cmdJoin(argv) {
 
   let peer;
   let attempt = 0;
+  let failures = 0;
+  writeState(dir, { name, started_at: new Date().toISOString(), pid: process.pid, reconnects: 0 });
   const pump = setInterval(async () => {
     let text;
     try {
@@ -220,10 +251,17 @@ async function cmdJoin(argv) {
         if (m.method !== "notifications/claude/channel") return;
         const rec = inboxRecord(m.params);
         appendInbox(inbox, rec);
+        writeState(dir, { last_inbox_at: rec.ts, last_from: rec.from });
         log(`inbox <- ${rec.from}: ${JSON.stringify(rec.content.slice(0, 80))}`);
       },
       onExit: (code) => {
         if (stopping) return;
+        failures++;
+        writeState(dir, { last_exit: code, last_exit_at: new Date().toISOString(), reconnects: failures });
+        if (failures >= 5 && !flags["keep-trying"]) {
+          log(`peer failed ${failures} times in a row (last exit ${code}); giving up — check \`mesh pair\` and the relay, or pass --keep-trying`);
+          process.exit(EXIT.peer);
+        }
         log(`peer exited (${code}); reconnecting in ${backoffMs(attempt)}ms`);
         setTimeout(() => {
           attempt++;
@@ -233,6 +271,7 @@ async function cmdJoin(argv) {
     });
     await peer.init();
     attempt = 0;
+    failures = 0;
     log(`joined as ${name} · inbox ${inbox} · outbox ${outbox}`);
   };
   await run();
@@ -268,6 +307,70 @@ async function cmdRead(argv) {
   }
 }
 
+async function cmdInbox(argv) {
+  const { flags } = parseFlags(argv, ["name", "dir", "peek", "reset", "json", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const { name, dir } = dirFor(flags);
+  const inbox = path.join(dir, "inbox.jsonl");
+  const cursorFile = path.join(dir, "inbox.cursor");
+  let text = "";
+  try {
+    text = fs.readFileSync(inbox, "utf8");
+  } catch {}
+  let cursor = 0;
+  if (!flags.reset) {
+    try {
+      cursor = cursorFrom(fs.readFileSync(cursorFile, "utf8"));
+    } catch {}
+  }
+  const { messages, nextCursor, bad, restarted } = readInbox(text, cursor);
+  for (const m of messages) {
+    if (flags.json) console.log(JSON.stringify(m));
+    else console.log(`${m.ts ?? ""}  ${m.from ?? "?"}\n  ${String(m.content ?? "").replace(/\n/g, "\n  ")}`);
+  }
+  if (!flags.peek) fs.writeFileSync(cursorFile, String(nextCursor), { mode: 0o600 });
+  const bits = [`${messages.length} new`, `${nextCursor} total`];
+  if (bad) bits.push(`${bad} unreadable`);
+  if (restarted) bits.push("cursor was past the end, restarted");
+  if (flags.peek) bits.push("peek: cursor unchanged");
+  log(`inbox ${name}: ${bits.join(", ")}`);
+}
+
+async function cmdRetry(argv) {
+  const { flags } = parseFlags(argv, ["name", "dir", "help"]);
+  if (flags.help) return console.log(USAGE);
+  const { name, dir } = dirFor(flags);
+  const failed = path.join(dir, "outbox.failed.jsonl");
+  let text = "";
+  try {
+    text = fs.readFileSync(failed, "utf8");
+  } catch {
+    return log("nothing to retry");
+  }
+  const { records } = parseOutbox(text, 0);
+  if (!records.length) return log("nothing to retry");
+  const peer = startPeer({ peerPath: REPO_PEER, joinMode: "never", name, dir, onExit: () => {} });
+  const still = [];
+  let sent = 0;
+  try {
+    await peer.init();
+    for (const r of records) {
+      try {
+        const res = await peer.request("tools/call", { name: "send_message", arguments: r });
+        sent++;
+        log(`retried -> ${r.to}: ${toolText(res).slice(0, 120)}`);
+      } catch (err) {
+        still.push({ ...r, error: String(err.message ?? err) });
+        log(`retry failed -> ${r.to}: ${err.message ?? err}`);
+      }
+    }
+  } finally {
+    peer.kill();
+  }
+  fs.writeFileSync(failed, still.map((r) => JSON.stringify(r)).join("\n") + (still.length ? "\n" : ""), { mode: 0o600 });
+  console.log(`${sent} sent, ${still.length} still failing`);
+}
+
 function cmdStatus(argv) {
   const { flags } = parseFlags(argv, ["dir", "name", "help"]);
   if (flags.help) return console.log(USAGE);
@@ -286,7 +389,11 @@ function cmdStatus(argv) {
   try {
     last = inbox.length ? JSON.parse(inbox[inbox.length - 1]) : null;
   } catch {}
-  console.log(JSON.stringify({ dir, running: pid ? pidAlive(pid) : false, pid: pid || null, inbox_lines: inbox.length, last, outbox_offset: Number(read("outbox.offset").trim() || 0) }, null, 2));
+  let state = null;
+  try {
+    state = JSON.parse(read("bridge.state.json"));
+  } catch {}
+  console.log(JSON.stringify({ dir, running: pid ? pidAlive(pid) : false, pid: pid || null, inbox_lines: inbox.length, last, outbox_offset: Number(read("outbox.offset").trim() || 0), state }, null, 2));
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -295,6 +402,8 @@ try {
   else if (cmd === "join") await cmdJoin(rest);
   else if (cmd === "say") cmdSay(rest);
   else if (cmd === "read") await cmdRead(rest);
+  else if (cmd === "inbox") await cmdInbox(rest);
+  else if (cmd === "retry") await cmdRetry(rest);
   else if (cmd === "status") cmdStatus(rest);
   else fail(EXIT.usage, `unknown command: ${cmd}\n${USAGE}`);
 } catch (e) {
