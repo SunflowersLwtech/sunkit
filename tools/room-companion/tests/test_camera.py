@@ -371,6 +371,23 @@ class ManagerRulesTest(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(started, [1])
 
+    def test_tick_retries_a_failed_helper_check_in_the_background(self):
+        # Bluetooth coming up after the app: a check that failed is tried again from tick(),
+        # so recovery can still happen without anyone pressing a button
+        now = [10_000.0]
+        d = tempfile.mkdtemp()
+        b = StubBridge(raise_on="check")
+        video = FakeVideo(os.path.join(d, "none.json"))
+        video.state, video.waiting_since = "waiting_device", now[0] - 100
+        m = CameraManager({"data_dir": d, "camera_host": {"uvc_wait_s": 0}}, video, Events(),
+                          bridge=b, sleep=lambda s: None, monotonic=lambda: now[0])
+        self.assertFalse(m.ble_available())
+        self.assertEqual(b.calls.count("check"), 1)
+        now[0] += 61
+        m.tick(now[0])
+        time.sleep(0.5)
+        self.assertGreaterEqual(b.calls.count("check"), 2)
+
 
 class TickTest(unittest.TestCase):
     def test_waits_for_the_webcam_to_be_missing_then_backs_off(self):
@@ -560,6 +577,28 @@ class ActionBudgetTest(unittest.TestCase):
         ok, detail = m.action("pair")
         self.assertTrue(ok, detail)
         self.assertEqual(b.calls.count("start"), 1)
+
+    def test_a_disconnect_does_not_restart_a_helper_stopped_mid_action(self):
+        # the handshake hangs after the connect succeeded: the helper is stopped, and the final
+        # disconnect must not start it again (that start is not bounded by the request timeout)
+        class ConnectOk(HungHelper):
+            def call(self, cmd, timeout=30, **kw):
+                if cmd == "connect" and self.running:
+                    self.calls.append(cmd)
+                    return {"ok": True, "addr": kw.get("addr") or FAKE_ADDR}
+                return super().call(cmd, timeout, **kw)
+        now = [0.0]
+        d = tempfile.mkdtemp()
+        b = ConnectOk(now)
+        m = CameraManager({"data_dir": d, "camera": {"allow_unofficial": True}}, FakeVideo(os.path.join(d, "x")),
+                          Events(), bridge=b, sleep=lambda s: now.__setitem__(0, now[0] + s),
+                          monotonic=lambda: now[0])
+        m.remember(addr=FAKE_ADDR)
+        ok, detail = m.action("recover")
+        self.assertFalse(ok)
+        self.assertNotIn("start", b.calls)
+        self.assertNotIn("disconnect", b.calls)
+        self.assertLessEqual(now[0], 85)
 
 
 class HungHelper:
