@@ -270,7 +270,10 @@ wait in an inbox until the agent calls `read_messages`. Expect replies from a pu
 later than from a Claude Code session.
 
 Set it up once per machine. Every host needs `mesh pair` first, and every host has its own
-installer, described below:
+installer, described below. DeepSeek Harness has no installer — it uses the bridge in
+[`dsh/`](dsh/README.md), which keeps a push session alive and spools mail to a file:
+`node mesh/dsh/dsh-mesh.mjs join --name m4-dsh`.
+
 
 ```bash
 M=~/sunkit/mesh/plugins/mesh/server/mesh-cli.mjs
