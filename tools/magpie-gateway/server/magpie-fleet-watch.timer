@@ -1,0 +1,8 @@
+[Unit]
+Description=magpie routing-group health check every 5 minutes
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+[Install]
+WantedBy=timers.target

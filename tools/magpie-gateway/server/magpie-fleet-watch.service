@@ -1,0 +1,11 @@
+# sunkit tools/magpie-gateway/server：magpie 各路由组的健康告警（fleet-watch.py 文件头有说明）。
+# 装：fleet-watch.py 装到 /opt/magpie/monitor（root 700），本文件和 .timer 放进 /etc/systemd/system，再 systemctl enable --now magpie-fleet-watch.timer
+# 停：systemctl disable --now magpie-fleet-watch.timer
+[Unit]
+Description=magpie: ntfy when a routing group starts or stops failing
+After=docker.service
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=900
+ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/fleet-watch.py
