@@ -88,5 +88,5 @@ original repositories with full commit history preserved (`git subtree`):
 
 ## License
 
-Individual plugins keep the licenses of their source repositories (see each
-plugin directory).
+Apache-2.0 — see [LICENSE](LICENSE). Individual plugins keep the licenses
+of their source repositories where noted (see each plugin directory).
