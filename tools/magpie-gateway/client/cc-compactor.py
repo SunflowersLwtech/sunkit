@@ -133,7 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compactors": {
         "surgical_hybrid": {
             "mode": "hybrid",
-            "byok_chain": ["auto-glm-5-3-flash", "always-up"],
+            "byok_chain": ["zcode/GLM-5.3", "claude-haiku-5-5", "always-up"],
             "preserve_buckets": [
                 "file_paths_and_line_ranges",
                 "git_diff_stat",
@@ -213,7 +213,10 @@ def load_magpie_connection(cfg: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
 
-    headers: dict[str, str] = {"Content-Type": "application/json"}
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+    }
     if custom_headers_raw:
         for line in custom_headers_raw.replace(";", "\n").splitlines():
             if ":" in line:
@@ -967,7 +970,7 @@ def distill_with_byok_llm(
     timeout_sec = float(limits.get("byok_timeout_sec", 35.0))
 
     compactor_cfg = cfg.get("compactors", {}).get("surgical_hybrid", {})
-    byok_chain = compactor_cfg.get("byok_chain") or ["auto-glm-5-3-flash", "always-up"]
+    byok_chain = compactor_cfg.get("byok_chain") or ["zcode/GLM-5.3", "claude-haiku-5-5", "always-up"]
 
     # Build bounded excerpt from middle conversation turns
     conv = transcript_state.get("conversation_records") or []

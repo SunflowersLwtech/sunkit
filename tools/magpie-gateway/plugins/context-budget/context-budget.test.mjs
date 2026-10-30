@@ -115,7 +115,32 @@ describe("context-budget Magpie middleware plugin", () => {
       options: {},
     });
 
-    assert.equal(JSON.stringify(out.messages), beforeJson);
+    assert.equal(out, undefined);
+    assert.equal(JSON.stringify(body.messages), beforeJson);
+  });
+
+  it("completes a 3 MB history well inside Magpie's 250 ms moejs hook limit", () => {
+    const body = buildSyntheticSession({ turnCount: 60, toolResultSize: 52000 });
+    const jsonSize = JSON.stringify(body).length;
+    assert.ok(jsonSize > 3_000_000, `Expected >3MB payload, got ${jsonSize}`);
+
+    const t0 = performance.now();
+    const outClaude = onProvider(body, {
+      provider: { id: "claude", name: "claude", account: "weiliu@duocodetech.com", model: "claude-opus-4-7" },
+      options: {},
+    });
+    const claudeMs = performance.now() - t0;
+    assert.equal(outClaude, undefined);
+    assert.ok(claudeMs < 5, `Expected O(1) <5ms on claude, took ${claudeMs.toFixed(2)}ms`);
+
+    const t1 = performance.now();
+    const outZcode = onProvider(body, {
+      provider: { id: "zcode", name: "zcode", account: "default", model: "GLM-5.3" },
+      options: {},
+    });
+    const zcodeMs = performance.now() - t1;
+    assert.ok(outZcode);
+    assert.ok(zcodeMs < 50, `Expected <50ms on 3MB zcode slimming, took ${zcodeMs.toFixed(2)}ms`);
   });
 
   it("slims a ~280K token session to fit zcode (200K) while preserving head/tail markers and recent turns", () => {

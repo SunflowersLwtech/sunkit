@@ -129,7 +129,7 @@ quota_scarcity = 0.18
 [compactors.surgical_hybrid]
 mode = "hybrid"
 # Ordered BYOK model groups on Magpie gateway (zero primary Claude seat burn)
-byok_chain = ["auto-glm-5-3-flash", "always-up"]
+byok_chain = ["zcode/GLM-5.3", "claude-haiku-5-5", "always-up"]
 preserve_buckets = [
   "file_paths_and_line_ranges",
   "git_diff_stat",

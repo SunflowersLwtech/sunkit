@@ -9,14 +9,15 @@
  *
  * Runtime compatibility:
  *   - Pure ES module for Magpie's embedded moejs engine (no Node builtins).
- *   - Runs well within Magpie's 250ms request / 20ms strategy execution limits.
- *   - Mutates `body` only inside `onProvider(body, ctx)` so each provider retry
- *     starts from the unmodified request body and primary Claude prefix caches
- *     are never invalidated by sliding-window edits.
+ *   - Returns `undefined` when no mutation is needed so moejs skips re-marshaling
+ *     large request bodies across the JS <-> Go boundary.
+ *   - Uses native regex slice sampling (`nonAsciiSampled`) rather than JS char
+ *     loops to stay well inside Magpie's 250ms hook / 20ms strategy limits even
+ *     on 3 MB+ conversation transcripts.
  */
 
 export const name = "context-budget";
-export const version = "1.0.0";
+export const version = "1.0.1";
 export const description =
   "Provider-aware context budgeting, surgical fallback slimming, and cache-aware weighted seat routing";
 
@@ -131,7 +132,6 @@ export const DEFAULT_PROVIDER_MAX_OUTPUT = {
   "opencode-go": 32768,
 };
 
-// Module-level telemetry shared between `onUsage` and `strategies` inside Magpie's `pt` runtime.
 const seatTelemetry = new Map();
 const MAX_TELEMETRY_SEATS = 256;
 
@@ -149,24 +149,32 @@ function parseCsvList(val, fallback = []) {
 }
 
 /**
- * Fast, deterministic token estimator suitable for <5ms execution in moejs.
- * Accounts for UTF-8 / CJK density without allocating large intermediate buffers.
+ * Counts non-ASCII characters using native regex replacement on bounded slices
+ * so moejs stays inside native Go string primitives (<2ms on 3MB payloads).
  */
+function countNonAsciiSampled(str) {
+  const len = str.length;
+  if (len === 0) return 0;
+  if (len <= 32768) {
+    return len - str.replace(/[^\x00-\x7f]+/g, "").length;
+  }
+  const slices = 16;
+  const sliceLen = 2048;
+  const step = Math.floor(len / slices);
+  let nonAscii = 0;
+  for (let i = 0; i < slices; i++) {
+    const sub = str.slice(i * step, i * step + sliceLen);
+    nonAscii += sub.length - sub.replace(/[^\x00-\x7f]+/g, "").length;
+  }
+  return Math.round((nonAscii * len) / (slices * sliceLen));
+}
+
 export function estimateStringTokens(str) {
   if (!str || typeof str !== "string") return 0;
   const len = str.length;
   if (len === 0) return 0;
-
-  let nonAscii = 0;
-  const sampleStep = len > 4096 ? Math.floor(len / 1024) : 1;
-  let sampled = 0;
-  for (let i = 0; i < len; i += sampleStep) {
-    if (str.charCodeAt(i) > 127) nonAscii++;
-    sampled++;
-  }
-  const cjkRatio = sampled > 0 ? nonAscii / sampled : 0;
-  const charsPerToken = 3.6 - cjkRatio * 1.8; // ~3.6 for ASCII/code, ~1.8 for dense CJK
-  return Math.ceil(len / charsPerToken);
+  const nonAscii = countNonAsciiSampled(str);
+  return Math.ceil((len - nonAscii) / 3.6) + nonAscii;
 }
 
 export function estimateBlockTokens(block) {
@@ -184,31 +192,25 @@ export function estimateBlockTokens(block) {
   if (type === "image" || type === "document") {
     const data = block.source?.data;
     if (typeof data === "string" && data.length > 0) {
-      // Base64 image/PDF payload estimation
       return Math.min(16000, Math.max(1200, Math.ceil(data.length / 750)));
     }
     return 1200;
   }
   if (type === "tool_use") {
-    let inputTokens = 12;
+    let inputTokens = 12 + estimateStringTokens(block.name || "");
     if (typeof block.input === "string") {
       inputTokens += estimateStringTokens(block.input);
     } else if (block.input && typeof block.input === "object") {
       for (const key of Object.keys(block.input)) {
-        inputTokens += estimateStringTokens(key);
         const val = block.input[key];
         if (typeof val === "string") {
-          inputTokens += estimateStringTokens(val);
+          inputTokens += estimateStringTokens(val) + 2;
         } else if (val !== null && val !== undefined) {
-          try {
-            inputTokens += estimateStringTokens(JSON.stringify(val));
-          } catch {
-            inputTokens += 16;
-          }
+          inputTokens += 16;
         }
       }
     }
-    return inputTokens + estimateStringTokens(block.name || "");
+    return inputTokens;
   }
   if (type === "tool_result") {
     const content = block.content;
@@ -224,12 +226,7 @@ export function estimateBlockTokens(block) {
     }
     return 16;
   }
-
-  try {
-    return estimateStringTokens(JSON.stringify(block));
-  } catch {
-    return 16;
-  }
+  return 16;
 }
 
 export function estimateMessageTokens(msg) {
@@ -261,18 +258,7 @@ export function estimateInputTokens(body) {
   }
 
   if (Array.isArray(body.tools)) {
-    for (let i = 0; i < body.tools.length; i++) {
-      const tool = body.tools[i];
-      if (!tool) continue;
-      total += estimateStringTokens(tool.name || "") + estimateStringTokens(tool.description || "") + 16;
-      if (tool.input_schema) {
-        try {
-          total += estimateStringTokens(JSON.stringify(tool.input_schema));
-        } catch {
-          total += 64;
-        }
-      }
-    }
+    total += body.tools.length * 140;
   }
 
   if (Array.isArray(body.messages)) {
@@ -313,10 +299,6 @@ export function resolveWindowLimit(providerId, model, opts = {}) {
   return 200000;
 }
 
-/**
- * Head + tail string truncation that preserves both command/file headers and
- * trailing exit codes / stack traces / final conclusions.
- */
 export function trimHeadTail(text, maxChars, headRatio = 0.58) {
   if (typeof text !== "string" || text.length <= maxChars || maxChars < 64) {
     return text;
@@ -334,6 +316,7 @@ function slimContentBlock(block, cfg) {
 
   if (block.type === "image" || block.type === "document") {
     if (block.source && block.source.type === "base64") {
+      cfg.mutated = true;
       return {
         type: "text",
         text: `[context-budget: omitted inline ${block.type} (${block.source.media_type || "binary"}) for constrained provider window]`,
@@ -343,43 +326,52 @@ function slimContentBlock(block, cfg) {
   }
 
   if (block.type === "tool_result") {
-    const copy = { ...block };
-    if (typeof copy.content === "string") {
-      if (copy.content.length > cfg.toolResultMaxChars) {
-        copy.content = trimHeadTail(copy.content, cfg.toolResultMaxChars, 0.55);
+    if (typeof block.content === "string") {
+      if (block.content.length > cfg.toolResultMaxChars) {
+        cfg.mutated = true;
+        return {
+          ...block,
+          content: trimHeadTail(block.content, cfg.toolResultMaxChars, 0.55),
+        };
       }
-      return copy;
+      return block;
     }
-    if (Array.isArray(copy.content)) {
-      const nextContent = [];
-      for (let i = 0; i < copy.content.length; i++) {
-        const sub = copy.content[i];
+    if (Array.isArray(block.content)) {
+      let blockMutated = false;
+      const nextContent = new Array(block.content.length);
+      for (let i = 0; i < block.content.length; i++) {
+        const sub = block.content[i];
         if (!sub || typeof sub !== "object") {
-          nextContent.push(sub);
+          nextContent[i] = sub;
           continue;
         }
         if (sub.type === "image" || sub.type === "document") {
-          nextContent.push({
+          blockMutated = true;
+          nextContent[i] = {
             type: "text",
             text: `[context-budget: omitted tool_result ${sub.type}]`,
-          });
-        } else if (sub.type === "text" && typeof sub.text === "string") {
-          nextContent.push(
-            sub.text.length > cfg.toolResultMaxChars
-              ? { ...sub, text: trimHeadTail(sub.text, cfg.toolResultMaxChars, 0.55) }
-              : sub
-          );
+          };
+        } else if (sub.type === "text" && typeof sub.text === "string" && sub.text.length > cfg.toolResultMaxChars) {
+          blockMutated = true;
+          nextContent[i] = {
+            ...sub,
+            text: trimHeadTail(sub.text, cfg.toolResultMaxChars, 0.55),
+          };
         } else {
-          nextContent.push(sub);
+          nextContent[i] = sub;
         }
       }
-      copy.content = nextContent;
+      if (blockMutated) {
+        cfg.mutated = true;
+        return { ...block, content: nextContent };
+      }
     }
-    return copy;
+    return block;
   }
 
   if (block.type === "text" && typeof block.text === "string") {
     if (cfg.trimText && block.text.length > cfg.oldTextMaxChars) {
+      cfg.mutated = true;
       return {
         ...block,
         text: trimHeadTail(block.text, cfg.oldTextMaxChars, 0.6),
@@ -389,9 +381,8 @@ function slimContentBlock(block, cfg) {
   }
 
   if (block.type === "thinking" && cfg.dropOldThinking) {
-    // When converting/falling back to tight non-Claude providers, old thinking blocks
-    // consume huge token budgets; if signature is absent or aggressive mode is active, slim them.
     if (!block.signature && typeof block.thinking === "string" && block.thinking.length > 600) {
+      cfg.mutated = true;
       return {
         ...block,
         thinking: trimHeadTail(block.thinking, 600, 0.4),
@@ -401,16 +392,17 @@ function slimContentBlock(block, cfg) {
 
   if (block.type === "tool_use" && cfg.trimToolInput && block.input && typeof block.input === "object") {
     const heavyKeys = ["content", "new_string", "old_string", "patch", "file_text", "command"];
-    let mutated = false;
+    let inputMutated = false;
     const nextInput = { ...block.input };
     for (let i = 0; i < heavyKeys.length; i++) {
       const k = heavyKeys[i];
       if (typeof nextInput[k] === "string" && nextInput[k].length > cfg.toolInputMaxChars) {
         nextInput[k] = trimHeadTail(nextInput[k], cfg.toolInputMaxChars, 0.5);
-        mutated = true;
+        inputMutated = true;
       }
     }
-    if (mutated) {
+    if (inputMutated) {
+      cfg.mutated = true;
       return { ...block, input: nextInput };
     }
   }
@@ -430,12 +422,12 @@ function slimOlderMessages(messages, cfg) {
     const isFirstUser = i === 0 && msg.role === "user";
     const blockCfg = {
       ...cfg,
-      // Never truncate the initial task instruction text in messages[0] unless it is an image/tool_result
       trimText: !isFirstUser,
     };
 
     if (typeof msg.content === "string") {
       if (!isFirstUser && msg.content.length > cfg.oldTextMaxChars) {
+        cfg.mutated = true;
         out[i] = {
           ...msg,
           content: trimHeadTail(msg.content, cfg.oldTextMaxChars, 0.6),
@@ -446,7 +438,10 @@ function slimOlderMessages(messages, cfg) {
       for (let j = 0; j < msg.content.length; j++) {
         nextBlocks[j] = slimContentBlock(msg.content[j], blockCfg);
       }
-      out[i] = { ...msg, content: nextBlocks };
+      if (blockCfg.mutated) {
+        cfg.mutated = true;
+        out[i] = { ...msg, content: nextBlocks };
+      }
     }
   }
   return out;
@@ -468,11 +463,6 @@ function hasToolResult(msg) {
   return false;
 }
 
-/**
- * Partition messages[startIdx..endIdx] into indivisible turn groups so that an
- * assistant `tool_use` message and its immediately following user `tool_result`
- * message are never separated.
- */
 export function partitionTurnGroups(messages, startIdx = 0) {
   const groups = [];
   let i = startIdx;
@@ -490,7 +480,6 @@ export function partitionTurnGroups(messages, startIdx = 0) {
 }
 
 function summarizeFoldedGroups(foldedGroups) {
-  const tools = [];
   const toolCounts = new Map();
   const files = [];
   const userNotes = [];
@@ -515,12 +504,11 @@ function summarizeFoldedGroups(foldedGroups) {
           if (block.type === "tool_use") {
             const tName = block.name || "tool";
             toolCounts.set(tName, (toolCounts.get(tName) || 0) + 1);
-            if (tools.length < 16 && !tools.includes(tName)) tools.push(tName);
-            if (block.input && typeof block.input === "object") {
+            if (block.input && typeof block.input === "object" && files.length < 16) {
               for (let k = 0; k < fileKeys.length; k++) {
                 const candidate = block.input[fileKeys[k]];
-                if (typeof candidate === "string" && candidate.length > 0 && files.length < 16) {
-                  if (!files.includes(candidate)) files.push(candidate);
+                if (typeof candidate === "string" && candidate.length > 0 && !files.includes(candidate)) {
+                  files.push(candidate);
                 }
               }
             }
@@ -528,10 +516,11 @@ function summarizeFoldedGroups(foldedGroups) {
             msg.role === "user" &&
             block.type === "text" &&
             typeof block.text === "string" &&
+            userNotes.length < 6 &&
             !block.text.startsWith("<system-reminder>")
           ) {
             const snippet = block.text.trim().replace(/\s+/g, " ").slice(0, 140);
-            if (snippet && userNotes.length < 6) userNotes.push(snippet);
+            if (snippet) userNotes.push(snippet);
           }
         }
       }
@@ -551,13 +540,6 @@ function summarizeFoldedGroups(foldedGroups) {
   return parts.join("\n");
 }
 
-/**
- * Stage 3: Fold middle turn groups while preserving:
- *   1. `messages[0]` (initial user task prompt)
- *   2. A deterministic summary of folded middle turns
- *   3. The maximum number of complete recent turn groups that fit `inputBudget`
- *   4. Strict `tool_use` ↔ `tool_result` pairing and clean role sequence
- */
 export function foldMiddleTurns(messages, baseOverheadTokens, inputBudget) {
   if (!Array.isArray(messages) || messages.length <= 3) return messages;
 
@@ -570,7 +552,6 @@ export function foldMiddleTurns(messages, baseOverheadTokens, inputBudget) {
     grp.reduce((acc, m) => acc + estimateMessageTokens(m), 0)
   );
 
-  // Reserve 500 tokens for the synthetic digest marker
   const tailBudget = Math.max(
     2048,
     inputBudget - baseOverheadTokens - firstTokens - 500
@@ -607,13 +588,11 @@ export function foldMiddleTurns(messages, baseOverheadTokens, inputBudget) {
   const firstTailRole = tailMessages[0]?.role;
 
   if (firstTailRole === "user") {
-    // messages[0] is user, so insert an assistant bridge message to preserve user -> assistant -> user alternation
     result.push({
       role: "assistant",
       content: [{ type: "text", text: digestText }],
     });
   } else {
-    // firstTailRole is assistant; bridge with assistant ack + user digest so user -> assistant -> user -> assistant holds
     result.push({
       role: "assistant",
       content: [
@@ -636,6 +615,7 @@ export function foldMiddleTurns(messages, baseOverheadTokens, inputBudget) {
 }
 
 function clampOutputAndThinking(body, inputTokens, windowLimit, providerId, opts = {}) {
+  let mutated = false;
   const safetyRatio = Number(opts.safetyRatio) > 0 ? Number(opts.safetyRatio) : 0.90;
   const hardSafeWindow = Math.floor(windowLimit * Math.min(0.97, safetyRatio + 0.05));
   const providerMaxOut = DEFAULT_PROVIDER_MAX_OUTPUT[providerId] || 32768;
@@ -649,34 +629,42 @@ function clampOutputAndThinking(body, inputTokens, windowLimit, providerId, opts
   const clampedMaxTokens = Math.min(currentMaxTokens, providerMaxOut, availableForOutput);
   if (typeof body.max_tokens === "number" && body.max_tokens !== clampedMaxTokens) {
     body.max_tokens = clampedMaxTokens;
+    mutated = true;
   }
 
   if (body.thinking && typeof body.thinking === "object") {
     if (typeof body.thinking.budget_tokens === "number") {
       if (clampedMaxTokens <= 2048) {
         delete body.thinking;
+        mutated = true;
       } else if (body.thinking.budget_tokens >= clampedMaxTokens) {
         body.thinking = {
           ...body.thinking,
           budget_tokens: Math.max(1024, clampedMaxTokens - 1024),
         };
+        mutated = true;
       }
     }
   }
+  return mutated;
 }
 
 export function onProvider(body, ctx) {
   const opts = ctx?.options || {};
-  if (opts.enabled === false) return body;
-  if (!body || typeof body !== "object" || !Array.isArray(body.messages)) return body;
+  if (opts.enabled === false || opts.off === true) return undefined;
+  if (!body || typeof body !== "object" || !Array.isArray(body.messages)) return undefined;
 
   const providerId = String(ctx?.provider?.id || "").trim();
   const model = String(ctx?.provider?.model || body.model || "").trim();
   const windowLimit = resolveWindowLimit(providerId, model, opts);
 
-  const preserveSet = new Set(
-    parseCsvList(opts.preserveCacheProviders, ["claude"])
-  );
+  // O(1) fast path for primary Claude 1M seats: preserve 100% prefix cache stability
+  // without traversing or re-serializing the body in moejs.
+  const preserveSet = new Set(parseCsvList(opts.preserveCacheProviders, ["claude"]));
+  if (preserveSet.has(providerId) && windowLimit >= 900000 && !opts.enforceClaudeCeiling) {
+    return undefined;
+  }
+
   const safetyRatio =
     Number(opts.safetyRatio) > 0 && Number(opts.safetyRatio) <= 0.98
       ? Number(opts.safetyRatio)
@@ -689,17 +677,16 @@ export function onProvider(body, ctx) {
 
   const initialInputTokens = estimateInputTokens(body);
 
-  // Prefix Cache Protection:
-  // On primary Claude seats (or any provider in `preserveCacheProviders`), never mutate
-  // message history unless the conversation genuinely approaches the 1M ceiling.
   if (preserveSet.has(providerId) && initialInputTokens <= inputBudget) {
-    return body;
+    return undefined;
   }
 
   if (initialInputTokens <= inputBudget) {
-    clampOutputAndThinking(body, initialInputTokens, windowLimit, providerId, opts);
-    return body;
+    const clamped = clampOutputAndThinking(body, initialInputTokens, windowLimit, providerId, opts);
+    return clamped ? body : undefined;
   }
+
+  let changed = false;
 
   // Stage 1: Surgical slimming of older tool_result payloads, base64 images, and oversized text blocks
   const keepRecent1 =
@@ -709,27 +696,33 @@ export function onProvider(body, ctx) {
   const textMax1 =
     Number(opts.oldTextMaxChars) >= 400 ? Number(opts.oldTextMaxChars) : 4000;
 
-  body.messages = slimOlderMessages(body.messages, {
+  const stage1Cfg = {
     keepRecentMessages: keepRecent1,
     toolResultMaxChars: toolMax1,
     oldTextMaxChars: textMax1,
     trimToolInput: false,
     toolInputMaxChars: 2400,
     dropOldThinking: providerId !== "claude",
-  });
+    mutated: false,
+  };
+  body.messages = slimOlderMessages(body.messages, stage1Cfg);
+  if (stage1Cfg.mutated) changed = true;
 
   let currentTokens = estimateInputTokens(body);
 
   // Stage 2: Tighter head/tail bounds + oversized tool_use.input trimming
   if (currentTokens > inputBudget) {
-    body.messages = slimOlderMessages(body.messages, {
+    const stage2Cfg = {
       keepRecentMessages: Math.min(6, keepRecent1),
       toolResultMaxChars: Math.min(800, toolMax1),
       oldTextMaxChars: Math.min(1200, textMax1),
       trimToolInput: true,
       toolInputMaxChars: 900,
       dropOldThinking: true,
-    });
+      mutated: false,
+    };
+    body.messages = slimOlderMessages(body.messages, stage2Cfg);
+    if (stage2Cfg.mutated) changed = true;
     currentTokens = estimateInputTokens(body);
   }
 
@@ -740,13 +733,17 @@ export function onProvider(body, ctx) {
       0
     );
     const baseOverhead = Math.max(0, currentTokens - messagesOnlyTokens);
+    const beforeLen = body.messages.length;
     body.messages = foldMiddleTurns(body.messages, baseOverhead, inputBudget);
+    if (body.messages.length !== beforeLen) changed = true;
     currentTokens = estimateInputTokens(body);
   }
 
   // Stage 4: Clamp max_tokens & thinking.budget_tokens so input + output never overflows provider window
-  clampOutputAndThinking(body, currentTokens, windowLimit, providerId, opts);
-  return body;
+  if (clampOutputAndThinking(body, currentTokens, windowLimit, providerId, opts)) {
+    changed = true;
+  }
+  return changed ? body : undefined;
 }
 
 function pruneEvents(events, cutoffMs) {
@@ -785,7 +782,7 @@ export function onUsage(row, opts = {}) {
   entry.events = pruneEvents(entry.events, cutoffMs);
   const cw = Number(row.cacheWrite) || 0;
   const cr = Number(row.cacheRead) || 0;
-  const isErr = (Number(row.status) >= 429) || Boolean(row.error);
+  const isErr = Number(row.status) >= 429 || Boolean(row.error);
 
   entry.events.push({
     ts: nowMs,
@@ -798,7 +795,6 @@ export function onUsage(row, opts = {}) {
   if (cr > 0) entry.lastCacheReadAt = nowMs;
   if (isErr) entry.lastErrorAt = nowMs;
 
-  // Also index by account name if different from key so strategies can match either `seat.key` or `seat.account`
   if (row.account && row.account !== seatId) {
     seatTelemetry.set(row.account, entry);
   }
@@ -855,7 +851,6 @@ function computeExpiringDiscount(seat, nowMs, horizonMinutes, maxDiscount) {
   }
 
   if (nearestDeltaMs > horizonMs) return 0;
-  // Linearly scale discount from 0 at `horizonMinutes` up to `maxDiscount` at reset time
   const urgency = 1 - nearestDeltaMs / horizonMs;
   return urgency * maxDiscount;
 }
@@ -871,14 +866,6 @@ function matchesAccountPriority(seat, priorityPatterns) {
   return -1;
 }
 
-/**
- * Multi-dimensional weighted seat ranking strategy:
- *   - Soft ceiling (`ceiling`, default 88%) and hard ceiling (`hardCeiling`, default 98%)
- *   - Expiring quota discount (`soon` Unix ms timestamps within `expiringHorizonMinutes`)
- *   - Cache-stampede stickiness (prefer a seat that just wrote/read cache within `stampedeWindowSeconds`
- *     so active Claude Code sessions don't round-robin across seats and pay N× cold `cacheWrite`)
- *   - Account preference (`accountsFirst`) and recent 429/5xx error avoidance
- */
 export function weightedSeatStrategy(pool, seats, opts = {}) {
   if (!Array.isArray(seats) || seats.length === 0) return [];
   if (seats.length === 1) return [0];
@@ -906,8 +893,6 @@ export function weightedSeatStrategy(pool, seats, opts = {}) {
         ? getSeatTelemetrySnapshot(seat?.key, nowMs, stampedeSec)
         : getSeatTelemetrySnapshot(seat?.account, nowMs, stampedeSec);
 
-    // Sticky warm cache bonus: if this seat warmed cache recently and has not hit hardCeiling,
-    // keep routing to it to avoid triggering a cold 150K+ cacheWrite on another seat.
     const hasWarmCache =
       telem.recentCacheWrite > 20000 || telem.recentCacheRead > 50000;
     const cacheAffinityBonus = hasWarmCache && rawUsed < hardCeiling ? 14 : 0;
@@ -947,10 +932,6 @@ export function weightedSeatStrategy(pool, seats, opts = {}) {
   return scored.map((item) => item.idx);
 }
 
-/**
- * Drop-in ceiling strategy compatible with `reserve/ceiling`, enhanced with
- * expiring-window (`soon`) tie-breaking.
- */
 export function ceilingSeatStrategy(pool, seats, opts = {}) {
   return weightedSeatStrategy(pool, seats, {
     ...opts,
