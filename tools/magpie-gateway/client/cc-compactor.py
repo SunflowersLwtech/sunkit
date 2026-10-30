@@ -41,9 +41,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "handoff_relpath": ".claude/handoff/current.md",
     },
     "limits": {
-        "max_byok_input_chars": 32000,
-        "max_byok_output_tokens": 3200,
-        "byok_timeout_sec": 60,
+        "max_byok_input_chars": 18000,
+        "max_byok_output_tokens": 1800,
+        "byok_timeout_sec": 30,
         "min_compaction_cooldown_sec": 180,
         "max_compactions_per_hour": 6,
         "preserve_tail_messages": 10,
@@ -133,7 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compactors": {
         "surgical_hybrid": {
             "mode": "hybrid",
-            "byok_chain": ["claude-haiku-5-5", "zcode/GLM-5.3", "always-up"],
+            "byok_chain": ["zcode/GLM-5.3-Flash", "zcode/GLM-5.3", "claude-haiku-5-5"],
             "preserve_buckets": [
                 "file_paths_and_line_ranges",
                 "git_diff_stat",
@@ -970,7 +970,7 @@ def distill_with_byok_llm(
     timeout_sec = float(limits.get("byok_timeout_sec", 35.0))
 
     compactor_cfg = cfg.get("compactors", {}).get("surgical_hybrid", {})
-    byok_chain = compactor_cfg.get("byok_chain") or ["claude-haiku-5-5", "zcode/GLM-5.3", "always-up"]
+    byok_chain = compactor_cfg.get("byok_chain") or ["zcode/GLM-5.3-Flash", "zcode/GLM-5.3", "claude-haiku-5-5"]
 
     # Build bounded excerpt from middle conversation turns
     conv = transcript_state.get("conversation_records") or []
@@ -978,27 +978,27 @@ def distill_with_byok_llm(
     middle_records = conv[:-preserve_tail] if len(conv) > preserve_tail else conv
 
     snippets: list[str] = []
-    budget_left = max(4000, max_chars - len(deterministic_digest) - 2000)
-    for rec in middle_records[-60:]:
+    budget_left = max(3000, max_chars - len(deterministic_digest) - 1200)
+    for rec in middle_records[-30:]:
         msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
         role = msg.get("role", "user")
         content = msg.get("content")
         text_chunk = ""
         if isinstance(content, str):
-            text_chunk = content[:1200]
+            text_chunk = content[:800]
         elif isinstance(content, list):
             parts = []
             for b in content:
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "text":
-                    parts.append(str(b.get("text", ""))[:1000])
+                    parts.append(str(b.get("text", ""))[:600])
                 elif b.get("type") == "tool_use":
                     parts.append(f"[tool_use: {b.get('name')}]")
                 elif b.get("type") == "tool_result":
                     t_str = str(b.get("content", ""))
-                    if len(t_str) > 500:
-                        t_str = t_str[:250] + " ... " + t_str[-200:]
+                    if len(t_str) > 360:
+                        t_str = t_str[:180] + " ... " + t_str[-140:]
                     parts.append(f"[tool_result: {t_str}]")
             text_chunk = " ".join(parts)
         if text_chunk:
@@ -1010,7 +1010,7 @@ def distill_with_byok_llm(
     prompt = (
         "You are a surgical context compaction engine for an active software engineering session.\n"
         "Combine the deterministic ground-truth facts below with the middle-turn excerpts into a dense, "
-        "high-signal technical continuation summary (<1800 words).\n"
+        "high-signal technical continuation summary (<1200 words).\n"
         "Strictly preserve: exact file paths, function/symbol names, architectural constraints, "
         "commands executed, failing assertions/errors, and the exact next pending steps.\n\n"
         "=== DETERMINISTIC GROUND TRUTH ===\n"
@@ -1023,6 +1023,7 @@ def distill_with_byok_llm(
         req_body = {
             "model": model_name,
             "max_tokens": max_out_tokens,
+            "thinking": {"type": "disabled"},
             "messages": [{"role": "user", "content": prompt}],
         }
         data_bytes = json.dumps(req_body).encode("utf-8")
