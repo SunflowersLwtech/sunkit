@@ -1,0 +1,11 @@
+# sunkit tools/magpie-gateway/server：让 magpie 一直知道每个 Claude 座位的额度和重置时间（seat-refresh.py 文件头有说明）。
+# 装：seat-refresh.py 装到 /opt/magpie/monitor（root 700），本文件和 .timer 放进 /etc/systemd/system，再 systemctl enable --now magpie-seat-refresh.timer
+# 停：systemctl disable --now magpie-seat-refresh.timer（magpie 回到只在座位答请求或手动刷新时才读）
+[Unit]
+Description=magpie: keep every Claude seat's allowance and reset times read
+After=docker.service
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=600
+ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/seat-refresh.py

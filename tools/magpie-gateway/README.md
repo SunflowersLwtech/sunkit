@@ -63,7 +63,7 @@ The group ids are Claude's own model names. A request for `claude-opus-5-5` reac
 
 Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto`, and the `claude` provider (the subscription bridge) exposes only Opus, Sonnet and Haiku 5.5 (`magpie provider models claude claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5`), never Fable.
 
-Within `claude/*`, magpie picks the seat by its Smart routing (the seat with room that renews soonest). A 429 "usage limit reached", or a seat's reading at its cap, rests that seat and the same request goes to the next seat at once; with all three resting the group moves on to its next member. Readings of the two seats Claude Code isn't signed in to come only from the answers they give, so they can be hours old until a request lands there. `X-Magpie-Account: <email> · DuoCode` pins a request to one seat for a test.
+Within `claude/*`, magpie picks the seat by its Smart routing (the seat with room that renews soonest). A 429 "usage limit reached", or a seat's reading at its cap, rests that seat and the same request goes to the next seat at once; with all three resting the group moves on to its next member. On its own, magpie reads the two seats Claude Code isn't signed in to only from the answers they give, so their readings could be hours old until a request landed there. Since 2026-10-31 `server/seat-refresh.py` keeps every seat's reading current (see [Seat readings](#seat-readings)). `X-Magpie-Account: <email> · DuoCode` pins a request to one seat for a test.
 
 Measured on the first night (2026-10-25 21:00 to 10-26 01:12): about ten long sessions that had been running on the non-Claude members moved onto a seat as soon as one had room, and each move retold the conversation (up to 1481 messages, 835K tokens written to the cache in one request). weiliu@ went from 0 to used up in 39 minutes (283 gateway requests, 3.41M cache-write tokens), gmail in 34 minutes after six sessions moved onto it within ten seconds (3.25M). New sessions that start on a seat and stay there don't pay this: a five-turn session stayed on one seat with cache writes of 140 to 1,368 tokens a turn.
 
@@ -82,6 +82,20 @@ Checked again after the chains above, with `claude -p --allowedTools Bash` runni
 On 10-27, its first evening: down `long-opus` 20:00 and `claude-opus-5-5` 20:06 (68 failures, 57 successes in 15 minutes, every seat at its cap and the fallbacks out of credits), up 20:24 and 20:42. Its 42 probes that day came to 26.7K tokens, 241 of them on the paid GLM-5.
 
 Install: `fleet-watch.py` to `/opt/magpie/monitor/` (root, 700), the key in `/etc/llm-gateway/fleet-watch.key` (600), the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-fleet-watch.timer`. Off: `systemctl disable --now magpie-fleet-watch.timer`. Tests: `python3 server/fleet-watch.test.py`.
+
+## Seat readings
+
+magpie v0.1.1689 reads a Claude seat's allowance only when that seat answers a request through magpie (Claude Code's `rate_limit_event`) or when someone presses refresh on its card on the Usage page. Once the reset time it read has passed, it clears that window to "0%" with no reset time until the next reading. A spare seat often answers nothing through magpie for hours while the machines signed in to it directly keep using it, so `magpie accounts` and the web UI showed it at "5h 0%" with no reset time, and routing picked seats from that old reading. On 2026-10-31 at 06:53, weiliu@'s reading dated from 10-30 19:16 and showed 0% with no reset; Anthropic had it at 1%, renewing at 08:50. Seats at their cap had a reset time because they had just answered.
+
+`server/seat-refresh.py` runs on the gateway host every 2 minutes (`magpie-seat-refresh.timer`). It reads the cards magpie already holds (`GET /v1/magpie/quotas/cards`, which asks no vendor) and presses a seat's refresh through the gateway (`POST /v1/magpie/quotas/refresh?provider=claude&user=<seat>`, inside the container, because only 127.0.0.1 counts as local). magpie then runs Claude Code's `/usage` in that seat's own config directory, which calls no model and takes about 2 seconds, and the CLI, the web UI and routing all use the new reading. When it presses refresh:
+
+- Never on a seat at its cap: the 5-hour window at 95% or more with its reset ahead, or the 7-day window at 100% with its reset ahead. Their reset time is already shown, and routing leaves them alone until it passes, so capped seats look and rotate as before.
+- When the 5-hour window has no reset time, either because its reset passed or because it was never read: at most every 5 minutes. If the last refresh also came back with no reset time, the seat hasn't been used since its last reset and its window hasn't started, so it waits 15 minutes instead.
+- When the reading is more than 10 minutes old.
+
+It refreshes at most 4 seats a run, one at a time, which comes to about one `/usage` per seat every 10 minutes. Each refresh writes the seat's reading before and after to `/var/lib/magpie-seat-refresh/log`. `--dry-run` prints what it would refresh and why, and refreshes nothing.
+
+Install: `seat-refresh.py` to `/opt/magpie/monitor/` (root, 700), the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-seat-refresh.timer`. Off: `systemctl disable --now magpie-seat-refresh.timer`; magpie goes back to reading a seat only when it answers or is refreshed by hand. Tests: `python3 server/seat-refresh.test.py`.
 
 ## Feishu assistant fallback (N150)
 
