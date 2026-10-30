@@ -41,9 +41,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "handoff_relpath": ".claude/handoff/current.md",
     },
     "limits": {
-        "max_byok_input_chars": 140000,
+        "max_byok_input_chars": 32000,
         "max_byok_output_tokens": 3200,
-        "byok_timeout_sec": 35,
+        "byok_timeout_sec": 60,
         "min_compaction_cooldown_sec": 180,
         "max_compactions_per_hour": 6,
         "preserve_tail_messages": 10,
@@ -133,7 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compactors": {
         "surgical_hybrid": {
             "mode": "hybrid",
-            "byok_chain": ["zcode/GLM-5.3", "claude-haiku-5-5", "always-up"],
+            "byok_chain": ["claude-haiku-5-5", "zcode/GLM-5.3", "always-up"],
             "preserve_buckets": [
                 "file_paths_and_line_ranges",
                 "git_diff_stat",
@@ -970,7 +970,7 @@ def distill_with_byok_llm(
     timeout_sec = float(limits.get("byok_timeout_sec", 35.0))
 
     compactor_cfg = cfg.get("compactors", {}).get("surgical_hybrid", {})
-    byok_chain = compactor_cfg.get("byok_chain") or ["zcode/GLM-5.3", "claude-haiku-5-5", "always-up"]
+    byok_chain = compactor_cfg.get("byok_chain") or ["claude-haiku-5-5", "zcode/GLM-5.3", "always-up"]
 
     # Build bounded excerpt from middle conversation turns
     conv = transcript_state.get("conversation_records") or []
