@@ -1,0 +1,156 @@
+# cc-compactor.toml — 5-Layer Hot-Configurable Policy & Weights
+#
+# Controls the client-side multi-dimensional weighted cost minimization engine
+# for Claude Code + Magpie multi-seat pools + cross-harness subagents.
+
+[general]
+default_profile = "balanced"
+magpie_settings_path = "~/.claude/magpie-settings.json"
+state_dir = "~/.cache/cc-compactor"
+handoff_relpath = ".claude/handoff/current.md"
+
+[limits]
+# Hard bill & safety guardrails (upper bounds on any BYOK compaction call)
+max_byok_input_chars = 140000
+max_byok_output_tokens = 3200
+byok_timeout_sec = 35
+min_compaction_cooldown_sec = 180
+max_compactions_per_hour = 6
+preserve_tail_messages = 10
+preserve_head_messages = 2
+auto_trigger_min_tokens = 155000
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Layer 1: 5D Objective Weight Profiles
+# J(a | s) = w_quota * Phi_quota + w_cache * Phi_cache + w_wait * Phi_wait
+#          + w_loss * Phi_loss + w_stampede * Phi_stampede
+# ──────────────────────────────────────────────────────────────────────────────
+
+[profiles.balanced]
+w_quota = 0.30
+w_cache = 0.25
+w_wait = 0.20
+w_loss = 0.15
+w_stampede = 0.10
+theta_5h = 0.85
+theta_7d = 0.90
+tau_wait_max_min = 15.0
+target_post_compact_tokens = 38000
+
+[profiles.cache_first]
+w_quota = 0.20
+w_cache = 0.42
+w_wait = 0.13
+w_loss = 0.15
+w_stampede = 0.10
+theta_5h = 0.92
+theta_7d = 0.94
+tau_wait_max_min = 25.0
+target_post_compact_tokens = 48000
+
+[profiles.zero_claude_burn]
+w_quota = 0.50
+w_cache = 0.15
+w_wait = 0.10
+w_loss = 0.15
+w_stampede = 0.10
+theta_5h = 0.72
+theta_7d = 0.80
+tau_wait_max_min = 10.0
+target_post_compact_tokens = 32000
+
+[profiles.speed_first]
+w_quota = 0.20
+w_cache = 0.18
+w_wait = 0.40
+w_loss = 0.14
+w_stampede = 0.08
+theta_5h = 0.88
+theta_7d = 0.92
+tau_wait_max_min = 4.0
+target_post_compact_tokens = 36000
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Layer 2: Provider Pool Constraints & Cost Multipliers
+# ──────────────────────────────────────────────────────────────────────────────
+
+[pools.claude_primary]
+provider = "claude"
+window_tokens = 1000000
+safe_window_ratio = 0.90
+reserve_output_tokens = 16384
+cache_ttl_sec = 3600
+cache_write_Verify_multiplier = 1.25
+cache_read_multiplier = 0.10
+quota_scarcity = 1.00
+
+[pools.zcode_glm]
+provider = "zcode"
+model = "GLM-5.3"
+window_tokens = 200000
+safe_window_ratio = 0.90
+reserve_output_tokens = 16384
+quota_scarcity = 0.12
+
+[pools.bedrock_glm5]
+provider = "bedrock-glm5"
+model = "glm-5.1"
+window_tokens = 202752
+safe_window_ratio = 0.90
+reserve_output_tokens = 16384
+quota_scarcity = 0.15
+
+[pools.devin_fallback]
+provider = "devin"
+model = "claude-opus-4-6"
+window_tokens = 262144
+safe_window_ratio = 0.90
+reserve_output_tokens = 16384
+quota_scarcity = 0.22
+
+[pools.opencode_go]
+provider = "opencode-go"
+window_tokens = 200000
+safe_window_ratio = 0.90
+reserve_output_tokens = 16384
+quota_scarcity = 0.15
+
+[pools.gemini_pro]
+provider = "gemini"
+window_tokens = 1000000
+safe_window_ratio = 0.90
+reserve_output_tokens = 32768
+quota_scarcity = 0.18
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Layer 3: Surgical Hybrid Compactor & BYOK Fallback Chain
+# ──────────────────────────────────────────────────────────────────────────────
+
+[compactors.surgical_hybrid]
+mode = "hybrid"
+# Ordered BYOK model groups on Magpie gateway (zero primary Claude seat burn)
+byok_chain = ["auto-glm-5-3-flash", "always-up"]
+preserve_buckets = [
+  "file_paths_and_line_ranges",
+  "git_diff_stat",
+  "failing_assertions_and_tracebacks",
+  "architectural_decisions",
+  "todo_state_machine",
+]
+evict_buckets = [
+  "stale_read_buffers",
+  "passing_test_logs",
+  "superseded_reasoning",
+  "old_base64_images",
+]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Layer 4: Cache Keep-Warm Guard (Anti-TTL-Cliff)
+# ──────────────────────────────────────────────────────────────────────────────
+
+[keep_warm]
+enabled = true
+ttl_seconds = 3600
+ping_after_idle_seconds = 3120
+min_cached_tokens = 90000
+min_remaining_5h_pct = 12
