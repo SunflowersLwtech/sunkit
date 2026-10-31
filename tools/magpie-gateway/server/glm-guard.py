@@ -510,6 +510,10 @@ def run(dry):
                 # 拿掉别的组的 zcode 成员也是一成功就记：后面哪条失败了，关上或对账时照样能放回原位
                 state.setdefault("stripped", []).append(strips[tuple(c)])
         after = read_json(CONF + "/providers.json")
+        if any(c[:2] == ["provider", "off"] for c in cmds) and not provider_off(after, GLM_PROVIDER):
+            # provider off 退出 0 却没关上：zcode 还是守护开着的，下一轮再关（不然标记已清，它就一直开着，别的组照样用到它）
+            state["zcode_by_guard"] = True
+            raise RuntimeError("zcode still on after provider off")
         if not aligned(after, want, state, restored):
             raise RuntimeError("providers.json not as expected after the change")
     except Exception as e:
