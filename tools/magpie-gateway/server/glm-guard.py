@@ -13,11 +13,18 @@
 # 什么时候打开（关着，且距上次切换 ≥15 分钟）：
 #   - 每个座位都只剩不到 15%；或
 #   - 按最近 30 分钟的消耗速度，所有座位到上限前的余量会在 30 分钟内、且在最早一个座位重置之前用完。
-# 什么时候关上（开着，且距上次切换 ≥15 分钟）：有座位读数在 20 分钟内、余量 ≥50%（一般是它刚重置）。不再看速度：
+#   magpie 给不出读数的座位（卡片没有 5 小时窗口）在这里按没有余量算。
+# 什么时候关上（开着，且距上次切换 ≥15 分钟）：有座位读数在 20 分钟内、余量 ≥50%（一般是它刚重置）；读不到的座位
+#   不算回来，卡片或 providers.json 整个读不到时什么都不改。不再看速度：
 #   magpie 让一个还在活跃的会话留在答过它的成员上（stays=auto），GLM 留在组里，落到 GLM 的会话就一直在 GLM；
 #   座位一回来就拿掉 GLM，把它们赶回 Claude。之后速度还是快，15 分钟后由「打开」那条再加回来。
 # 动作：magpie group set <组> models+=<GLM> / models-=<GLM>（providers.json 热生效，不重启）；zcode provider 关着就先
 #   provider on，关上时只把自己打开的再 provider off。每轮都对账：关着的时候组里出现这几个 GLM 成员也会被拿掉。
+#   provider on 是全局的：zcode 由守护打开期间，别的组（frontier、auto-glm-5-3 这些直接点名 zcode 模型的）也会用到它。
+#   所以守护打开 zcode 之前，先把别的在用组里的 zcode 成员拿掉（models-= 不看 provider 开没开，排在 provider on 之前，
+#   这些组一刻也碰不到 zcode），记下原来的位置；关上时按原位放回（group set <组> models=<整份成员>；magpie 只让开着的
+#   provider 的成员进组，所以放回排在 provider off 之前），再关 zcode。zcode 是别人开着的就不动别的组。拿掉会丢设置
+#   （成员上挂着规则、权重、off、pick，或组用了 fast、match 模式）或会把组拿空的，不拿，写进日志和消息。
 #   切换写日志，经 mesh 发给 feishu-assistant（不在就 feishu-assistant-backup，都不行走 ntfy）。
 # 停用：touch /etc/magpie-glm-guard/paused（每轮直接退出，不改任何东西）；或 systemctl disable --now magpie-glm-guard.timer。
 # --dry-run：只打印判断和会做的动作，不改、不发。
@@ -128,7 +135,11 @@ def seats(cards, prov, t):
     for c in cards:
         if c.get("provider") != "claude" or c.get("kind") != "subscription" or not c.get("user"):
             continue
-        five, week = window(c, "5 hours") or {}, window(c, "7 days")
+        five, week = window(c, "5 hours"), window(c, "7 days")
+        # magpie 给不出 5 小时读数（登录失效这类错误不留旧读数，卡片没有窗口）：打开那边按没有余量算，读不到的座位
+        # 多半也接不了请求；关上那边只认 20 分钟内的读数，读不到的本来就不算回来
+        unread = five is None
+        five = five or {}
         used, reset = float(five.get("used") or 0), parse_time(five.get("resetsAt"))
         raw = (parse_time(c.get("readAt")) or parse_time(c.get("asOf")), used, reset)
         if reset is not None and reset <= t:
@@ -138,11 +149,12 @@ def seats(cards, prov, t):
         week_full = bool(week and (week.get("used") or 0) >= 100 and (week_reset is None or week_reset > t))
         cap = cap_for(c["user"], cp)
         read = raw[0]
+        no_room = week_full or unread
         out.append({
             "user": c["user"], "plan": c.get("plan") or "", "used": used, "cap": cap, "reset": reset, "read": read,
-            "raw": raw, "ok": not week_full, "week_reset": week_reset if week_full else None,
-            "headroom": 0.0 if week_full else max(0.0, cap - used),
-            "left": 0.0 if week_full else max(0.0, 100.0 - used),
+            "raw": raw, "ok": not week_full, "week_reset": week_reset if week_full else None, "unread": unread,
+            "headroom": 0.0 if no_room else max(0.0, cap - used),
+            "left": 0.0 if no_room else max(0.0, 100.0 - used),
             "fresh": read is not None and t - read <= FRESH,
         })
     return out
@@ -221,10 +233,64 @@ def provider_off(prov, pid):
     return p is None or bool(p.get("off"))
 
 
+def editable(g, m):
+    """把组 g 里的 zcode 成员 m 拿掉、以后按原位放回，会不会丢东西：magpie 存组时把不在组里的成员的 off、pick、规则、
+    权重一并清掉，按整份成员写回（models=）又会清掉 fast 和 match 模式；组里只剩 zcode 成员时拿空了 magpie 也不让"""
+    if g.get("match") or g.get("fast") or g.get("pick") == m or g.get("classifier") == m:
+        return False
+    if m in (g.get("off") or []) or m in (g.get("weights") or {}) or m in json.dumps(g.get("rules") or []):
+        return False
+    return any(not x.startswith(GLM_PROVIDER + "/") for x in g.get("members") or [])
+
+
+def holders(prov):
+    """claude-* 三个组以外、没停用的组里直接点名的 zcode 成员：[(组, 成员, 能不能拿)]。停用的组 magpie 不派活，经它
+    （always-up 里的 group/zcode）也到不了；经别的组间接含的，在直接点名它的那个组里拿"""
+    out = []
+    for g in prov.get("groups") or []:
+        if g.get("id") in GLM or g.get("disabled") or g.get("hidden"):
+            continue
+        for m in g.get("members") or []:
+            if m.startswith(GLM_PROVIDER + "/"):
+                out.append((g["id"], m, editable(g, m)))
+    return out
+
+
+def owed(prov, state):
+    """state 里记着、还没放回的成员：组还在、成员不在组里"""
+    return [e for e in state.get("stripped") or [] if e["member"] not in (members(prov, e["group"]) or [e["member"]])]
+
+
+def restores(prov, state):
+    """按拿掉时的位置把成员放回，每个组一条 group set <组> models=<整份成员>；倒着放（后拿的先放），同一个组连着拿掉
+    的几个成员也回到原来的次序"""
+    lists = {}
+    for e in reversed(owed(prov, state)):
+        ms = lists.setdefault(e["group"], members(prov, e["group"]))
+        i = ms.index(e["after"]) + 1 if e.get("after") in ms else min(e.get("at", len(ms)), len(ms))
+        ms.insert(i, e["member"])
+    return [["group", "set", gid, "models=" + ",".join(ms)] for gid, ms in lists.items()]
+
+
 def plan(prov, want_open, state):
-    """把 providers.json 对齐到 want_open 要跑的 magpie 命令；zcode 的 on 在加成员之前、off 在拿成员之后"""
-    cmds, missing = [], []
-    if want_open and provider_off(prov, GLM_PROVIDER):
+    """把 providers.json 对齐到 want_open 要跑的 magpie 命令。还给出不能拿的 zcode 成员，和每条拿掉别的组 zcode 成员的
+    命令要记下的位置。打开：先拿掉别的组的 zcode 成员，再 provider on，再往 claude-* 加；关上：先从 claude-* 拿掉，再把
+    别的组的成员放回原位，最后 provider off"""
+    cmds, missing, kept, strips = [], [], [], {}
+    zoff = provider_off(prov, GLM_PROVIDER)
+    if want_open and (zoff or state.get("zcode_by_guard")):
+        left = {}
+        for gid, m, ok in holders(prov):
+            if not ok:
+                kept.append("%s:%s" % (gid, m))
+                continue
+            ms = left.setdefault(gid, members(prov, gid))
+            i = ms.index(m)
+            c = ["group", "set", gid, "models-=" + m]
+            strips[tuple(c)] = {"group": gid, "member": m, "after": ms[i - 1] if i else None, "at": i}
+            ms.pop(i)
+            cmds.append(c)
+    if want_open and zoff:
         cmds.append(["provider", "on", GLM_PROVIDER])
     for gid, m in GLM.items():
         ms = members(prov, gid)
@@ -234,17 +300,25 @@ def plan(prov, want_open, state):
             cmds.append(["group", "set", gid, "models+=" + m])
         elif not want_open and m in ms:
             cmds.append(["group", "set", gid, "models-=" + m])
-    if not want_open and state.get("zcode_by_guard") and not provider_off(prov, GLM_PROVIDER):
+    if not want_open and not zoff:
+        cmds += restores(prov, state)
+    if not want_open and state.get("zcode_by_guard") and not zoff:
         cmds.append(["provider", "off", GLM_PROVIDER])
-    return cmds, missing
+    return cmds, missing, kept, strips
 
 
-def aligned(prov, want_open):
+def aligned(prov, want_open, state=None, restored=()):
+    """读回核对：claude-* 的 GLM 成员对上；开着时 zcode 开着，zcode 是守护开的就别的组里能拿的都拿掉了；关着时 zcode
+    开着就没有欠着没放回的成员，这轮放回过的组都放回了"""
+    state = state or {}
     for gid, m in GLM.items():
         ms = members(prov, gid)
         if ms is not None and (m in ms) != want_open:
             return False
-    return not (want_open and provider_off(prov, GLM_PROVIDER))
+    zoff = provider_off(prov, GLM_PROVIDER)
+    if want_open:
+        return not zoff and not (state.get("zcode_by_guard") and any(ok for _, _, ok in holders(prov)))
+    return not any(not zoff or e["group"] in restored for e in owed(prov, state))
 
 
 def magpie(args):
@@ -274,16 +348,19 @@ def seat_lines(ss):
         who = s["user"].replace(" · DuoCode", "") + ("（个人 Max）" if s["plan"] == "max" else "")
         if not s["ok"]:
             out.append("%s：7 天额度用完%s" % (who, "，%s 重置" % hm(s["week_reset"]) if s["week_reset"] else ""))
+        elif s["unread"]:
+            out.append("%s：读不到（magpie 给不出读数，按没有余量算）" % who)
         else:
             out.append("%s：剩 %g%%（上限 %g%%）%s" % (who, round(s["left"], 1), s["cap"],
                                                    "，%s 重置" % hm(s["reset"]) if s["reset"] else ""))
     return out
 
 
-def message(opened, why, ss, a, history, zcode_on, t):
+def message(opened, why, ss, a, history, zcode_on, t, others=()):
     if opened:
         if why == "low":
-            head = "magpie 已自动打开 GLM 兜底：Claude 座位都只剩不到 %d%%，座位到上限后的请求改落 ZCode GLM。" % LOW
+            head = "magpie 已自动打开 GLM 兜底：Claude 座位都只剩不到 %d%%%s，座位到上限后的请求改落 ZCode GLM。" % (
+                LOW, "（读不到的按没有余量算）" if any(s["unread"] for s in ss) else "")
         else:
             head = "magpie 已自动打开 GLM 兜底：按最近 30 分钟的速度，Claude 座位约 %s 到上限%s，之后的请求改落 ZCode GLM。" % (
                 hm(t + a["to_empty"] * 60), "，早于最早一次重置 %s" % hm(a["first_reset"]) if a["first_reset"] else "")
@@ -302,6 +379,7 @@ def message(opened, why, ss, a, history, zcode_on, t):
                      + ("；zcode provider 原来关着，已打开" if zcode_on else "") + "。")
     else:
         lines.append("改动：三个组里的 zcode GLM 成员已拿掉" + ("；guard 打开的 zcode provider 已关回" if zcode_on else "") + "。")
+    lines += list(others)
     lines.append("停用：llm-gateway 上 sudo touch /etc/magpie-glm-guard/paused（日志 /var/lib/magpie-glm-guard/log）。")
     return "\n".join(lines)
 
@@ -359,8 +437,9 @@ def tell(text):
 
 
 def summary(ss, a):
-    seat = " ".join("%s%s=%g%%/%g%s" % (s["user"].replace(" · DuoCode", ""), "(max)" if s["plan"] == "max" else "",
-                                        round(s["used"], 1), s["cap"], "" if s["ok"] else "(7d full)") for s in ss)
+    seat = " ".join("%s%s=%s/%g%s" % (s["user"].replace(" · DuoCode", ""), "(max)" if s["plan"] == "max" else "",
+                                      "unread" if s["unread"] else "%g%%" % round(s["used"], 1), s["cap"],
+                                      "" if s["ok"] else "(7d full)") for s in ss)
     return "%s rate=%.2f%%/min headroom=%.0f to_empty=%s first_reset=%s low=%s soon=%s back=%d" % (
         seat, a["rate"], a["headroom"], "-" if a["to_empty"] is None else "%.0fm" % a["to_empty"],
         hm(a["first_reset"]) if a["first_reset"] else "-", a["low"], a["soon"], len(a["back"]))
@@ -391,30 +470,47 @@ def run(dry):
     if "open" not in state:
         # 第一次跑：按组里现在有没有 GLM 定初始状态，不算一次切换
         state = {"open": aligned(prov, True) and any(GLM[g] in (members(prov, g) or []) for g in GLM), "since": 0}
+    if provider_off(prov, GLM_PROVIDER) and state.get("zcode_by_guard"):
+        # zcode 关着（守护自己关的，或开着期间被人关了）：已经不是守护开着的，之后谁再打开都不归守护关
+        state["zcode_by_guard"] = False
+    if state.get("stripped"):
+        # 已经回到组里的（有人手动加回、或上一轮放回了）不再欠着；组没了的也不欠
+        state["stripped"] = owed(prov, state)
     ss = seats(cards, prov, t)
     if not ss:
         log("no Claude seat in magpie's cards, nothing changed")
         return 0
     a = assess(ss, history, t)
     want, why = decide(state, a, t)
-    cmds, missing = plan(prov, want, state)
-    line = "%s -> %s (%s) | %s" % ("open" if state.get("open") else "closed", "open" if want else "closed", why,
-                                   summary(ss, a))
+    cmds, missing, kept, strips = plan(prov, want, state)
+    restored = [c[2] for c in cmds if c[:2] == ["group", "set"] and c[3].startswith("models=")]
+    line = "%s -> %s (%s) | %s%s" % ("open" if state.get("open") else "closed", "open" if want else "closed", why,
+                                     summary(ss, a), " | zcode left alone in: " + ", ".join(kept) if kept else "")
     if dry:
         print(line)
         for c in cmds:
             print("would run: magpie " + " ".join(c))
         if want != bool(state.get("open")):
-            print(message(want, why, ss, a, history, want and provider_off(prov, GLM_PROVIDER), t))
+            print(message(want, why, ss, a, history, want and provider_off(prov, GLM_PROVIDER), t,
+                          others_lines(want, {"stripped": list(strips.values())} if want else {}, kept, restored)))
         return 0
     if missing:
         log("groups missing, left alone: %s" % ", ".join(missing))
-    zcode_was_off = provider_off(prov, GLM_PROVIDER)
     try:
         for c in cmds:
             magpie(c)
+            # zcode 归不归守护管，provider on/off 一成功就记：打开时 provider on 成功、后面的 group set 失败，这轮记 FAILED，
+            # 下一轮 zcode 已开着、不再跑 provider on，等到全部成功才记就再也记不上，关上后 zcode 一直开着
+            # （frontier、always-up 这些组照样用 GLM）
+            if c[:2] == ["provider", "on"]:
+                state["zcode_by_guard"] = True
+            elif c[:2] == ["provider", "off"]:
+                state["zcode_by_guard"] = False
+            elif tuple(c) in strips:
+                # 拿掉别的组的 zcode 成员也是一成功就记：后面哪条失败了，关上或对账时照样能放回原位
+                state.setdefault("stripped", []).append(strips[tuple(c)])
         after = read_json(CONF + "/providers.json")
-        if not aligned(after, want):
+        if not aligned(after, want, state, restored):
             raise RuntimeError("providers.json not as expected after the change")
     except Exception as e:
         log("%s | FAILED: %s" % (line, str(e)[:300]))
@@ -425,18 +521,36 @@ def run(dry):
         write_state(statef, state)
         return 1
     state.pop("failing", None)
+    state["stripped"] = owed(after, state)
+    if not state["stripped"]:
+        state.pop("stripped")
     switched = want != bool(state.get("open"))
-    if want and zcode_was_off and any(c[:2] == ["provider", "on"] for c in cmds):
-        state["zcode_by_guard"] = True
-    if not want and any(c[:2] == ["provider", "off"] for c in cmds):
-        state["zcode_by_guard"] = False
     if switched:
         state.update({"open": want, "since": t})
     log(line + ("" if not cmds else " | ran: " + "; ".join(" ".join(c) for c in cmds)))
     if switched:
-        tell(message(want, why, ss, a, history, (zcode_was_off if want else bool(cmds and cmds[-1][:2] == ["provider", "off"])), t))
+        tell(message(want, why, ss, a, history, (bool(state.get("zcode_by_guard")) if want
+                                                 else bool(cmds and cmds[-1][:2] == ["provider", "off"])), t,
+                     others_lines(want, state, kept, restored)))
     write_state(statef, state)
     return 0
+
+
+def others_lines(opened, state, kept, restored):
+    """切换消息里关于别的组的几句"""
+    out = []
+    held = list(dict.fromkeys(e["group"] for e in state.get("stripped") or []))
+    if opened and held:
+        out.append("别的组：%s 里的 zcode 成员先拿掉了，守护开着期间只有 claude-* 三个组用得到 zcode；关上时放回原位。"
+                   % "、".join(held))
+    if opened and kept:
+        out.append("没拿掉：%s（拿掉会丢它们自己的设置或把组拿空），这些组在守护开着期间也会用到 zcode。" % "、".join(kept))
+    if not opened and restored:
+        out.append("别的组：%s 里的 zcode 成员已放回原位。" % "、".join(restored))
+    if not opened and held:
+        out.append("%s 里拿掉的 zcode 成员要等 zcode 开着才放得回去（magpie 只让开着的 provider 的成员进组），"
+                   "下次它开着时守护放回。" % "、".join(held))
+    return out
 
 
 def write_state(path, state):
