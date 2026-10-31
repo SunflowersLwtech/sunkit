@@ -52,13 +52,13 @@ The group ids are Claude's own model names. A request for `claude-opus-5-5` reac
 
 | group | members, in order |
 |---|---|
-| `claude-opus-5-5` | `claude/claude-opus-5-5` (the three seats) → `kiro/claude-opus-5.5` → `group/claude-sonnet-5-5` |
-| `claude-sonnet-5-5` | `claude/claude-sonnet-5-5` → `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` → `group/frontier` |
-| `claude-haiku-5-5` | `claude/claude-haiku-5-5` → `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `workbuddy/deepseek-v4.1-flash` → `trae-cn/glm-5.3-flash` → `opencode-go/claude-haiku-5-5` |
+| `claude-opus-5-5` | `claude/claude-opus-5-5` (the three seats) → `kiro/claude-opus-5.5` → `devin/claude-opus-5-5` |
+| `claude-sonnet-5-5` | `claude/claude-sonnet-5-5` → `zed/claude-sonnet-5-5` → `kiro/claude-sonnet-5.5` |
+| `claude-haiku-5-5` | `claude/claude-haiku-5-5` → `zed/claude-haiku-5-5` → `kiro/claude-haiku-5.5` → `opencode-go/claude-haiku-5-5` |
 | `claude-fable-5-1` | `group/claude-opus-5-5` |
 | `frontier` | `zed/gpt-6.1-sol` → `grok/grok-4.7` → `zed/gpt-6-sol` → `trae-global/gpt-6.1-sol` → Kimi K3.1 Pro, GLM-5.3, DeepSeek V4 Pro (WorkBuddy, Trae CN) → `trae-cn/qwen3.8-max` → `workbuddy/minimax-m3` → `trae-cn/Doubao-Seed-2.1-Pro` → the OpenCode Go copies |
 
-Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Every chain ends in `frontier`, so a session keeps going on a non-Claude model when every Claude account is out; `stays=session` moves it there once and keeps it there. Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto`, and the `claude` provider (the subscription bridge) exposes only Opus, Sonnet and Haiku 5.5 (`magpie provider models claude claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5`), never Fable.
+Kiro (1000 credits a month) is kept for Opus, so Sonnet goes to Zed first. Since 2026-10-31 the three Claude groups hold Claude alone (the owner, after a night on GLM-5.3: no GLM unless needed): GLM, Grok, Bedrock GLM-5, `frontier` and `always-up` (both hold GLM) are out of them, and `server/glm-guard.py` puts GLM back at the end only while the seats are about to run out (see below). Members are named `provider/model`: a stored group that names magpie's found `auto-*` groups gets them marked "not served". Copilot exposes only `copilot/auto`, and the `claude` provider (the subscription bridge) exposes only Opus, Sonnet and Haiku 5.5 (`magpie provider models claude claude-opus-5-5 claude-sonnet-5-5 claude-haiku-5-5`), never Fable.
 
 Within `claude/*`, magpie picks the seat by its Smart routing (the seat with room that renews soonest). A 429 "usage limit reached", or a seat's reading at its cap, rests that seat and the same request goes to the next seat at once; with all three resting the group moves on to its next member. On its own, magpie reads the two seats Claude Code isn't signed in to only from the answers they give, so their readings could be hours old until a request landed there. Since 2026-10-31 `server/seat-refresh.py` keeps every seat's reading current (see [Seat readings](#seat-readings)). `X-Magpie-Account: <email> · DuoCode` pins a request to one seat for a test.
 
@@ -95,6 +95,17 @@ magpie v0.1.1689 reads a Claude seat's allowance only when that seat answers a r
 It refreshes at most 4 seats a run, one at a time, which comes to about one `/usage` per seat every 10 minutes. Each refresh writes the seat's reading before and after to `/var/lib/magpie-seat-refresh/log`. `--dry-run` prints what it would refresh and why, and refreshes nothing.
 
 Install: `seat-refresh.py` to `/opt/magpie/monitor/` (root, 700), the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-seat-refresh.timer`. Off: `systemctl disable --now magpie-seat-refresh.timer`; magpie goes back to reading a seat only when it answers or is refreshed by hand. Tests: `python3 server/seat-refresh.test.py`.
+
+## GLM overflow guard
+
+`server/glm-guard.py` runs on the gateway host every 5 minutes (`magpie-glm-guard.timer`). It reads every Claude subscription's 5-hour use, reset time and reading time from magpie's cards (`/v1/magpie/quotas/cards` inside the container, kept fresh by seat-refresh; nothing is asked of Anthropic), each seat's cap from `providers.json` (`accountWindowCaps` "5 hours", else `accountCaps`, else 100), and the last 30 minutes of use from `quota-history.json`. An account whose 7-day window is used up counts as having nothing left.
+
+- Open (when closed): every seat has less than 15% left, or at the last 30 minutes' pace what the seats have left before their caps runs out within 30 minutes and before the first seat resets. It runs `magpie provider on zcode` if ZCode is off, then `magpie group set <id> models+=zcode/GLM-5.3` for Opus and Sonnet and `models+=zcode/GLM-5.3-Flash` for Haiku. The groups route in order, so GLM answers only once every Claude member is out.
+- Close (when open): a seat read in the last 20 minutes has 50% or more left (it has just reset). The GLM members come out, and ZCode is turned off again only if the guard turned it on. Pace is not looked at here: magpie keeps an active conversation on the member that answered it (`stays=auto`), so while GLM stays in the group the sessions that fell to it stay on it; taking it out sends them back to Claude, and the open rule puts it back 15 minutes later if the pace still calls for it.
+- At least 15 minutes between an open and a close. Every run reconciles: while closed, those GLM members are taken out of the three groups even if someone added them by hand.
+- Each switch is logged to `/var/lib/magpie-glm-guard/log` and sent over mesh to `feishu-assistant` (else `feishu-assistant-backup`, else the ntfy relay in `/etc/llm-gateway/ops.env`), from a send-only sender `magpie-glm-guard` with its own device token in `/etc/magpie-glm-guard/mesh.env` (600).
+
+Install: `glm-guard.py` to `/opt/magpie/monitor/` (root, 700), `mesh.env` with `MESH_RELAY_URL` and `MESH_TOKEN`, the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-glm-guard.timer`. Pause: `touch /etc/magpie-glm-guard/paused` (each run exits without touching anything). Off: `systemctl disable --now magpie-glm-guard.timer`. `glm-guard.py --dry-run` prints what it reads and what it would run. Tests: `python3 server/glm-guard.test.py` (fake cards, relay and magpie on 127.0.0.1).
 
 ## Feishu assistant fallback (N150)
 
