@@ -13,7 +13,9 @@
 # 什么时候打开（关着，且距上次切换 ≥15 分钟）：
 #   - 每个座位都只剩不到 15%；或
 #   - 按最近 30 分钟的消耗速度，所有座位到上限前的余量会在 30 分钟内、且在最早一个座位重置之前用完。
-# 什么时候关上（开着，且距上次切换 ≥15 分钟）：有座位读数在 20 分钟内、余量 ≥50%（一般是它刚重置）。不再看速度：
+#   magpie 给不出读数的座位（卡片没有 5 小时窗口）在这里按没有余量算。
+# 什么时候关上（开着，且距上次切换 ≥15 分钟）：有座位读数在 20 分钟内、余量 ≥50%（一般是它刚重置）；读不到的座位
+#   不算回来，卡片或 providers.json 整个读不到时什么都不改。不再看速度：
 #   magpie 让一个还在活跃的会话留在答过它的成员上（stays=auto），GLM 留在组里，落到 GLM 的会话就一直在 GLM；
 #   座位一回来就拿掉 GLM，把它们赶回 Claude。之后速度还是快，15 分钟后由「打开」那条再加回来。
 # 动作：magpie group set <组> models+=<GLM> / models-=<GLM>（providers.json 热生效，不重启）；zcode provider 关着就先
@@ -128,7 +130,11 @@ def seats(cards, prov, t):
     for c in cards:
         if c.get("provider") != "claude" or c.get("kind") != "subscription" or not c.get("user"):
             continue
-        five, week = window(c, "5 hours") or {}, window(c, "7 days")
+        five, week = window(c, "5 hours"), window(c, "7 days")
+        # magpie 给不出 5 小时读数（登录失效这类错误不留旧读数，卡片没有窗口）：打开那边按没有余量算，读不到的座位
+        # 多半也接不了请求；关上那边只认 20 分钟内的读数，读不到的本来就不算回来
+        unread = five is None
+        five = five or {}
         used, reset = float(five.get("used") or 0), parse_time(five.get("resetsAt"))
         raw = (parse_time(c.get("readAt")) or parse_time(c.get("asOf")), used, reset)
         if reset is not None and reset <= t:
@@ -138,11 +144,12 @@ def seats(cards, prov, t):
         week_full = bool(week and (week.get("used") or 0) >= 100 and (week_reset is None or week_reset > t))
         cap = cap_for(c["user"], cp)
         read = raw[0]
+        no_room = week_full or unread
         out.append({
             "user": c["user"], "plan": c.get("plan") or "", "used": used, "cap": cap, "reset": reset, "read": read,
-            "raw": raw, "ok": not week_full, "week_reset": week_reset if week_full else None,
-            "headroom": 0.0 if week_full else max(0.0, cap - used),
-            "left": 0.0 if week_full else max(0.0, 100.0 - used),
+            "raw": raw, "ok": not week_full, "week_reset": week_reset if week_full else None, "unread": unread,
+            "headroom": 0.0 if no_room else max(0.0, cap - used),
+            "left": 0.0 if no_room else max(0.0, 100.0 - used),
             "fresh": read is not None and t - read <= FRESH,
         })
     return out
@@ -274,6 +281,8 @@ def seat_lines(ss):
         who = s["user"].replace(" · DuoCode", "") + ("（个人 Max）" if s["plan"] == "max" else "")
         if not s["ok"]:
             out.append("%s：7 天额度用完%s" % (who, "，%s 重置" % hm(s["week_reset"]) if s["week_reset"] else ""))
+        elif s["unread"]:
+            out.append("%s：读不到（magpie 给不出读数，按没有余量算）" % who)
         else:
             out.append("%s：剩 %g%%（上限 %g%%）%s" % (who, round(s["left"], 1), s["cap"],
                                                    "，%s 重置" % hm(s["reset"]) if s["reset"] else ""))
@@ -283,7 +292,8 @@ def seat_lines(ss):
 def message(opened, why, ss, a, history, zcode_on, t):
     if opened:
         if why == "low":
-            head = "magpie 已自动打开 GLM 兜底：Claude 座位都只剩不到 %d%%，座位到上限后的请求改落 ZCode GLM。" % LOW
+            head = "magpie 已自动打开 GLM 兜底：Claude 座位都只剩不到 %d%%%s，座位到上限后的请求改落 ZCode GLM。" % (
+                LOW, "（读不到的按没有余量算）" if any(s["unread"] for s in ss) else "")
         else:
             head = "magpie 已自动打开 GLM 兜底：按最近 30 分钟的速度，Claude 座位约 %s 到上限%s，之后的请求改落 ZCode GLM。" % (
                 hm(t + a["to_empty"] * 60), "，早于最早一次重置 %s" % hm(a["first_reset"]) if a["first_reset"] else "")
@@ -359,8 +369,9 @@ def tell(text):
 
 
 def summary(ss, a):
-    seat = " ".join("%s%s=%g%%/%g%s" % (s["user"].replace(" · DuoCode", ""), "(max)" if s["plan"] == "max" else "",
-                                        round(s["used"], 1), s["cap"], "" if s["ok"] else "(7d full)") for s in ss)
+    seat = " ".join("%s%s=%s/%g%s" % (s["user"].replace(" · DuoCode", ""), "(max)" if s["plan"] == "max" else "",
+                                      "unread" if s["unread"] else "%g%%" % round(s["used"], 1), s["cap"],
+                                      "" if s["ok"] else "(7d full)") for s in ss)
     return "%s rate=%.2f%%/min headroom=%.0f to_empty=%s first_reset=%s low=%s soon=%s back=%d" % (
         seat, a["rate"], a["headroom"], "-" if a["to_empty"] is None else "%.0fm" % a["to_empty"],
         hm(a["first_reset"]) if a["first_reset"] else "-", a["low"], a["soon"], len(a["back"]))
@@ -409,10 +420,16 @@ def run(dry):
         return 0
     if missing:
         log("groups missing, left alone: %s" % ", ".join(missing))
-    zcode_was_off = provider_off(prov, GLM_PROVIDER)
     try:
         for c in cmds:
             magpie(c)
+            # zcode 归不归守护管，provider on/off 一成功就记：打开时 provider on 成功、后面的 group set 失败，这轮记 FAILED，
+            # 下一轮 zcode 已开着、不再跑 provider on，等到全部成功才记就再也记不上，关上后 zcode 一直开着
+            # （frontier、always-up 这些组照样用 GLM）
+            if c[:2] == ["provider", "on"]:
+                state["zcode_by_guard"] = True
+            elif c[:2] == ["provider", "off"]:
+                state["zcode_by_guard"] = False
         after = read_json(CONF + "/providers.json")
         if not aligned(after, want):
             raise RuntimeError("providers.json not as expected after the change")
@@ -426,15 +443,12 @@ def run(dry):
         return 1
     state.pop("failing", None)
     switched = want != bool(state.get("open"))
-    if want and zcode_was_off and any(c[:2] == ["provider", "on"] for c in cmds):
-        state["zcode_by_guard"] = True
-    if not want and any(c[:2] == ["provider", "off"] for c in cmds):
-        state["zcode_by_guard"] = False
     if switched:
         state.update({"open": want, "since": t})
     log(line + ("" if not cmds else " | ran: " + "; ".join(" ".join(c) for c in cmds)))
     if switched:
-        tell(message(want, why, ss, a, history, (zcode_was_off if want else bool(cmds and cmds[-1][:2] == ["provider", "off"])), t))
+        tell(message(want, why, ss, a, history, (bool(state.get("zcode_by_guard")) if want
+                                                 else bool(cmds and cmds[-1][:2] == ["provider", "off"])), t))
     write_state(statef, state)
     return 0
 
