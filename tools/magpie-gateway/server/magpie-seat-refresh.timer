@@ -1,0 +1,8 @@
+[Unit]
+Description=magpie Claude seat allowance refresh every 2 minutes
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15
+[Install]
+WantedBy=timers.target
