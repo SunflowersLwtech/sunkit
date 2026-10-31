@@ -1,0 +1,9 @@
+[Unit]
+Description=magpie: put GLM behind the Claude seats when they are about to run out, take it out when one is back
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=300
+ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/glm-guard.py
