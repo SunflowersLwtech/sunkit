@@ -215,6 +215,38 @@ class SeatRefresh(unittest.TestCase):
         self.assertIsNone(sr.parse_time(None))
         self.assertIsNone(sr.parse_time("not a time"))
 
+    def test_the_unit_can_read_busy_seats_every_three_minutes(self):
+        # magpie v0.1.2421's interactive mode tells nothing of the allowance on an answered turn, so the unit sets
+        # SR_STALE=180 SR_UNKNOWN_GAP=180; a copy of the script loaded with them, against the same fake gateway
+        global sr
+        old = sr
+        os.environ.update(SR_STALE="180", SR_UNKNOWN_GAP="180")
+        try:
+            s = importlib.util.spec_from_file_location("seatrefresh3", os.path.join(HERE, "seat-refresh.py"))
+            sr = importlib.util.module_from_spec(s)
+            s.loader.exec_module(sr)
+            for k in ("BASE", "VAR", "STATE", "LOG"):
+                setattr(sr, k, getattr(old, k))
+            self.assertEqual((sr.STALE, sr.UNKNOWN_GAP), (180, 180))
+            Fake.cards = [card("young@x.com · DuoCode", five=(20, 3600), read=-2 * 60),
+                          card("old@x.com · DuoCode", five=(20, 3600), read=-4 * 60)]
+            sr.main()
+            # 4 minutes old is read now (the default 10 would leave it), 2 minutes old is not
+            self.assertEqual(Fake.refreshed, ["old@x.com · DuoCode"])
+            # the seat it just read, its reading old again: not before 3 minutes have passed since, then yes
+            Fake.cards = [card("old@x.com · DuoCode", five=(30, 3600), read=-4 * 60)]
+            Fake.refreshed = []
+            self.backdate("old@x.com · DuoCode", 2 * 60)
+            sr.main()
+            self.assertEqual(Fake.refreshed, [])
+            self.backdate("old@x.com · DuoCode", 2 * 60)
+            sr.main()
+            self.assertEqual(Fake.refreshed, ["old@x.com · DuoCode"])
+        finally:
+            for k in ("SR_STALE", "SR_UNKNOWN_GAP"):
+                os.environ.pop(k, None)
+            sr = old
+
 
 if __name__ == "__main__":
     unittest.main()

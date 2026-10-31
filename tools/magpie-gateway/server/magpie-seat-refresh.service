@@ -8,4 +8,7 @@ After=docker.service
 Type=oneshot
 Nice=10
 TimeoutStartSec=600
+# magpie v0.1.2421 runs the seats in Claude Code's interactive mode, whose answered turns tell magpie nothing of the
+# allowance: read each busy seat about every 3–4 minutes instead of 10 (seat-refresh.py's header)
+Environment=SR_STALE=180 SR_UNKNOWN_GAP=180
 ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/seat-refresh.py
