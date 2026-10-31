@@ -12,8 +12,12 @@ handoff_relpath = ".claude/handoff/current.md"
 [limits]
 # Hard bill & safety guardrails (upper bounds on any BYOK compaction call)
 max_byok_input_chars = 18000
-max_byok_output_tokens = 1800
-byok_timeout_sec = 30
+# The reply is bounded by the prompt (<1200 words), the input cap and the rate
+# limits, not by cutting the model's output short.
+max_byok_output_tokens = 32000
+byok_timeout_sec = 90
+# A transcript written to within this many seconds is a running session's: no splice
+live_guard_sec = 120
 min_compaction_cooldown_sec = 180
 max_compactions_per_hour = 6
 preserve_tail_messages = 10
@@ -72,6 +76,8 @@ target_post_compact_tokens = 36000
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Layer 2: Provider Pool Constraints & Cost Multipliers
+# Not read by cc-compactor.py (descriptive only): evaluate_actions uses a fixed
+# 200K * 0.9 - 16384 budget. Real windows on the gateway: `magpie model context`.
 # ──────────────────────────────────────────────────────────────────────────────
 
 [pools.claude_primary]
@@ -128,8 +134,11 @@ quota_scarcity = 0.18
 
 [compactors.surgical_hybrid]
 mode = "hybrid"
-# Ordered BYOK model groups on Magpie gateway (zero primary Claude seat burn)
-byok_chain = ["zcode/GLM-5.3-Flash", "zcode/GLM-5.3", "claude-haiku-5-5"]
+# Gateway models tried in order for the summary. GLM came off on 10-31 (ZCode's week
+# used up until 11-06, provider off on the gateway); "always-up" still answers when
+# the seats are out (devin/swe-2, Grok, ZCode when on). Haiku costs a little seat.
+byok_chain = ["claude-haiku-5-5", "always-up"]
+# preserve_buckets / evict_buckets: not read by cc-compactor.py (descriptive only)
 preserve_buckets = [
   "file_paths_and_line_ranges",
   "git_diff_stat",

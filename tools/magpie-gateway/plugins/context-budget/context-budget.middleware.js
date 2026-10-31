@@ -2,22 +2,33 @@
  * context-budget.middleware.js — Magpie Gateway Plugin
  *
  * Provider-aware context window budgeting, surgical payload slimming for
- * constrained fallback models (zcode/GLM-5, bedrock-glm5, devin, deepseek),
- * prefix-cache protection for primary Claude seats, and multi-dimensional
- * weighted seat selection (ceiling + expiring-quota discount + cache-stampede
- * affinity).
+ * constrained fallback models, prefix-cache protection for primary Claude
+ * seats, and multi-dimensional weighted seat selection (ceiling +
+ * expiring-quota discount + cache-stampede affinity).
+ *
+ * Windows are opt-in (1.1.0): a provider is slimmed only when `windows` in the
+ * options names its window (`"<provider>/<model>"`, `"<model>"` or
+ * `"<provider>"`). 1.0.x carried its own table (zcode 200K, devin 262,144,
+ * grok 131,072, unknown providers 200K) while magpie's own context sizes for
+ * the members served on 10-31 were zcode/GLM-5.3 1M, devin/claude-opus-5-5 1M,
+ * grok/grok-4.7 256K, zed/gpt-6.1-sol 400K, and a 515,723-token request was
+ * answered by zcode/GLM-5.3. From 10-30 18:37 to 10-31 14:xx (+08) it held zcode
+ * requests under about 182K (8,945 requests, 5 over 200K; 287 of the 851 in the
+ * two days before were over 200K) for no window that needed it.
+ * max_tokens is lowered only when the prompt estimate plus max_tokens would
+ * not fit the configured window, never to a per-provider table.
  *
  * Runtime compatibility:
  *   - Pure ES module for Magpie's embedded moejs engine (no Node builtins).
  *   - Returns `undefined` when no mutation is needed so moejs skips re-marshaling
  *     large request bodies across the JS <-> Go boundary.
- *   - Uses native regex slice sampling (`nonAsciiSampled`) rather than JS char
- *     loops to stay well inside Magpie's 250ms hook / 20ms strategy limits even
- *     on 3 MB+ conversation transcripts.
+ *   - Timings in the node tests are V8's. moejs is far slower: on 10-31 11:44 a
+ *     515K-token request ran past the 250ms onProvider limit ("onProvider: took
+ *     too long") and magpie sent it unchanged (fail open).
  */
 
 export const name = "context-budget";
-export const version = "1.0.1";
+export const version = "1.1.0";
 export const description =
   "Provider-aware context budgeting, surgical fallback slimming, and cache-aware weighted seat routing";
 
@@ -91,45 +102,18 @@ export const options = {
     description:
       "Comma-separated account substrings prioritized before other seats in the same health tier",
   },
-};
-
-export const DEFAULT_PROVIDER_WINDOWS = {
-  claude: 1000000,
-  zcode: 200000,
-  "bedrock-glm5": 202752,
-  devin: 262144,
-  deepseek: 131072,
-  grok: 131072,
-  "opencode-go": 200000,
-  "trae-cn": 200000,
-  "trae-global": 200000,
-  workbuddy: 200000,
-  zed: 200000,
-  codex: 272000,
-  gemini: 1000000,
-  "gemini-cli": 1000000,
-};
-
-export const DEFAULT_MODEL_WINDOWS = {
-  "claude-haiku-4-5": 200000,
-  "claude-haiku-4-5-20251001": 200000,
-  "glm-5-turbo": 131072,
-  "glm-5.1": 200000,
-  "glm-5.3": 200000,
-  "GLM-5.1": 200000,
-  "GLM-5.3": 200000,
-  "deepseek-chat": 131072,
-  "deepseek-reasoner": 131072,
-};
-
-export const DEFAULT_PROVIDER_MAX_OUTPUT = {
-  claude: 64000,
-  zcode: 32768,
-  "bedrock-glm5": 32768,
-  devin: 32768,
-  deepseek: 16384,
-  grok: 16384,
-  "opencode-go": 32768,
+  windows: {
+    type: "object",
+    default: {},
+    description:
+      'Context windows to budget against, e.g. {"bedrock-glm5": 202752}; keys "<provider>/<model>", "<model>" or "<provider>". A provider not named here is never slimmed',
+  },
+  log: {
+    type: "boolean",
+    default: false,
+    description:
+      "Log one line per rewritten request (provider, model, estimates, stages; no body text). magpie keeps at most 60 lines a minute",
+  },
 };
 
 const seatTelemetry = new Map();
@@ -270,33 +254,15 @@ export function estimateInputTokens(body) {
   return total;
 }
 
+// The window configured for this provider/model, or 0 when none is: the plugin
+// then leaves the request alone (magpie already skips members too small for it).
 export function resolveWindowLimit(providerId, model, opts = {}) {
   const customWindows = opts?.windows && typeof opts.windows === "object" ? opts.windows : null;
   const pId = String(providerId || "").trim();
   const mId = String(model || "").trim();
-
-  if (customWindows) {
-    if (pId && mId && typeof customWindows[`${pId}/${mId}`] === "number") {
-      return customWindows[`${pId}/${mId}`];
-    }
-    if (mId && typeof customWindows[mId] === "number") {
-      return customWindows[mId];
-    }
-    if (pId && typeof customWindows[pId] === "number") {
-      return customWindows[pId];
-    }
-  }
-
-  if (pId === "bedrock-glm5") {
-    return DEFAULT_PROVIDER_WINDOWS["bedrock-glm5"];
-  }
-  if (mId && typeof DEFAULT_MODEL_WINDOWS[mId] === "number") {
-    return DEFAULT_MODEL_WINDOWS[mId];
-  }
-  if (pId && typeof DEFAULT_PROVIDER_WINDOWS[pId] === "number") {
-    return DEFAULT_PROVIDER_WINDOWS[pId];
-  }
-  return 200000;
+  if (!customWindows) return 0;
+  const pick = (k) => (typeof customWindows[k] === "number" && customWindows[k] > 0 ? customWindows[k] : 0);
+  return (pId && mId && pick(`${pId}/${mId}`)) || (mId && pick(mId)) || (pId && pick(pId)) || 0;
 }
 
 export function trimHeadTail(text, maxChars, headRatio = 0.58) {
@@ -614,57 +580,46 @@ export function foldMiddleTurns(messages, baseOverheadTokens, inputBudget) {
   return result;
 }
 
-function clampOutputAndThinking(body, inputTokens, windowLimit, providerId, opts = {}) {
-  let mutated = false;
+// Lowers max_tokens only when the prompt estimate plus the reply asked for would
+// not fit the configured window (the estimate errs high); a thinking budget
+// follows it down. A request that fits keeps the max_tokens the agent sent.
+function fitOutputToWindow(body, inputTokens, windowLimit, opts = {}) {
+  if (typeof body.max_tokens !== "number" || body.max_tokens <= 0) return false;
   const safetyRatio = Number(opts.safetyRatio) > 0 ? Number(opts.safetyRatio) : 0.90;
   const hardSafeWindow = Math.floor(windowLimit * Math.min(0.97, safetyRatio + 0.05));
-  const providerMaxOut = DEFAULT_PROVIDER_MAX_OUTPUT[providerId] || 32768;
-  const availableForOutput = Math.max(1024, hardSafeWindow - inputTokens);
-
-  const currentMaxTokens =
-    typeof body.max_tokens === "number" && body.max_tokens > 0
-      ? body.max_tokens
-      : Math.min(providerMaxOut, Number(opts.defaultReserveOutput) || 16384);
-
-  const clampedMaxTokens = Math.min(currentMaxTokens, providerMaxOut, availableForOutput);
-  if (typeof body.max_tokens === "number" && body.max_tokens !== clampedMaxTokens) {
-    body.max_tokens = clampedMaxTokens;
-    mutated = true;
-  }
-
-  if (body.thinking && typeof body.thinking === "object") {
-    if (typeof body.thinking.budget_tokens === "number") {
-      if (clampedMaxTokens <= 2048) {
-        delete body.thinking;
-        mutated = true;
-      } else if (body.thinking.budget_tokens >= clampedMaxTokens) {
-        body.thinking = {
-          ...body.thinking,
-          budget_tokens: Math.max(1024, clampedMaxTokens - 1024),
-        };
-        mutated = true;
-      }
+  const room = Math.max(1024, hardSafeWindow - inputTokens);
+  if (body.max_tokens <= room) return false;
+  body.max_tokens = room;
+  const t = body.thinking;
+  if (t && typeof t === "object" && typeof t.budget_tokens === "number") {
+    if (room <= 2048) {
+      delete body.thinking;
+    } else if (t.budget_tokens >= room) {
+      body.thinking = { ...t, budget_tokens: Math.max(1024, room - 1024) };
     }
   }
-  return mutated;
+  return true;
 }
 
 export function onProvider(body, ctx) {
   const opts = ctx?.options || {};
   if (opts.enabled === false || opts.off === true) return undefined;
+  // Anthropic Messages only: a Chat body keeps tool calls in tool_calls and
+  // role "tool" messages, which the pair-safe folding below would not see.
+  if (ctx?.protocol !== "anthropic") return undefined;
   if (!body || typeof body !== "object" || !Array.isArray(body.messages)) return undefined;
 
   const providerId = String(ctx?.provider?.id || "").trim();
   const model = String(ctx?.provider?.model || body.model || "").trim();
-  const windowLimit = resolveWindowLimit(providerId, model, opts);
-
-  // O(1) fast path for primary Claude 1M seats: preserve 100% prefix cache stability
-  // without traversing or re-serializing the body in moejs.
   const preserveSet = new Set(parseCsvList(opts.preserveCacheProviders, ["claude"]));
-  if (preserveSet.has(providerId) && windowLimit >= 900000 && !opts.enforceClaudeCeiling) {
-    return undefined;
-  }
+  if (preserveSet.has(providerId) && !opts.enforceClaudeCeiling) return undefined;
 
+  // No window configured for this provider/model: leave it alone, without
+  // walking the body.
+  const windowLimit = resolveWindowLimit(providerId, model, opts);
+  if (!windowLimit) return undefined;
+
+  const t0 = Date.now();
   const safetyRatio =
     Number(opts.safetyRatio) > 0 && Number(opts.safetyRatio) <= 0.98
       ? Number(opts.safetyRatio)
@@ -676,72 +631,89 @@ export function onProvider(body, ctx) {
   const inputBudget = Math.max(8192, safeTotalTokens - reserveOutput);
 
   const initialInputTokens = estimateInputTokens(body);
+  const initialMaxTokens = body.max_tokens;
 
   if (preserveSet.has(providerId) && initialInputTokens <= inputBudget) {
     return undefined;
   }
 
-  if (initialInputTokens <= inputBudget) {
-    const clamped = clampOutputAndThinking(body, initialInputTokens, windowLimit, providerId, opts);
-    return clamped ? body : undefined;
-  }
-
+  const stages = [];
   let changed = false;
 
-  // Stage 1: Surgical slimming of older tool_result payloads, base64 images, and oversized text blocks
-  const keepRecent1 =
-    Number(opts.keepRecentMessages) >= 2 ? Number(opts.keepRecentMessages) : 10;
-  const toolMax1 =
-    Number(opts.toolResultMaxChars) >= 200 ? Number(opts.toolResultMaxChars) : 2400;
-  const textMax1 =
-    Number(opts.oldTextMaxChars) >= 400 ? Number(opts.oldTextMaxChars) : 4000;
+  if (initialInputTokens > inputBudget) {
+    // Stage 1: Surgical slimming of older tool_result payloads, base64 images, and oversized text blocks
+    const keepRecent1 =
+      Number(opts.keepRecentMessages) >= 2 ? Number(opts.keepRecentMessages) : 10;
+    const toolMax1 =
+      Number(opts.toolResultMaxChars) >= 200 ? Number(opts.toolResultMaxChars) : 2400;
+    const textMax1 =
+      Number(opts.oldTextMaxChars) >= 400 ? Number(opts.oldTextMaxChars) : 4000;
 
-  const stage1Cfg = {
-    keepRecentMessages: keepRecent1,
-    toolResultMaxChars: toolMax1,
-    oldTextMaxChars: textMax1,
-    trimToolInput: false,
-    toolInputMaxChars: 2400,
-    dropOldThinking: providerId !== "claude",
-    mutated: false,
-  };
-  body.messages = slimOlderMessages(body.messages, stage1Cfg);
-  if (stage1Cfg.mutated) changed = true;
-
-  let currentTokens = estimateInputTokens(body);
-
-  // Stage 2: Tighter head/tail bounds + oversized tool_use.input trimming
-  if (currentTokens > inputBudget) {
-    const stage2Cfg = {
-      keepRecentMessages: Math.min(6, keepRecent1),
-      toolResultMaxChars: Math.min(800, toolMax1),
-      oldTextMaxChars: Math.min(1200, textMax1),
-      trimToolInput: true,
-      toolInputMaxChars: 900,
-      dropOldThinking: true,
+    const stage1Cfg = {
+      keepRecentMessages: keepRecent1,
+      toolResultMaxChars: toolMax1,
+      oldTextMaxChars: textMax1,
+      trimToolInput: false,
+      toolInputMaxChars: 2400,
+      dropOldThinking: providerId !== "claude",
       mutated: false,
     };
-    body.messages = slimOlderMessages(body.messages, stage2Cfg);
-    if (stage2Cfg.mutated) changed = true;
-    currentTokens = estimateInputTokens(body);
+    body.messages = slimOlderMessages(body.messages, stage1Cfg);
+    if (stage1Cfg.mutated) {
+      changed = true;
+      stages.push("slim");
+    }
+
+    let currentTokens = estimateInputTokens(body);
+
+    // Stage 2: Tighter head/tail bounds + oversized tool_use.input trimming
+    if (currentTokens > inputBudget) {
+      const stage2Cfg = {
+        keepRecentMessages: Math.min(6, keepRecent1),
+        toolResultMaxChars: Math.min(800, toolMax1),
+        oldTextMaxChars: Math.min(1200, textMax1),
+        trimToolInput: true,
+        toolInputMaxChars: 900,
+        dropOldThinking: true,
+        mutated: false,
+      };
+      body.messages = slimOlderMessages(body.messages, stage2Cfg);
+      if (stage2Cfg.mutated) {
+        changed = true;
+        stages.push("tight");
+      }
+      currentTokens = estimateInputTokens(body);
+    }
+
+    // Stage 3: Pair-safe middle turn folding when payload still exceeds the window
+    if (currentTokens > inputBudget && body.messages.length > 4) {
+      const messagesOnlyTokens = body.messages.reduce(
+        (sum, m) => sum + estimateMessageTokens(m),
+        0
+      );
+      const baseOverhead = Math.max(0, currentTokens - messagesOnlyTokens);
+      const beforeLen = body.messages.length;
+      body.messages = foldMiddleTurns(body.messages, baseOverhead, inputBudget);
+      if (body.messages.length !== beforeLen) {
+        changed = true;
+        stages.push("fold");
+      }
+    }
   }
 
-  // Stage 3: Pair-safe middle turn folding when payload still exceeds fallback window
-  if (currentTokens > inputBudget && body.messages.length > 4) {
-    const messagesOnlyTokens = body.messages.reduce(
-      (sum, m) => sum + estimateMessageTokens(m),
-      0
-    );
-    const baseOverhead = Math.max(0, currentTokens - messagesOnlyTokens);
-    const beforeLen = body.messages.length;
-    body.messages = foldMiddleTurns(body.messages, baseOverhead, inputBudget);
-    if (body.messages.length !== beforeLen) changed = true;
-    currentTokens = estimateInputTokens(body);
-  }
-
-  // Stage 4: Clamp max_tokens & thinking.budget_tokens so input + output never overflows provider window
-  if (clampOutputAndThinking(body, currentTokens, windowLimit, providerId, opts)) {
+  // Stage 4: max_tokens & thinking.budget_tokens only when input + output would overflow the window
+  const finalTokens = changed ? estimateInputTokens(body) : initialInputTokens;
+  if (fitOutputToWindow(body, finalTokens, windowLimit, opts)) {
     changed = true;
+    stages.push("max_tokens");
+  }
+
+  if (changed && opts.log === true && typeof console !== "undefined") {
+    console.log(
+      `rewrote provider=${providerId} model=${model} window=${windowLimit} ` +
+        `est=${initialInputTokens}->${finalTokens} max_tokens=${initialMaxTokens}->${body.max_tokens} ` +
+        `stages=${stages.join(",")} ms=${Date.now() - t0}`
+    );
   }
   return changed ? body : undefined;
 }

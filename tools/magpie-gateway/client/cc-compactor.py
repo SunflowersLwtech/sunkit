@@ -10,7 +10,7 @@ real-time Magpie multi-seat pool quotas (`/v1/magpie/quotas`) to minimize a
   1. STAY_NOOP            — Continue on active primary seat (preserve 100% cache)
   2. WAIT_KEEP_WARM       — Hold for imminent 5h quota reset + keep cache warm
   3. WARM_PRECOMPACT      — Proactively compact while active seat cache is still warm
-  4. BYOK_JSONL_SPLICE    — Distill via BYOK (zcode/GLM-5.3 / always-up) + splice
+  4. BYOK_JSONL_SPLICE    — Distill via the gateway (claude-haiku-5-5, then always-up) + splice
                             native Claude Code `compact_boundary` into `.jsonl`
   5. CROSS_HARNESS_HANDOFF— Emit `.claude/handoff/current.md` for subagent/fresh start
 """
@@ -42,8 +42,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "limits": {
         "max_byok_input_chars": 18000,
-        "max_byok_output_tokens": 1800,
-        "byok_timeout_sec": 30,
+        # The reply is bounded by the prompt (<1200 words), the input cap above and
+        # the rate limits below, not by cutting the model's output short.
+        "max_byok_output_tokens": 32000,
+        "byok_timeout_sec": 90,
+        # A transcript written to within this many seconds belongs to a running
+        # session: Claude Code keeps that conversation in memory, so a splice
+        # would only take effect on --resume and could race its next write.
+        "live_guard_sec": 120,
         "min_compaction_cooldown_sec": 180,
         "max_compactions_per_hour": 6,
         "preserve_tail_messages": 10,
@@ -133,7 +139,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compactors": {
         "surgical_hybrid": {
             "mode": "hybrid",
-            "byok_chain": ["zcode/GLM-5.3-Flash", "zcode/GLM-5.3", "claude-haiku-5-5"],
+            # GLM came off on 10-31: the ZCode week was used up until 11-06 and the
+            # provider is off on the gateway. "always-up" is the gateway group that
+            # still answers when the seats are out (devin/swe-2, Grok, ZCode when on).
+            "byok_chain": ["claude-haiku-5-5", "always-up"],
             "preserve_buckets": [
                 "file_paths_and_line_ranges",
                 "git_diff_stat",
@@ -923,7 +932,15 @@ def build_deterministic_digest(
     return "\n".join(lines).strip()
 
 
-def check_and_record_rate_limit(cfg: dict[str, Any], dry_run: bool = False) -> tuple[bool, str]:
+def session_is_live(jsonl_path: Path, cfg: dict[str, Any], now_ts: float | None = None) -> bool:
+    guard = float(cfg.get("limits", {}).get("live_guard_sec", 120))
+    now = now_ts if now_ts is not None else time.time()
+    return guard > 0 and (now - jsonl_path.stat().st_mtime) < guard
+
+
+def check_and_record_rate_limit(
+    cfg: dict[str, Any], dry_run: bool = False, force: bool = False
+) -> tuple[bool, str]:
     state_dir = Path(cfg.get("general", {}).get("state_dir", "~/.cache/cc-compactor")).expanduser()
     state_dir.mkdir(parents=True, exist_ok=True)
     rate_file = state_dir / "rate_guard.json"
@@ -941,12 +958,13 @@ def check_and_record_rate_limit(cfg: dict[str, Any], dry_run: bool = False) -> t
         except Exception:
             history = []
 
-    if history and (now - history[-1]) < cooldown_sec:
-        rem = int(cooldown_sec - (now - history[-1]))
-        return False, f"cooldown_active ({rem}s remaining)"
+    if not force:
+        if history and (now - history[-1]) < cooldown_sec:
+            rem = int(cooldown_sec - (now - history[-1]))
+            return False, f"cooldown_active ({rem}s remaining)"
 
-    if len(history) >= max_per_hour:
-        return False, f"hourly_cap_reached ({len(history)}/{max_per_hour} per hour)"
+        if len(history) >= max_per_hour:
+            return False, f"hourly_cap_reached ({len(history)}/{max_per_hour} per hour)"
 
     if not dry_run:
         history.append(now)
@@ -959,7 +977,10 @@ def distill_with_byok_llm(
     deterministic_digest: str,
     transcript_state: dict[str, Any],
     cfg: dict[str, Any],
+    tried: list[str] | None = None,
 ) -> tuple[str | None, str]:
+    # tried, when given, gets one line per model that didn't answer, and why.
+    tried = tried if tried is not None else []
     conn = load_magpie_connection(cfg)
     if not conn["base_url"]:
         return None, "missing_gateway_url"
@@ -970,7 +991,7 @@ def distill_with_byok_llm(
     timeout_sec = float(limits.get("byok_timeout_sec", 35.0))
 
     compactor_cfg = cfg.get("compactors", {}).get("surgical_hybrid", {})
-    byok_chain = compactor_cfg.get("byok_chain") or ["zcode/GLM-5.3-Flash", "zcode/GLM-5.3", "claude-haiku-5-5"]
+    byok_chain = compactor_cfg.get("byok_chain") or ["claude-haiku-5-5", "always-up"]
 
     # Build bounded excerpt from middle conversation turns
     conv = transcript_state.get("conversation_records") or []
@@ -1045,8 +1066,11 @@ def distill_with_byok_llm(
             combined = "\n".join(t for t in texts if t.strip()).strip()
             if len(combined) >= 120:
                 return combined, f"byok:{model_name}"
-        except Exception:
-            continue
+            tried.append(f"{model_name}: reply of {len(combined)} chars")
+        except urllib.error.HTTPError as exc:
+            tried.append(f"{model_name}: HTTP {exc.code}")
+        except Exception as exc:
+            tried.append(f"{model_name}: {type(exc).__name__}")
 
     return None, "deterministic_fallback"
 
@@ -1327,8 +1351,12 @@ def cmd_compact(args: argparse.Namespace, cfg: dict[str, Any]) -> int:
     q_state = fetch_magpie_quotas(cfg)
     decision = evaluate_actions(t_state, q_state, cfg, profile_name=args.profile)
 
-    allowed, reason = check_and_record_rate_limit(cfg, dry_run=args.dry_run or args.force)
-    if not allowed and not args.force:
+    if not args.dry_run and not args.allow_live and session_is_live(jsonl_path, cfg):
+        print(json.dumps({"status": "skipped", "reason": "session_live", "session_path": str(jsonl_path)}, indent=2))
+        return 0
+
+    allowed, reason = check_and_record_rate_limit(cfg, dry_run=args.dry_run, force=args.force)
+    if not allowed:
         print(json.dumps({"status": "skipped", "reason": reason}, indent=2))
         return 0
 
@@ -1336,11 +1364,12 @@ def cmd_compact(args: argparse.Namespace, cfg: dict[str, Any]) -> int:
     git_ctx = collect_git_context(meta.get("cwd", str(Path.cwd())))
     deterministic_digest = build_deterministic_digest(t_state, git_ctx)
 
+    tried: list[str] = []
     if args.deterministic_only:
         summary_md = deterministic_digest
         source = "deterministic_ast_git"
     else:
-        byok_md, source = distill_with_byok_llm(deterministic_digest, t_state, cfg)
+        byok_md, source = distill_with_byok_llm(deterministic_digest, t_state, cfg, tried)
         summary_md = byok_md if byok_md else deterministic_digest
 
     duration_ms = int((time.time() - t0) * 1000)
@@ -1353,6 +1382,7 @@ def cmd_compact(args: argparse.Namespace, cfg: dict[str, Any]) -> int:
                     "session_path": str(jsonl_path),
                     "pre_tokens": t_state["context_tokens"],
                     "compactor_source": source,
+                    "failed_models": tried,
                     "recommended_action": decision["recommended_action"],
                     "summary_preview": summary_md[:1200],
                 },
@@ -1371,6 +1401,7 @@ def cmd_compact(args: argparse.Namespace, cfg: dict[str, Any]) -> int:
         duration_ms=duration_ms,
     )
     result["status"] = "compacted"
+    result["failed_models"] = tried
     result["recommended_action"] = decision["recommended_action"]
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -1445,6 +1476,9 @@ def cmd_hook(args: argparse.Namespace, cfg: dict[str, Any]) -> int:
         rec = decision["recommended_action"]
 
         if rec in ("BYOK_JSONL_SPLICE", "WARM_PRECOMPACT") and args.apply:
+            # A hook fires inside the running session, whose transcript is live.
+            if session_is_live(jsonl_path, cfg) and not args.force:
+                return 0
             allowed, _ = check_and_record_rate_limit(cfg, dry_run=False)
             if allowed:
                 meta = t_state.get("meta") or {}
@@ -1492,7 +1526,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use deterministic AST/git/log extraction only without calling BYOK LLM",
     )
-    p_cmp.add_argument("--force", action="store_true", help="Bypass cooldown guard")
+    p_cmp.add_argument("--force", action="store_true", help="Bypass cooldown and hourly cap (still counted)")
+    p_cmp.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="Splice a transcript written to within live_guard_sec (only for a session you will --resume)",
+    )
 
     p_ho = sub.add_parser("handoff", help="Generate cross-harness .claude/handoff/current.md")
     p_ho.add_argument("--output", help="Custom output path for HANDOFF.md")
