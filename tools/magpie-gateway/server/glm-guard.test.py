@@ -68,8 +68,12 @@ def iso(t):
     return datetime.fromtimestamp(t, TZ).isoformat()
 
 
+WEBKEY = "test-web-key-0123456789abcdef"
+
+
 class Fake(BaseHTTPRequestHandler):
-    cards, sessions, messages, pushes = [], [], [], []
+    cards, sessions, messages, pushes, unrests = [], [], [], [], []
+    unrest_reply = (200, {"lifted": False})
 
     def reply(self, code, obj):
         data = json.dumps(obj).encode()
@@ -95,6 +99,18 @@ class Fake(BaseHTTPRequestHandler):
         elif self.path == "/relay":
             Fake.pushes.append(body)
             self.reply(200, {})
+        elif self.path == "/web/api/gateway/unrest":
+            # magpie 网页：没有对的 cookie 就 401（真 magpie 也这样）
+            if self.headers.get("Cookie") != "magpie_web_3430=" + WEBKEY:
+                self.reply(401, {"error": "no cookie"})
+                return
+            try:
+                with open(os.environ["FAKE_CALLS"]) as f:
+                    n = len(f.read().splitlines())
+            except OSError:
+                n = 0
+            Fake.unrests.append((body.get("key"), n))
+            self.reply(*Fake.unrest_reply)
         else:
             self.reply(404, {})
 
@@ -147,9 +163,13 @@ class GlmGuard(unittest.TestCase):
         gg.EXEC, gg.MAGPIE, gg.BASE = [], [sys.executable, self.tmp + "/magpie.py"], "http://127.0.0.1:%d" % port
         gg.CONF, gg.ETC, gg.VAR, gg.OPS_ENV = self.tmp + "/conf", self.tmp + "/etc", self.tmp + "/var", self.tmp + "/ops.env"
         gg.DWELL, gg.TARGETS = 15 * 60, ["feishu-assistant", "feishu-assistant-backup"]
+        gg.WEB, gg.WEB_COOKIE, gg.ROUTING = "http://127.0.0.1:%d/web" % port, "magpie_web_3430", self.tmp + "/conf/routing"
+        os.makedirs(gg.ROUTING)
+        os.environ["MAGPIE_WEB_KEY"] = WEBKEY
         self.t = T0
         gg.now = lambda: self.t
-        Fake.cards[:], Fake.messages[:], Fake.pushes[:] = [], [], []
+        Fake.cards[:], Fake.messages[:], Fake.pushes[:], Fake.unrests[:] = [], [], [], []
+        Fake.unrest_reply = (200, {"lifted": False})
         Fake.sessions[:] = [{"name": "feishu-assistant", "session_id": "s-sec", "account": "weiliu", "status": "idle"}]
         self.providers(zcode_off=True)
         self.history({})
@@ -181,6 +201,15 @@ class GlmGuard(unittest.TestCase):
 
     def history(self, h):
         self.dump("conf/quota-history.json", h)
+
+    def trial_on(self):
+        """打开 Trial 开关（/etc/magpie-glm-guard/use-trial；默认关，和网关一样）"""
+        open(os.path.join(self.tmp, "etc", "use-trial"), "w").close()
+
+    def zroom(self):
+        """ZCode Max 两个窗口和两个 Trial 桶都有余量（历史里还没有 ZCode 时才加，已有的不动）：#42 之前的测试默认 GLM-5.3
+        能加，靠的就是这个；不调就是「读不到 ZCode 余量」，守护什么都不加"""
+        self.history(dict(self.zhist(stale=False), **self.load("conf/quota-history.json")))
 
     def seat(self, who, used, reset_in_min, read_ago_min=1, plan="team", week=None):
         windows = [{"name": "5 hours", "used": used}]
@@ -230,6 +259,7 @@ class GlmGuard(unittest.TestCase):
         self.assertFalse(self.read_state()["open"])
 
     def test_opens_when_every_seat_under_15_percent(self):
+        self.zroom()
         Fake.cards[:] = [self.seat("a@x.com", 90, 100), self.seat("b@x.com", 88, 100), self.seat("c@x.com", 86, 40),
                          self.seat("m@x.com", 0, None, plan="max", week=(100, 50))]
         self.run_guard()
@@ -270,7 +300,7 @@ class GlmGuard(unittest.TestCase):
                 used = now_used - per_seat * (40 - 10 * k) / 30.0
                 pts.append({"at": iso(at), "left": 100 - used, "resetsAt": iso(reset)})
             h["claude|%s · duocode" % who] = {"5 hours": pts}
-        return h
+        return dict(h, **self.zhist(stale=False))
 
     def test_opens_when_speed_says_seats_run_out_before_reset(self):
         # 余量到上限 10+10+20=40 个百分点；30 分钟三座位各涨 10 → 1%/分钟 → 40 分钟用完 > 30，不开
@@ -308,6 +338,7 @@ class GlmGuard(unittest.TestCase):
         self.dump("conf/providers.json", d)
         self.state(open=True, since=self.t - minutes_ago * 60, zcode_by_guard=zcode_by_guard,
                    **({"stripped": stripped} if stripped else {}))
+        self.zroom()
 
     def test_close_waits_out_the_dwell(self):
         self.opened(5)
@@ -387,6 +418,7 @@ class GlmGuard(unittest.TestCase):
         self.assertFalse(os.path.exists(self.tmp + "/var/state.json"))
 
     def test_mesh_without_secretary_falls_back_to_backup_then_ntfy(self):
+        self.zroom()
         Fake.sessions[:] = [{"name": "feishu-assistant-backup", "session_id": "s-bk", "account": "weiliu",
                              "status": "idle"}]
         Fake.cards[:] = [self.seat("a@x.com", 99, 100), self.seat("b@x.com", 99, 100), self.seat("c@x.com", 99, 100)]
@@ -403,6 +435,7 @@ class GlmGuard(unittest.TestCase):
         self.assertIn("已自动关上", Fake.pushes[0]["message"])
 
     def test_failure_is_reported_once_and_state_kept(self):
+        self.zroom()
         open(self.tmp + "/fail", "w").close()
         Fake.cards[:] = [self.seat("a@x.com", 99, 100), self.seat("b@x.com", 99, 100), self.seat("c@x.com", 99, 100)]
         self.assertEqual(self.run_guard(), 1)
@@ -444,6 +477,7 @@ class GlmGuard(unittest.TestCase):
     # ---- 半途失败后 zcode 归谁 ----
     def test_half_finished_open_still_turns_zcode_off_on_close(self):
         # provider on zcode 成功、接着往 claude-* 加成员失败：这轮记失败；下一轮 zcode 已开着、只加组；关上时 zcode 也要关回
+        self.zroom()
         self.flag("fail", "group set claude-")
         self.all_low()
         self.assertEqual(self.run_guard(), 1)
@@ -465,6 +499,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_half_finished_open_turns_zcode_back_off_when_seats_recover(self):
         # 同样半途失败，但重试前座位就回来了：守护一直是关着的，对账时把自己打开的 zcode 关回，不发切换消息
+        self.zroom()
         self.flag("fail", "group set claude-")
         self.all_low()
         self.assertEqual(self.run_guard(), 1)
@@ -502,6 +537,7 @@ class GlmGuard(unittest.TestCase):
     # ---- 读不到的座位 ----
     def test_unread_seat_counts_as_no_room_when_opening(self):
         # 两个座位到上限、第三个 magpie 读不到：读不到的按没有余量算，打开
+        self.zroom()
         Fake.cards[:] = [self.seat("a@x.com", 99, 100), self.seat("b@x.com", 98, 100), self.unread("c@x.com")]
         self.run_guard()
         self.assertTrue(self.read_state()["open"], "an unread seat was counted as room")
@@ -556,6 +592,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_change_is_read_back(self):
         # magpie 加成员退出 0 却没改 providers.json：读回核对要抓到，记失败、报一次、不算打开
+        self.zroom()
         self.flag("noop", "group set")
         self.all_low()
         self.assertEqual(self.run_guard(), 1)
@@ -582,6 +619,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_open_takes_zcode_out_of_the_other_groups_first(self):
         # zcode 关着、由守护打开：先把别的组里的 zcode 成员拿掉（models-= 不看 provider 开没开），再 provider on
+        self.zroom()
         self.all_low()
         self.assertEqual(self.run_guard(), 0)
         g, z = self.groups()
@@ -616,6 +654,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_zcode_already_on_leaves_the_other_groups_alone(self):
         # zcode 是别人开着的：别的组本来就在用它，守护打开时不去动
+        self.zroom()
         self.providers(zcode_off=False)
         self.state(open=False, since=0)
         self.all_low()
@@ -629,6 +668,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_member_with_its_own_settings_is_left_alone(self):
         # 拿掉会丢设置（成员上挂着规则）或会把组拿空（magpie 不让）的，不拿，日志和消息里写出来
+        self.zroom()
         d = self.load("conf/providers.json")
         next(g for g in d["groups"] if g["id"] == "frontier")["rules"] = [{"use": "zcode/GLM-5.3", "longer": 100000}]
         d["groups"].append({"id": "glm-only", "members": ["zcode/GLM-5.3"]})
@@ -667,6 +707,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_half_finished_strip_is_still_put_back(self):
         # 拿 frontier 的成员成功、拿 auto-glm-5-3 的失败：这轮记失败，但 frontier 那条要已经记下；下一轮补完打开，关上时都放回
+        self.zroom()
         self.flag("fail", "group set auto-glm-5-3 ")
         self.all_low()
         self.assertEqual(self.run_guard(), 1)
@@ -699,6 +740,7 @@ class GlmGuard(unittest.TestCase):
     # ---- 复审第二轮记下的测试缺口 ----
     def test_two_zcode_members_go_back_in_their_order(self):
         # 一个组里连着两个 zcode 成员：拿掉时都记成「排在 zed 后面」，放回要倒着放，次序才对
+        self.zroom()
         two = ["zed/gpt-6.1-sol", "zcode/GLM-5.3", "zcode/GLM-5.3-Flash", "trae-cn/glm-5.3", "group/always-up"]
         d = self.load("conf/providers.json")
         next(g for g in d["groups"] if g["id"] == "frontier")["members"] = list(two)
@@ -715,6 +757,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_open_read_back_catches_a_group_still_holding_zcode(self):
         # 拿 frontier 的 zcode 成员那条退出 0 却没改：打开的读回要抓到（zcode 已开着，frontier 还能用到它），记失败
+        self.zroom()
         self.flag("noop", "group set frontier models-=")
         self.all_low()
         self.assertEqual(self.run_guard(), 1, "opened with zcode still in frontier")
@@ -808,6 +851,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_week_used_up_opens_with_trial(self):
         # 11-01 20:09 的样子：ZCode Max 周额度 0%（11-06 才重置），座位全满。不加 GLM-5.3，改加免费 Trial
+        self.trial_on()
         self.history(self.zhist(week=0))
         self.all_low()
         self.assertEqual(self.run_guard(), 0)
@@ -823,6 +867,7 @@ class GlmGuard(unittest.TestCase):
         self.assertNotIn("兜底已空", msg)
 
     def test_5h_used_up_opens_with_trial(self):
+        self.trial_on()
         self.history(self.zhist(five=0, five_reset_min=120, week=60))
         self.all_low()
         self.run_guard()
@@ -830,6 +875,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_trial_used_up_too_does_not_open(self):
         # Max 周额度和两个 Trial 桶都用完：什么都不加、不开 zcode、不动别的组，消息里明说兜底已空，下一轮不重复发
+        self.trial_on()
         self.history(self.zhist(week=0, trial=0, flash=0))
         self.all_low()
         self.assertEqual(self.run_guard(), 0)
@@ -849,6 +895,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_haiku_keeps_flash_trial_when_glm53_trial_is_spent(self):
         # 两个 Trial 是各自的桶：GLM-5.3-Trial 用完、Flash-Trial 还有，haiku 照样加 Flash-Trial，opus、sonnet 什么都不加
+        self.trial_on()
         self.history(self.zhist(week=0, trial=0, flash=50))
         self.all_low()
         self.run_guard()
@@ -866,6 +913,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_account_magpie_no_longer_reads_does_not_count(self):
         # 旧账号 3 天前就不再读了、它的窗口都过了重置时间：不能把它当成有余量的 Max 或 Trial
+        self.trial_on()
         self.history(self.zhist(week=0, trial=0, flash=0, stale=True))
         h = self.load("conf/quota-history.json")
         for pts in h["zcode|old@x.com"].values():
@@ -884,6 +932,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_open_swaps_to_trial_when_max_runs_out(self):
         # 开着、用的是 Max；ZCode 开着后卡片读到周额度用完（比历史里那个旧读数新）：换成 Trial，先加后拿，zcode 一直开着
+        self.trial_on()
         self.history(self.zhist(week=60, ago_min=30))
         self.opened(20)
         self.all_low()
@@ -906,6 +955,7 @@ class GlmGuard(unittest.TestCase):
         self.assertIn("Trial", first)
 
     def test_open_goes_empty_then_back_when_trial_resets(self):
+        self.trial_on()
         self.history(self.zhist(week=0))
         self.all_low()
         self.run_guard()
@@ -936,6 +986,7 @@ class GlmGuard(unittest.TestCase):
         self.assertNotIn("兜底已空", Fake.messages[2][0]["content"].splitlines()[0])
 
     def test_close_takes_out_the_trial_members(self):
+        self.trial_on()
         self.history(self.zhist(week=0))
         self.all_low()
         self.run_guard()
@@ -960,6 +1011,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_gift_not_started_is_not_room(self):
         # 卡片上的 Trial 只是一行字（赠送套餐还没生效）：不算余量；Max 周额度也用完 → 兜底已空
+        self.trial_on()
         self.providers(zcode_off=False)
         self.state(open=False, since=0)
         self.all_low()
@@ -967,6 +1019,320 @@ class GlmGuard(unittest.TestCase):
         self.run_guard()
         self.assertEqual(self.zcode_members(), self.NONE, "a gift row that is only text was counted as room")
         self.assertIn("兜底已空", Fake.messages[0][0]["content"].splitlines()[0])
+
+    # ---- 复审第一轮 A：读不到、读数不全、看不懂，都算不知道 ----
+    def test_no_zcode_reading_adds_nothing(self):
+        # 卡片和历史里都没有 ZCode：不加 GLM-5.3，也不开 zcode、不动别的组，消息说读不到
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "unknown ZCode allowance read as room")
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("读不到 ZCode 余量", msg.splitlines()[0])
+        self.assertEqual(Fake.unrests, [])
+
+    def test_weekly_missing_is_not_max(self):
+        # 只有 5 hours 有读数（Weekly 缺，插件改名也是这样）：不算 Max 有余量，改用有读数的 Trial
+        self.trial_on()
+        h = self.zhist(week=0, stale=False)
+        del h["zcode|otmrzlm7"]["Weekly"]
+        self.history(h)
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS, "a missing Weekly reading read as room")
+
+    def test_card_window_without_used_is_no_reading(self):
+        # 卡片上 Weekly 没有 used：不是读数（不是 100% 剩余）；Trial 桶也用完 → 什么都不加
+        self.providers(zcode_off=False)
+        self.state(open=False, since=0)
+        self.all_low()
+        z = self.zcard(week=100, trial=100, flash=100)
+        next(w for w in z["windows"] if w["name"] == "Weekly").pop("used")
+        Fake.cards.append(z)
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.NONE, "a Weekly window with no 'used' read as 100% left")
+
+    def test_unparseable_reading_is_no_reading(self):
+        # 历史点 left 不是数：不让整轮崩掉（不然既开不了也关不了）；那个窗口算没读数，用 Trial
+        self.trial_on()
+        h = self.zhist(week=0, stale=False)
+        h["zcode|otmrzlm7"]["Weekly"][0]["left"] = "n/a"
+        self.history(h)
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("closed -> open", f.read())
+
+    def test_history_uses_the_newest_point(self):
+        # 真实历史一个窗口几百个点：最旧的是周初（剩 100%），最新的是 0%。要按最新的判，用 Trial
+        self.trial_on()
+        h = self.zhist(stale=False)
+        h["zcode|otmrzlm7"]["Weekly"] = [
+            {"at": iso(self.t - 50 * 3600), "left": 100, "resetsAt": iso(self.t + 100 * 3600)},
+            {"at": iso(self.t - 20 * 3600), "left": 40, "resetsAt": iso(self.t + 100 * 3600)},
+            {"at": iso(self.t - 2 * 60), "left": 0, "resetsAt": iso(self.t + 100 * 3600)}]
+        self.history(h)
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS, "judged by an old point, not the newest")
+
+    def test_swap_read_back_sees_the_old_member_still_there(self):
+        # 开着、组里是 Max；周额度用完要换 Trial，可「models-= Max」退出 0 却没生效：读回要抓到，记失败
+        self.trial_on()
+        self.history(self.zhist(week=60, ago_min=30, stale=False))
+        self.opened(20)
+        self.all_low()
+        Fake.cards.append(self.zcard(week=100))
+        self.flag("noop", "group set claude-opus-5-5 models-=")
+        self.assertEqual(self.run_guard(), 1, "a swap that left the Max member in was counted as done")
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("providers.json not as expected", f.read())
+
+    # ---- 复审第一轮 B：magpie 把整个 ZCode 账号歇掉，Trial 一起挡住 ----
+    def routing(self, *recs):
+        """routing 日志：recs 是 (几分钟前, rest 或 None)；每条一个 claude-opus-5-5 请求，order 里有 ZCode 账号那一项"""
+        day = datetime.fromtimestamp(self.t, TZ).strftime("%Y-%m-%d")
+        with open(os.path.join(gg.ROUTING, day + ".jsonl"), "a") as f:
+            for ago, rest in recs:
+                o = {"id": "zcode", "provider": "zcode", "who": "otmrzlm7", "model": "GLM-5.3-Trial", "used": 0}
+                if rest:
+                    o["rest"] = rest
+                f.write(json.dumps({"time": iso(self.t - ago * 60), "model": "claude-opus-5-5", "status": 429,
+                                    "order": [{"id": "claude", "provider": "claude"}, o],
+                                    "tries": [{"id": "claude@a@x.com · DuoCode", "status": 429}]}) + "\n")
+
+    def cap_rest(self, hours=100):
+        return {"why": "rate", "status": 429, "until": iso(self.t + hours * 3600), "by": "resets", "failures": 1,
+                "key": "zcode@otmrzlm7",
+                "error": "ZCode: [1310][您已达到每周/每月使用上限，您的限额将在 2026-11-06 13:13:55 重置。][x]"}
+
+    def test_cap_rest_is_lifted_after_trial_goes_in(self):
+        # 11-02 01:10 的样子：Max 周额度用完，账号因 1310 歇到 11-06；Trial 桶满。加 Trial，组对齐之后解除账号休息
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.routing((30, self.cap_rest()))
+        Fake.unrest_reply = (200, {"lifted": True})
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        self.assertEqual([k for k, _ in Fake.unrests], ["zcode@otmrzlm7"], "the account rest was left in place")
+        self.assertEqual(Fake.unrests[0][1], len(self.calls()), "lifted before the groups were aligned")
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("已解除", msg)
+        self.assertIn("1310", msg)
+        with open(self.tmp + "/var/log") as f:
+            log = f.read()
+        self.assertIn("unrest zcode@otmrzlm7: lifted (was rate until", log)
+        self.assertIn("[1310]", log)
+
+    def test_no_lift_without_a_rest_in_the_log(self):
+        # 日志里没有这个账号歇着的记录：不知道为什么歇、歇没歇，就不解除（只解除确认是 Max 周额度上限造成的）
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        self.t += 300
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(Fake.unrests, [], "lifted a rest the log never showed")
+
+    def test_steady_round_lifts_when_the_log_says_rested_again(self):
+        # 开着、组里已是 Trial；之后有请求让账号又歇了（日志里看得到）：这一轮解除，只写日志、不发消息
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.all_low()
+        self.run_guard()
+        n = len(Fake.messages)
+        self.t += 300
+        self.routing((1, self.cap_rest()))
+        Fake.unrest_reply = (200, {"lifted": True})
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(len(Fake.unrests), 1)
+        self.assertEqual(len(Fake.messages), n)
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("unrest zcode@otmrzlm7: lifted", f.read().splitlines()[-1])
+
+    def test_later_record_without_rest_means_not_resting(self):
+        # 先歇过、后来又答过（最新一条没有 rest）：不在歇，稳定的一轮不去解除
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.all_low()
+        self.run_guard()
+        self.t += 300
+        self.routing((20, self.cap_rest()), (2, None))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(Fake.unrests, [], "an old rest, cleared by a later answer, was lifted")
+
+    def test_restricted_account_is_neither_lifted_nor_used(self):
+        # 风控（3012，why=restricted）：守护不解除（只有 ZCode 客服能解），也不加它的成员，消息说清楚
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.routing((10, {"why": "restricted", "status": 405, "until": iso(self.t + 6 * 3600), "by": "restricted",
+                           "key": "zcode@otmrzlm7", "error": "ZCode: [3012] request has been blocked due to unusual activity"}))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "used a ZCode account under risk control")
+        self.assertEqual(Fake.unrests, [], "lifted a risk-control rest")
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("兜底已空", msg.splitlines()[0])
+        self.assertIn("风控", msg)
+
+    def test_risk_control_keeps_the_whole_account_out_wherever_it_is_filed(self):
+        # magpie 把 3012 记在账号上；万一记在某个条目上（key 带 /模型），守护照样整个账号都不用：读数说 Max 有余量也不加
+        self.history(self.zhist(stale=False))
+        self.routing((10, {"why": "restricted", "status": 405, "until": iso(self.t + 6 * 3600), "by": "restricted",
+                           "key": "zcode@otmrzlm7/GLM-5.3-Trial",
+                           "error": "ZCode: [3012] request has been blocked due to unusual activity"}))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.calls(), [], "used a ZCode account under risk control")
+        self.assertIn("风控", Fake.messages[0][0]["content"])
+
+    def test_cap_rest_skips_max_even_when_readings_say_room(self):
+        # 读数说 Max 有余量，可账号刚因上限被歇：Max 显然被拒过，用 Trial（解除后 Max 会再被拒、又把账号歇掉）
+        self.trial_on()
+        self.history(self.zhist(stale=False))
+        self.routing((5, self.cap_rest()))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS, "added the Max member of an account resting for its cap")
+
+    def test_max_never_lifts_a_rest(self):
+        self.trial_on()
+        self.zroom()
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.MAXES)
+        self.assertEqual(Fake.unrests, [])
+
+    def test_failed_lift_is_reported_not_fatal(self):
+        # 解除失败（网页 key 不对 → 401）：这一轮照样算成功、Trial 留在组里，消息说 Trial 暂时到不了
+        self.trial_on()
+        os.environ["MAGPIE_WEB_KEY"] = "wrong"
+        self.history(self.zhist(week=0, stale=False))
+        self.routing((30, self.cap_rest()))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        self.assertEqual(Fake.unrests, [])
+        self.assertIn("解除失败", Fake.messages[0][0]["content"])
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("unrest zcode@otmrzlm7: FAILED", f.read())
+
+
+    # ---- Trial 开关（默认关）、只解除 Max 周额度上限造成的账号休息、限频 ----
+    def test_trial_is_off_by_default(self):
+        # 开关不在：Max 用完、Trial 桶满、账号因 1310 歇着，也什么都不加、不解除，消息说兜底已空、Trial 没开、怎么打开
+        self.history(self.zhist(week=0, stale=False))
+        self.routing((30, self.cap_rest()))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "used Trial with the switch off")
+        self.assertEqual(Fake.unrests, [], "lifted a rest with the switch off")
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("兜底已空", msg.splitlines()[0])
+        self.assertIn("开关没开", msg)
+        self.assertIn("use-trial", msg)
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("trial=off", f.read())
+
+    def test_switching_trial_off_takes_trial_out(self):
+        self.trial_on()
+        self.history(self.zhist(week=0, stale=False))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        os.remove(os.path.join(self.tmp, "etc", "use-trial"))
+        self.t += 300
+        self.history(self.zhist(week=0, stale=False))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.NONE, "Trial left in after the switch went off")
+        g, z = self.groups()
+        self.assertTrue(z.get("off"))
+        self.assertEqual(g["frontier"], FRONTIER)
+        self.assertTrue(self.read_state()["open"])
+        self.assertIn("兜底已空", Fake.messages[-1][0]["content"].splitlines()[0])
+
+    def test_account_rest_counts_as_no_room(self):
+        # 读数说 Max 有余量，可账号在 magpie 里歇着（Max 被拒过）：不加 Max（开关关着也不加 Trial），消息说账号歇到什么时候
+        self.history(self.zhist(stale=False))
+        self.routing((5, self.cap_rest()))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.calls(), [], "added members of a resting account")
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("兜底已空", msg.splitlines()[0])
+        self.assertIn("歇到", msg)
+
+    def test_trial_entry_rest_is_not_lifted(self):
+        # 歇的是 GLM-5.3-Trial 条目自己（key 带 /模型）：不解除，哪怕错误和时间像周额度上限；opus、sonnet 不加它，haiku 的
+        # Flash-Trial 照样加
+        self.trial_on()
+        for rest in ({"why": "quota", "status": 429, "until": iso(self.t + 10 * 3600), "by": "resets",
+                      "key": "zcode@otmrzlm7/GLM-5.3-Trial",
+                      "error": "ZCode's limited quota for glm-5.3 is exhausted or temporarily unavailable"},
+                     dict(self.cap_rest(), key="zcode@otmrzlm7/GLM-5.3-Trial")):
+            Fake.unrests[:] = []
+            self.state(open=False, since=0)
+            self.providers(zcode_off=True)
+            self.history(self.zhist(week=0, stale=False))
+            self.routing((1, rest))
+            self.all_low()
+            self.run_guard()
+            self.assertEqual(Fake.unrests, [], "lifted a Trial entry's own rest: %s" % rest["error"])
+            self.assertEqual(self.zcode_members(), dict(self.NONE, **{"claude-haiku-5-5": ["zcode/GLM-5.3-Flash-Trial"]}))
+            self.t += 300
+
+    def test_other_account_rests_are_not_lifted(self):
+        # 账号级、但不是 Max 周额度上限：认证错，或 1310 的 until 对不上周额度的重置（月上限）。不解除，Trial 到不了就不加
+        self.trial_on()
+        for rest in (dict(self.cap_rest(), why="auth", status=401, error="ZCode: token expired"),
+                     dict(self.cap_rest(), until=iso(self.t + 30 * 24 * 3600))):
+            Fake.unrests[:], Fake.messages[:] = [], []
+            self.state(open=False, since=0)
+            self.providers(zcode_off=True)
+            self.history(self.zhist(week=0, stale=False))
+            self.routing((1, rest))
+            self.all_low()
+            self.run_guard()
+            self.assertEqual(Fake.unrests, [], "lifted %s" % rest["error"])
+            self.assertEqual(self.zcode_members(), self.NONE, "added Trial on an account it can't reach: %s" % rest)
+            self.assertIn("守护只解除", Fake.messages[0][0]["content"])
+            self.t += 300
+
+    def test_lift_is_rate_limited(self):
+        # 每次打开一次，之后同一次打开里最多每小时一次（只算真解除了的）；关上再打开又能解一次
+        self.trial_on()
+        Fake.unrest_reply = (200, {"lifted": True})
+
+        def round_(ago=1):
+            self.history(self.zhist(week=0, stale=False))
+            self.routing((ago, self.cap_rest()))
+            self.all_low()
+            self.assertEqual(self.run_guard(), 0)
+        round_(30)
+        self.assertEqual(len(Fake.unrests), 1)
+        self.t += 300
+        round_()
+        self.assertEqual(len(Fake.unrests), 1, "lifted twice within the hour")
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("unrest zcode@otmrzlm7: deferred to", f.read().splitlines()[-1])
+        self.t += 3300
+        round_()
+        self.assertEqual(len(Fake.unrests), 2, "not lifted again after an hour")
+        self.t += 300
+        self.history(self.zhist(week=0, stale=False))
+        self.a_reset()
+        self.run_guard()
+        self.assertFalse(self.read_state()["open"])
+        self.t += 16 * 60
+        round_()
+        self.assertTrue(self.read_state()["open"])
+        self.assertEqual(len(Fake.unrests), 3, "a new opening didn't get its lift")
 
 
 if __name__ == "__main__":
