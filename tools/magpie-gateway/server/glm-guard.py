@@ -40,7 +40,7 @@
 # 账号休息（11-02 起）：magpie 把一次拒绝记在整个账号上（rest key「zcode@<账号>」），只有 -Trial 条目自己被拒才只歇那个条目。
 #   Max 回 1310（周/月上限）时同账号的 Trial 一起歇到周额度重置，组里有 Trial 也一个请求都到不了它（11-02 01:10 实测）。rest 只
 #   在 routing 日志里看得到（每个请求 order[] 里 ZCode 那一项），守护读今天和昨天日志里最新一条含该账号的记录。账号在歇（until
-#   在将来）就不加它的 Max；风控（3012，why=restricted）整个账号的成员都不加，消息说只有 ZCode 客服能解；不是 Max 周额度上限造成
+#   在将来）就不加它的 Max（昨天的日志过了午夜被 magpie 压成 .jsonl.gz，也读）；风控（3012，why=restricted）整个账号的成员都不加，消息说只有 ZCode 客服能解；不是 Max 周额度上限造成
 #   的账号休息，Trial 也不加（解不了、到不了）。只在 Trial 开关开着、这轮用着该账号的 Trial、而且是 Max 周额度上限造成的账号级
 #   休息（key 是 zcode@<账号>、错误是 [1310]、until 和 Weekly 窗口的重置时间差不到 1 小时）时，才经 magpie 网页
 #   POST /api/gateway/unrest 解除（容器里 3430 端口，cookie magpie_web_3430=$MAGPIE_WEB_KEY，key 只在容器里拼、经 stdin 给 curl，
@@ -48,7 +48,7 @@
 #   之前的 why/until）。组先对齐、再解除：先解除的话，组里还在的 Max 成员可能先被问到、又把账号歇掉。
 # 停用：touch /etc/magpie-glm-guard/paused（每轮直接退出，不改任何东西）；或 systemctl disable --now magpie-glm-guard.timer。
 # --dry-run：只打印判断和会做的动作，不改、不发。
-import fcntl, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid
+import fcntl, gzip, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 
 CONTAINER = os.environ.get("GG_CONTAINER", "magpie-magpie-1")
@@ -317,9 +317,15 @@ def blocks_max(r):
     return r is not None and not (r["model"] or "").lower().endswith("-trial")
 
 
+def code_in(code, err):
+    """错误里有没有这个 ZCode 错误码（单独成词）：magpie 的错误末尾带请求 id（[20261103012512…]，前 14 位是时间），
+    按子串找会把 id 里碰巧连着的数字当成错误码"""
+    return re.search(r"\b%d\b" % code, err) is not None
+
+
 def liftable(u, r, zw):
     """账号 u 的休息 r 守护能不能解除：账号级（key 没有 /模型）、不是风控、错误是 [1310]、until 和 Weekly 的重置时间对得上"""
-    if r is None or r["restricted"] or r["model"] is not None or "1310" not in r["error"]:
+    if r is None or r["restricted"] or r["model"] is not None or not code_in(1310, r["error"]):
         return False
     wr = ((zw.get(u) or {}).get("Weekly") or {}).get("reset")
     return wr is not None and abs(r["until"] - wr) <= WEEK_SLACK
@@ -363,27 +369,34 @@ def zcode_rests(t):
     newest = {}
     day = datetime.fromtimestamp(t, TZ)
     for d in (day - timedelta(days=1), day):
-        for f in (ROUTING + "/%s.jsonl" % d.strftime("%Y-%m-%d"),):
+        base = ROUTING + "/%s.jsonl" % d.strftime("%Y-%m-%d")
+        # 过了午夜 magpie 把昨天的压成 .jsonl.gz
+        for f in (base, base + ".gz"):
             try:
-                fh = open(f, encoding="utf-8", errors="replace")
+                fh = (gzip.open(f, "rt", encoding="utf-8", errors="replace") if f.endswith(".gz")
+                      else open(f, encoding="utf-8", errors="replace"))
             except OSError:
                 continue
-            with fh:
-                for line in fh:
-                    if '"zcode' not in line:
-                        continue
-                    try:
-                        r = json.loads(line)
-                    except ValueError:
-                        continue
-                    at = parse_time(r.get("time")) if isinstance(r, dict) else None
-                    if at is None:
-                        continue
-                    for o in r.get("order") or []:
-                        if isinstance(o, dict) and o.get("provider") == GLM_PROVIDER and isinstance(o.get("who"), str):
-                            u = o["who"].lower()
-                            if u not in newest or at >= newest[u][0]:
-                                newest[u] = (at, o.get("rest") if isinstance(o.get("rest"), dict) else None)
+            try:
+                with fh:
+                    for line in fh:
+                        if '"zcode' not in line:
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except ValueError:
+                            continue
+                        at = parse_time(r.get("time")) if isinstance(r, dict) else None
+                        if at is None:
+                            continue
+                        for o in r.get("order") or []:
+                            if isinstance(o, dict) and o.get("provider") == GLM_PROVIDER and isinstance(o.get("who"), str):
+                                u = o["who"].lower()
+                                if u not in newest or at >= newest[u][0]:
+                                    newest[u] = (at, o.get("rest") if isinstance(o.get("rest"), dict) else None)
+            except (OSError, EOFError) as e:
+                # 压缩文件坏了或还在写：读到哪算哪，别的文件照读
+                log("routing log %s read in part: %s %s" % (os.path.basename(f), type(e).__name__, str(e)[:120]))
     out = {}
     for u, (at, rest) in newest.items():
         until = parse_time(rest.get("until")) if rest else None
@@ -391,7 +404,7 @@ def zcode_rests(t):
             err, key = str(rest.get("error") or ""), str(rest.get("key") or "")
             out[u] = {"until": until, "why": str(rest.get("why") or ""), "error": err[:160], "key": key,
                       "model": key.split("/", 1)[1] if "/" in key else None,
-                      "restricted": rest.get("why") == "restricted" or "3012" in err}
+                      "restricted": rest.get("why") == "restricted" or code_in(3012, err)}
     return out
 
 

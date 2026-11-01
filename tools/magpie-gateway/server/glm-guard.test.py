@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # glm-guard.py 的离线测试：假卡片接口、假 mesh 中继、假 ntfy 都在 127.0.0.1，假 magpie 只改临时目录里的 providers.json。
 # python3 tools/magpie-gateway/server/glm-guard.test.py
-import importlib.util, json, os, shutil, sys, tempfile, threading, time, unittest
+import gzip, importlib.util, json, os, shutil, sys, tempfile, threading, time, unittest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -1291,6 +1291,8 @@ class GlmGuard(unittest.TestCase):
         # 账号级、但不是 Max 周额度上限：认证错，或 1310 的 until 对不上周额度的重置（月上限）。不解除，Trial 到不了就不加
         self.trial_on()
         for rest in (dict(self.cap_rest(), why="auth", status=401, error="ZCode: token expired"),
+                     # 请求 id 里碰巧有 1310（13:10:05 的请求）的余额错误：不是周额度上限
+                     dict(self.cap_rest(), why="quota", error="ZCode: [1113][余额不足][20261101131005a1b2c3d4e5f6a7b8]"),
                      dict(self.cap_rest(), until=iso(self.t + 30 * 24 * 3600))):
             Fake.unrests[:], Fake.messages[:] = [], []
             self.state(open=False, since=0)
@@ -1333,6 +1335,81 @@ class GlmGuard(unittest.TestCase):
         round_()
         self.assertTrue(self.read_state()["open"])
         self.assertEqual(len(Fake.unrests), 3, "a new opening didn't get its lift")
+
+
+    # ---- 复审增量：错误码按词认、过期的休息、web key 不上命令行、昨天的压缩日志 ----
+    def test_request_id_digits_are_not_an_error_code(self):
+        # 复审 v8：周额度上限（1310）的休息，请求 id 里碰巧连着 3012（11-03 01:25:12 的请求）：不是风控。开关关时消息不说
+        # 「风控挡住」；开关开时照样加 Trial、解除一次
+        rest = dict(self.cap_rest(), error="ZCode: [1310][您已达到每周/每月使用上限，您的限额将在 2026-11-06 13:13:55 重置。]"
+                                           "[20261103012512a1b2c3d4e5f6a7b8]")
+        Fake.unrest_reply = (200, {"lifted": True})
+        for on in (False, True):
+            Fake.unrests[:], Fake.messages[:] = [], []
+            self.state(open=False, since=0)
+            self.providers(zcode_off=True)
+            if on:
+                self.trial_on()
+            self.history(self.zhist(week=0, stale=False))
+            self.routing((5, rest))
+            self.all_low()
+            self.assertEqual(self.run_guard(), 0)
+            msg = Fake.messages[0][0]["content"]
+            self.assertNotIn("风控挡住", msg, "a 1310 rest was reported as risk control (switch %s)" % on)
+            if on:
+                self.assertEqual(self.zcode_members(), self.TRIALS)
+                self.assertEqual([k for k, _ in Fake.unrests], ["zcode@otmrzlm7"])
+            else:
+                self.assertEqual(self.calls(), [])
+            self.t += 300
+
+    def test_expired_rest_is_not_a_rest(self):
+        # 复审 v9：最新一条记录还带着 rest，可 until 已经过了（周额度已重置、之后没人问过）：不算在歇，Max 有余量就用
+        self.history(self.zhist(stale=False))
+        self.routing((30, dict(self.cap_rest(), until=iso(self.t - 60))))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.MAXES, "an expired rest kept Max out")
+
+    def test_web_key_never_on_a_command_line_or_in_the_log(self):
+        # 复审 v10：真解除一次时，所有子进程的参数里都没有 MAGPIE_WEB_KEY 的值（同机别的用户 ps 看得见），日志和消息里也没有
+        self.trial_on()
+        argvs, real = [], gg.subprocess.run
+
+        def spy(cmd, *a, **kw):
+            argvs.append(list(cmd))
+            return real(cmd, *a, **kw)
+        self.history(self.zhist(week=0, stale=False))
+        self.routing((5, self.cap_rest()))
+        Fake.unrest_reply = (200, {"lifted": True})
+        self.all_low()
+        gg.subprocess.run = spy
+        try:
+            self.assertEqual(self.run_guard(), 0)
+        finally:
+            gg.subprocess.run = real
+        self.assertEqual(len(Fake.unrests), 1)
+        self.assertTrue(argvs)
+        for c in argvs:
+            self.assertFalse(any(WEBKEY in x for x in c), "MAGPIE_WEB_KEY on a command line: %s" % c[:3])
+        with open(self.tmp + "/var/log") as f:
+            self.assertNotIn(WEBKEY, f.read())
+        self.assertFalse(any(WEBKEY in m[0]["content"] for m in Fake.messages))
+
+    def test_yesterdays_gzipped_log_is_read(self):
+        # 过了午夜 magpie 把昨天的日志压成 .jsonl.gz；今天还没有含 ZCode 的记录时，账号歇着要从昨天那份里读出来
+        at = self.t - 20 * 3600
+        day = datetime.fromtimestamp(at, TZ).strftime("%Y-%m-%d")
+        self.assertNotEqual(day, datetime.fromtimestamp(self.t, TZ).strftime("%Y-%m-%d"))
+        o = {"id": "zcode", "provider": "zcode", "who": "otmrzlm7", "model": "GLM-5.3", "used": 100, "rest": self.cap_rest()}
+        with gzip.open(os.path.join(gg.ROUTING, day + ".jsonl.gz"), "wt") as f:
+            f.write(json.dumps({"time": iso(at), "model": "claude-opus-5-5", "status": 429, "order": [o],
+                                "tries": [{"id": "zcode", "model": "GLM-5.3", "status": 429}]}) + "\n")
+        self.history(self.zhist(stale=False))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.calls(), [], "yesterday's gzipped log wasn't read: Max added to a resting account")
+        self.assertIn("歇到", Fake.messages[0][0]["content"])
 
 
 if __name__ == "__main__":
