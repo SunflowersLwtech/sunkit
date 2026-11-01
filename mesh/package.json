@@ -47,6 +47,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3"
-    ]
+    ],
+    "overrides": {
+      "proxy-addr": "2.0.8"
+    }
   }
 }
