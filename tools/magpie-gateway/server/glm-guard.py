@@ -26,6 +26,13 @@
 #   provider 的成员进组，所以放回排在 provider off 之前），再关 zcode。zcode 是别人开着的就不动别的组。拿掉会丢设置
 #   （成员上挂着规则、权重、off、pick，或组用了 fast、match 模式）或会把组拿空的，不拿，写进日志和消息。
 #   切换写日志，经 mesh 发给 feishu-assistant（不在就 feishu-assistant-backup，都不行走 ntfy）。
+# 加哪个 GLM（11-01 起）：ZCode 自己也有额度。11-01 20:09 守护照常加了 GLM-5.3，可 ZCode Max 周额度早用完了，兜底其实是空的。
+#   所以每轮先看 ZCode 的余量（卡片里有 ZCode 就用卡片，zcode 关着时 magpie 不出它的卡片，就用 quota-history.json 里
+#   最新的读数；只算 magpie 还在读的账号，过了重置时间的窗口按重新开始算）：GLM Coding Max 的「5 hours」「Weekly」都还剩
+#   ≥2% 就加 Max 的成员（GLM-5.3，haiku 是 GLM-5.3-Flash）；不然加免费 Start Plan 的 Trial（GLM-5.3-Trial，haiku 是
+#   GLM-5.3-Flash-Trial，各有各的每日桶，23:59 重置）；也用完就什么都不加、不开 zcode，消息里写「兜底已空」。
+#   开着期间每轮都重新挑：Max 用完换 Trial、Trial 用完拿空、重置后再加回，组里的成员变了就发一条消息。ZCode 一个读数都
+#   没有时照旧加 Max（读不到不等于用完）。关上时这几个成员（Max 和 Trial 的）都拿掉。
 # 停用：touch /etc/magpie-glm-guard/paused（每轮直接退出，不改任何东西）；或 systemctl disable --now magpie-glm-guard.timer。
 # --dry-run：只打印判断和会做的动作，不改、不发。
 import fcntl, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid
@@ -44,7 +51,13 @@ TZ = timezone(timedelta(hours=8))
 
 GLM = {"claude-opus-5-5": "zcode/GLM-5.3", "claude-sonnet-5-5": "zcode/GLM-5.3",
        "claude-haiku-5-5": "zcode/GLM-5.3-Flash"}
+# Max 用完时改加的免费 Start Plan 成员：每个都有自己的每日桶（卡片和历史里叫「GLM-5.3-Trial · ZCode Start Plan」）
+TRIAL = {"claude-opus-5-5": "zcode/GLM-5.3-Trial", "claude-sonnet-5-5": "zcode/GLM-5.3-Trial",
+         "claude-haiku-5-5": "zcode/GLM-5.3-Flash-Trial"}
 GLM_PROVIDER = "zcode"
+PLAN_WINDOWS = ("5 hours", "Weekly")   # GLM Coding Max 的两个窗口，Max 成员要两个都有余量
+ZEMPTY = 2.0            # ZCode 窗口剩不到这么多 % 算用完
+ZLIVE = 6 * 3600        # zcode 关着时，账号的最新读数比 zcode 最新读数旧这么多以上就不算（magpie 已经不读它，账号删了）
 LOW = 15.0              # 每个座位都只剩不到这么多 % → 打开
 BACK = 50.0             # 有座位余量回到这么多 % 以上 → 可以关上
 OPEN_WITHIN = 30        # 推算这么多分钟内用完（且早于最早重置）→ 打开
@@ -223,6 +236,76 @@ def decide(state, a, t):
     return is_open, "keep"
 
 
+def zcode_windows(cards, history, t):
+    """ZCode 每个账号每个窗口此刻剩多少：{账号: {窗口名: {"left": %, "reset": 时间或 None, "at": 读数时间}}}。
+    卡片和 quota-history.json 里同一个窗口取读得晚的那个（zcode 关着时卡片里没有它，只剩历史）。卡片里有 ZCode 就只算
+    卡片里的账号；没有就按读数时间筛：magpie 一次把一个 provider 的账号都读一遍，删掉的账号读数停在过去。
+    过了重置时间的窗口按重新开始算（满额）。卡片上只是一行字的窗口（要去 App 领的赠送套餐）不是读数，不算"""
+    acc = {}
+
+    def put(user, name, left, reset, at):
+        cur = acc.setdefault(user, {}).get(name)
+        if at is not None and (cur is None or at >= cur["at"]):
+            acc[user][name] = {"left": float(left), "reset": reset, "at": at}
+    for k, v in history.items():
+        if k.startswith(GLM_PROVIDER + "|"):
+            for name, pts in (v or {}).items():
+                p = next((p for p in reversed(pts or []) if p.get("left") is not None), None)
+                if p:
+                    put(k.split("|", 1)[1], name, p["left"], parse_time(p.get("resetsAt")), parse_time(p.get("at")))
+    carded = set()
+    for c in cards:
+        if c.get("provider") != GLM_PROVIDER or not c.get("user"):
+            continue
+        user, at = c["user"].lower(), parse_time(c.get("readAt")) or parse_time(c.get("asOf"))
+        carded.add(user)
+        for w in c.get("windows") or []:
+            if w.get("name") and not w.get("text"):
+                put(user, w["name"], 100.0 if w.get("unlimited") else 100.0 - float(w.get("used") or 0),
+                    parse_time(w.get("resetsAt")), at)
+    acc = {u: ws for u, ws in acc.items() if ws}
+    if carded:
+        acc = {u: ws for u, ws in acc.items() if u in carded}
+    elif acc:
+        newest = max(w["at"] for ws in acc.values() for w in ws.values())
+        acc = {u: ws for u, ws in acc.items() if max(w["at"] for w in ws.values()) >= newest - ZLIVE}
+    for ws in acc.values():
+        for w in ws.values():
+            if w["reset"] is not None and w["reset"] <= t:
+                w["left"], w["reset"] = 100.0, None
+    return acc
+
+
+def bucket(name, model):
+    """窗口 name 是不是 Trial 成员 model 的每日桶（「GLM-5.3-Trial · ZCode Start Plan」；只有一个套餐时可能就叫模型名）"""
+    m = model.split("/", 1)[1]
+    return name == m or name.startswith(m + " · ")
+
+
+def pick(zw):
+    """每个 claude-* 组这次加哪个 ZCode 成员：Max 有余量用 Max，不然 Trial 桶有余量用 Trial，都没有就 None。
+    ZCode 一个读数都没有时照旧用 Max（读不到不等于用完）"""
+    if not zw:
+        return dict(GLM)
+    plan = [ws for ws in zw.values() if any(n in ws for n in PLAN_WINDOWS)]
+    max_room = any(all(ws[n]["left"] >= ZEMPTY for n in PLAN_WINDOWS if n in ws) for ws in plan)
+    out = {}
+    for gid in GLM:
+        trial_room = any(w["left"] >= ZEMPTY for ws in zw.values() for n, w in ws.items() if bucket(n, TRIAL[gid]))
+        out[gid] = GLM[gid] if max_room else TRIAL[gid] if trial_room else None
+    return out
+
+
+def managed(gid):
+    """守护在组 gid 里管的成员：Max 的和 Trial 的"""
+    return [GLM[gid], TRIAL[gid]]
+
+
+def wanted(want_open, picks):
+    """每个 claude-* 组这轮该有的 ZCode 成员（None：一个都不该有）"""
+    return {gid: (picks.get(gid) if want_open else None) for gid in GLM}
+
+
 def members(prov, gid):
     g = next((g for g in prov.get("groups") or [] if g.get("id") == gid), None)
     return None if g is None else list(g.get("members") or [])
@@ -272,13 +355,15 @@ def restores(prov, state):
     return [["group", "set", gid, "models=" + ",".join(ms)] for gid, ms in lists.items()]
 
 
-def plan(prov, want_open, state):
-    """把 providers.json 对齐到 want_open 要跑的 magpie 命令。还给出不能拿的 zcode 成员，和每条拿掉别的组 zcode 成员的
-    命令要记下的位置。打开：先拿掉别的组的 zcode 成员，再 provider on，再往 claude-* 加；关上：先从 claude-* 拿掉，再把
-    别的组的成员放回原位，最后 provider off"""
+def plan(prov, use, state):
+    """把 providers.json 对齐到 use（wanted() 给的每组该有的 ZCode 成员）要跑的 magpie 命令。还给出不能拿的 zcode 成员，
+    和每条拿掉别的组 zcode 成员的命令要记下的位置。有组要用 ZCode：先拿掉别的组的 zcode 成员，再 provider on，再往
+    claude-* 加该有的、拿掉不该有的（先加后拿，换成员时组里不空一下）；一个组都不用（关着，或开着但 ZCode 用完了）：先从
+    claude-* 拿掉，再把别的组的成员放回原位，最后 provider off"""
     cmds, missing, kept, strips = [], [], [], {}
+    active = any(use.values())
     zoff = provider_off(prov, GLM_PROVIDER)
-    if want_open and (zoff or state.get("zcode_by_guard")):
+    if active and (zoff or state.get("zcode_by_guard")):
         left = {}
         for gid, m, ok in holders(prov):
             if not ok:
@@ -290,33 +375,33 @@ def plan(prov, want_open, state):
             strips[tuple(c)] = {"group": gid, "member": m, "after": ms[i - 1] if i else None, "at": i}
             ms.pop(i)
             cmds.append(c)
-    if want_open and zoff:
+    if active and zoff:
         cmds.append(["provider", "on", GLM_PROVIDER])
-    for gid, m in GLM.items():
+    for gid in GLM:
         ms = members(prov, gid)
         if ms is None:
             missing.append(gid)
-        elif want_open and m not in ms:
-            cmds.append(["group", "set", gid, "models+=" + m])
-        elif not want_open and m in ms:
-            cmds.append(["group", "set", gid, "models-=" + m])
-    if not want_open and not zoff:
+            continue
+        if use[gid] and use[gid] not in ms:
+            cmds.append(["group", "set", gid, "models+=" + use[gid]])
+        cmds += [["group", "set", gid, "models-=" + m] for m in managed(gid) if m in ms and m != use[gid]]
+    if not active and not zoff:
         cmds += restores(prov, state)
-    if not want_open and state.get("zcode_by_guard") and not zoff:
+    if not active and state.get("zcode_by_guard") and not zoff:
         cmds.append(["provider", "off", GLM_PROVIDER])
     return cmds, missing, kept, strips
 
 
-def aligned(prov, want_open, state=None, restored=()):
-    """读回核对：claude-* 的 GLM 成员对上；开着时 zcode 开着，zcode 是守护开的就别的组里能拿的都拿掉了；关着时 zcode
-    开着就没有欠着没放回的成员，这轮放回过的组都放回了"""
+def aligned(prov, use, state=None, restored=()):
+    """读回核对：claude-* 里守护管的成员正好是 use 里那一个（或一个都没有）；有组用 ZCode 时 zcode 开着，zcode 是守护开的
+    就别的组里能拿的都拿掉了；都不用时 zcode 开着就没有欠着没放回的成员，这轮放回过的组都放回了"""
     state = state or {}
-    for gid, m in GLM.items():
+    for gid in GLM:
         ms = members(prov, gid)
-        if ms is not None and (m in ms) != want_open:
+        if ms is not None and [m for m in managed(gid) if m in ms] != ([use[gid]] if use[gid] else []):
             return False
     zoff = provider_off(prov, GLM_PROVIDER)
-    if want_open:
+    if any(use.values()):
         return not zoff and not (state.get("zcode_by_guard") and any(ok for _, _, ok in holders(prov)))
     return not any(not zoff or e["group"] in restored for e in owed(prov, state))
 
@@ -328,18 +413,29 @@ def magpie(args):
                                                        p.stdout.decode("utf-8", "replace").strip()[:200]))
 
 
-def zcode_line(history, t):
+def zcode_text(zw):
+    """消息里 ZCode 那一句：magpie 还在读的账号，每个窗口剩多少、什么时候重置"""
+    if not zw:
+        return "读不到余量（magpie 没有 ZCode 的读数），照旧按 Max 有余量算"
     parts = []
-    for k, v in history.items():
-        if not k.startswith(GLM_PROVIDER + "|"):
-            continue
-        for name in ("5 hours", "Weekly"):
-            pts = v.get(name) or []
-            if pts and pts[-1].get("left") is not None:
-                r = parse_time(pts[-1].get("resetsAt"))
-                parts.append("%s 剩 %g%%%s" % ("5 小时" if name == "5 hours" else "周", round(float(pts[-1]["left"]), 1),
-                                               "（%s 重置）" % hm(r) if r and r > t else ""))
+    for user, ws in sorted(zw.items()):
+        names = [n for n in PLAN_WINDOWS if n in ws] + sorted(n for n in ws if n not in PLAN_WINDOWS)
+        for n in names:
+            label = {"5 hours": "Max 5 小时", "Weekly": "Max 周"}.get(n) or n.split(" · ")[0] + " "
+            parts.append("%s%s剩 %g%%%s" % (user + " " if len(zw) > 1 else "", label, round(ws[n]["left"], 1),
+                                            "（%s 重置）" % hm(ws[n]["reset"]) if ws[n]["reset"] else ""))
     return "、".join(parts)
+
+
+def changes(cmds):
+    """消息里「改动」那句：claude-* 组加了什么、拿掉了什么"""
+    adds, drops = {}, {}
+    for c in cmds:
+        if c[:2] == ["group", "set"] and c[2] in GLM:
+            k, _, m = c[3].partition("=")
+            (adds if k == "models+" else drops).setdefault(m, []).append(c[2])
+    return "；".join(["%s 末尾加 %s" % ("、".join(g), m) for m, g in adds.items()]
+                    + ["%s 拿掉 %s" % ("、".join(g), m) for m, g in drops.items()])
 
 
 def seat_lines(ss):
@@ -356,29 +452,47 @@ def seat_lines(ss):
     return out
 
 
-def message(opened, why, ss, a, history, zcode_on, t, others=()):
-    if opened:
+def message(kind, why, ss, a, zw, use, cmds, t, zcode_on=False, others=()):
+    """kind：open（打开）、close（关上）、swap（开着期间 ZCode 成员变了：Max 换 Trial、拿空、恢复）"""
+    empty = [gid for gid in GLM if not use.get(gid)]
+    using = "、".join(sorted(set(m for m in use.values() if m)))
+    trial = any(m in TRIAL.values() for m in use.values() if m)
+    gone = "ZCode 的 Max 和 Trial 都用完了（各窗口的重置时间见下）"
+    stops = "座位到上限后请求会停住，ZCode 一恢复守护自动加上"
+    tier = "（ZCode Max 用完，用免费 Trial）" if trial else ""
+    if kind == "open":
         if why == "low":
-            head = "magpie 已自动打开 GLM 兜底：Claude 座位都只剩不到 %d%%%s，座位到上限后的请求改落 ZCode GLM。" % (
-                LOW, "（读不到的按没有余量算）" if any(s["unread"] for s in ss) else "")
+            reason = "Claude 座位都只剩不到 %d%%%s" % (LOW, "（读不到的按没有余量算）" if any(s["unread"] for s in ss) else "")
         else:
-            head = "magpie 已自动打开 GLM 兜底：按最近 30 分钟的速度，Claude 座位约 %s 到上限%s，之后的请求改落 ZCode GLM。" % (
+            reason = "按最近 30 分钟的速度，Claude 座位约 %s 到上限%s" % (
                 hm(t + a["to_empty"] * 60), "，早于最早一次重置 %s" % hm(a["first_reset"]) if a["first_reset"] else "")
-    else:
+        if not using:
+            head = "magpie 要打开 GLM 兜底，但兜底已空：%s，而%s，什么都没加；%s。" % (reason, gone, stops)
+        else:
+            head = "magpie 已自动打开 GLM 兜底：%s，座位到上限后的请求改落 %s%s。" % (reason, using, tier)
+    elif kind == "close":
         b = max(a["back"], key=lambda s: s["left"])
         head = "magpie 已自动关上 GLM 兜底：%s 座位剩 %g%%，claude-* 组回到只用 Claude。" % (
             b["user"].replace(" · DuoCode", ""), round(b["left"], 1))
+    elif not using:
+        head = "magpie GLM 兜底已空：%s，claude-* 组里的 ZCode 成员已拿掉；%s。" % (gone, stops)
+    else:
+        head = "magpie GLM 兜底改用 %s%s。" % (using, tier or "（ZCode Max 有余量）")
+    if using and empty:
+        head += "兜底已空：%s 的 Max 和 Trial 都用完了，这些组%s。" % ("、".join(empty), stops)
     lines = [head, "", "座位："] + ["- " + x for x in seat_lines(ss)]
     lines.append("最近 30 分钟每分钟用掉约 %.1f 个百分点，到上限前还有 %.0f 个百分点%s。" % (
         a["rate"], a["headroom"], "，约 %.0f 分钟用完" % a["to_empty"] if a["to_empty"] is not None else ""))
-    z = zcode_line(history, t)
-    if z:
-        lines.append("ZCode：" + z + "。")
-    if opened:
-        lines.append("改动：claude-opus-5-5、claude-sonnet-5-5 末尾加 zcode/GLM-5.3，claude-haiku-5-5 末尾加 zcode/GLM-5.3-Flash"
-                     + ("；zcode provider 原来关着，已打开" if zcode_on else "") + "。")
-    else:
-        lines.append("改动：三个组里的 zcode GLM 成员已拿掉" + ("；guard 打开的 zcode provider 已关回" if zcode_on else "") + "。")
+    lines.append("ZCode：" + zcode_text(zw) + "。")
+    if trial:
+        lines.append("Trial 是 ZCode 免费的 Start Plan：GLM-5.3 每天 300 万 token、GLM-5.3-Flash 每天 500 万，23:59 重置。")
+    # zcode 开没开：打开时看 zcode 是不是守护开的（provider on 可能在上一轮半途失败时就跑过了），别的看这轮的命令
+    on = zcode_on if kind == "open" else ["provider", "on", GLM_PROVIDER] in cmds
+    off = ["provider", "off", GLM_PROVIDER] in cmds
+    done = changes(cmds)
+    if done or off:
+        lines.append("改动：" + (done or "claude-* 组没变") + ("；zcode provider 原来关着，已打开" if on else "")
+                     + ("；守护打开的 zcode provider 已关回" if off else "") + "。")
     lines += list(others)
     lines.append("停用：llm-gateway 上 sudo touch /etc/magpie-glm-guard/paused（日志 /var/lib/magpie-glm-guard/log）。")
     return "\n".join(lines)
@@ -436,6 +550,13 @@ def tell(text):
         log("ntfy failed: %s %s" % (type(e).__name__, str(e)[:160]))
 
 
+def zsummary(zw, picks):
+    """日志行里 ZCode 那段：各窗口剩多少，每个组挑的成员"""
+    z = " ".join("%s:%s" % (u, ",".join("%s=%g" % (n.split(" · ")[0], round(w["left"], 1)) for n, w in sorted(ws.items())))
+                 for u, ws in sorted(zw.items())) or "unread"
+    return "zcode[%s] pick=%s" % (z, ",".join("%s:%s" % (g.split("-")[1], (picks[g] or "-").split("/")[-1]) for g in GLM))
+
+
 def summary(ss, a):
     seat = " ".join("%s%s=%s/%g%s" % (s["user"].replace(" · DuoCode", ""), "(max)" if s["plan"] == "max" else "",
                                       "unread" if s["unread"] else "%g%%" % round(s["used"], 1), s["cap"],
@@ -468,8 +589,9 @@ def run(dry):
     except (OSError, ValueError):
         history = {}
     if "open" not in state:
-        # 第一次跑：按组里现在有没有 GLM 定初始状态，不算一次切换
-        state = {"open": aligned(prov, True) and any(GLM[g] in (members(prov, g) or []) for g in GLM), "since": 0}
+        # 第一次跑：按组里现在有没有守护管的 GLM 成员（zcode 开着）定初始状态，不算一次切换
+        state = {"open": not provider_off(prov, GLM_PROVIDER) and any(
+            m in (members(prov, g) or []) for g in GLM for m in managed(g)), "since": 0}
     if provider_off(prov, GLM_PROVIDER) and state.get("zcode_by_guard"):
         # zcode 关着（守护自己关的，或开着期间被人关了）：已经不是守护开着的，之后谁再打开都不归守护关
         state["zcode_by_guard"] = False
@@ -482,17 +604,26 @@ def run(dry):
         return 0
     a = assess(ss, history, t)
     want, why = decide(state, a, t)
-    cmds, missing, kept, strips = plan(prov, want, state)
+    zw = zcode_windows(cards, history, t)
+    picks = pick(zw)
+    use = wanted(want, picks)
+    active = any(use.values())
+    cmds, missing, kept, strips = plan(prov, use, state)
     restored = [c[2] for c in cmds if c[:2] == ["group", "set"] and c[3].startswith("models=")]
-    line = "%s -> %s (%s) | %s%s" % ("open" if state.get("open") else "closed", "open" if want else "closed", why,
-                                     summary(ss, a), " | zcode left alone in: " + ", ".join(kept) if kept else "")
+    line = "%s -> %s (%s) | %s %s%s" % ("open" if state.get("open") else "closed", "open" if want else "closed", why,
+                                        summary(ss, a), zsummary(zw, picks),
+                                        " | zcode left alone in: " + ", ".join(kept) if kept else "")
+    switched = want != bool(state.get("open"))
+    # 开着期间 claude-* 里的 ZCode 成员变了（Max 换 Trial、拿空、恢复）也报；关着时的对账（拿掉手动加的）不报
+    swapped = want and not switched and any(c[:2] == ["group", "set"] and c[2] in GLM for c in cmds)
+    kind = ("open" if want else "close") if switched else "swap"
     if dry:
         print(line)
         for c in cmds:
             print("would run: magpie " + " ".join(c))
-        if want != bool(state.get("open")):
-            print(message(want, why, ss, a, history, want and provider_off(prov, GLM_PROVIDER), t,
-                          others_lines(want, {"stripped": list(strips.values())} if want else {}, kept, restored)))
+        if switched or swapped:
+            print(message(kind, why, ss, a, zw, use, cmds, t, active and provider_off(prov, GLM_PROVIDER),
+                          others_lines(active, {"stripped": list(strips.values())} if active else {}, kept, restored)))
         return 0
     if missing:
         log("groups missing, left alone: %s" % ", ".join(missing))
@@ -514,7 +645,7 @@ def run(dry):
             # provider off 退出 0 却没关上：zcode 还是守护开着的，下一轮再关（不然标记已清，它就一直开着，别的组照样用到它）
             state["zcode_by_guard"] = True
             raise RuntimeError("zcode still on after provider off")
-        if not aligned(after, want, state, restored):
+        if not aligned(after, use, state, restored):
             raise RuntimeError("providers.json not as expected after the change")
     except Exception as e:
         log("%s | FAILED: %s" % (line, str(e)[:300]))
@@ -528,14 +659,12 @@ def run(dry):
     state["stripped"] = owed(after, state)
     if not state["stripped"]:
         state.pop("stripped")
-    switched = want != bool(state.get("open"))
     if switched:
         state.update({"open": want, "since": t})
     log(line + ("" if not cmds else " | ran: " + "; ".join(" ".join(c) for c in cmds)))
-    if switched:
-        tell(message(want, why, ss, a, history, (bool(state.get("zcode_by_guard")) if want
-                                                 else bool(cmds and cmds[-1][:2] == ["provider", "off"])), t,
-                     others_lines(want, state, kept, restored)))
+    if switched or swapped:
+        tell(message(kind, why, ss, a, zw, use, cmds, t, bool(state.get("zcode_by_guard")),
+                     others_lines(active, state, kept, restored)))
     write_state(statef, state)
     return 0
 

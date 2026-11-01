@@ -762,6 +762,212 @@ class GlmGuard(unittest.TestCase):
         first = Fake.messages[0][0]["content"].splitlines()[0]
         self.assertIn("按最近 30 分钟的速度", first)
 
+    # ---- ZCode 自己的余量：Max 用完改用 Trial，Trial 也用完就不开 ----
+    def zhist(self, five=100, week=100, trial=100, flash=100, ago_min=2, five_reset_min=None, week_reset_min=100 * 60,
+              trial_reset_min=15 * 60, stale=True):
+        """quota-history.json 里 ZCode 的样子（照网关 11-01）：otmrzlm7 是 GLM Coding Max，另有 Start Plan 两个 Trial 桶；
+        stale 再加一个 3 天前就不再读的旧账号，它的窗口都过了重置时间，算进来就会被当成满额"""
+        at = iso(self.t - ago_min * 60)
+
+        def pt(left, reset_min):
+            p = {"at": at, "left": left}
+            if reset_min is not None:
+                p["resetsAt"] = iso(self.t + reset_min * 60)
+            return [p]
+        h = {"zcode|otmrzlm7": {"5 hours": pt(five, five_reset_min), "Weekly": pt(week, week_reset_min),
+                                "GLM-5.3-Trial · ZCode Start Plan": pt(trial, trial_reset_min),
+                                "GLM-5.3-Flash-Trial · ZCode Start Plan": pt(flash, trial_reset_min)}}
+        if stale:
+            old, gone = iso(self.t - 72 * 3600), iso(self.t - 48 * 3600)
+            h["zcode|old@x.com"] = {name: [{"at": old, "left": 0, "resetsAt": gone}] for name in
+                                   ("5 hours", "Weekly", "GLM-5.3-Trial · ZCode Start Plan", "GLM-5.3")}
+        return h
+
+    def zcard(self, five=0, week=0, trial=0, flash=0, ago_min=1, trial_reset_min=15 * 60, trial_text=False):
+        """ZCode 开着时 magpie 卡片里的 ZCode 账号（used 是用掉的 %）"""
+        def w(name, used, reset_min):
+            return {"name": name, "used": used, "resetsAt": iso(self.t + reset_min * 60)}
+        trials = [w("GLM-5.3-Trial · ZCode Start Plan", trial, trial_reset_min),
+                  w("GLM-5.3-Flash-Trial · ZCode Start Plan", flash, trial_reset_min)]
+        if trial_text:
+            # 还没生效、要去 ZCode App 领的赠送套餐：magpie 把它当一行字放在卡片上，used 0 不是读数
+            trials = [dict(x, used=0, text=True, display="ZCode gift plan not started yet") for x in trials]
+        return {"provider": "zcode", "kind": "subscription", "plan": "GLM Coding Max", "user": "otmrzlm7",
+                "readAt": iso(self.t - ago_min * 60),
+                "windows": [w("5 hours", five, 120), w("Weekly", week, 100 * 60)] + trials}
+
+    def zcode_members(self):
+        g, _ = self.groups()
+        return {gid: [m for m in g[gid] if m.startswith("zcode/")] for gid in gg.GLM}
+
+    TRIALS = {"claude-opus-5-5": ["zcode/GLM-5.3-Trial"], "claude-sonnet-5-5": ["zcode/GLM-5.3-Trial"],
+              "claude-haiku-5-5": ["zcode/GLM-5.3-Flash-Trial"]}
+    MAXES = {"claude-opus-5-5": ["zcode/GLM-5.3"], "claude-sonnet-5-5": ["zcode/GLM-5.3"],
+             "claude-haiku-5-5": ["zcode/GLM-5.3-Flash"]}
+    NONE = {"claude-opus-5-5": [], "claude-sonnet-5-5": [], "claude-haiku-5-5": []}
+
+    def test_week_used_up_opens_with_trial(self):
+        # 11-01 20:09 的样子：ZCode Max 周额度 0%（11-06 才重置），座位全满。不加 GLM-5.3，改加免费 Trial
+        self.history(self.zhist(week=0))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS, "added a Max member with the week used up")
+        _, z = self.groups()
+        self.assertNotIn("off", z)
+        self.assertTrue(self.read_state()["open"])
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("已自动打开 GLM 兜底", msg.splitlines()[0])
+        self.assertIn("Trial", msg.splitlines()[0])
+        self.assertIn("周剩 0%", msg)
+        self.assertIn("zcode/GLM-5.3-Trial", msg)
+        self.assertNotIn("兜底已空", msg)
+
+    def test_5h_used_up_opens_with_trial(self):
+        self.history(self.zhist(five=0, five_reset_min=120, week=60))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS, "added a Max member with its 5 hours used up")
+
+    def test_trial_used_up_too_does_not_open(self):
+        # Max 周额度和两个 Trial 桶都用完：什么都不加、不开 zcode、不动别的组，消息里明说兜底已空，下一轮不重复发
+        self.history(self.zhist(week=0, trial=0, flash=0))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "changed the groups with nothing left to add")
+        g, z = self.groups()
+        self.assertTrue(z.get("off"))
+        self.assertEqual(g["frontier"], FRONTIER)
+        self.assertEqual(len(Fake.messages), 1)
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("兜底已空", msg.splitlines()[0])
+        self.assertIn("周剩 0%", msg)
+        self.t += 300
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(len(Fake.messages), 1)
+
+    def test_haiku_keeps_flash_trial_when_glm53_trial_is_spent(self):
+        # 两个 Trial 是各自的桶：GLM-5.3-Trial 用完、Flash-Trial 还有，haiku 照样加 Flash-Trial，opus、sonnet 什么都不加
+        self.history(self.zhist(week=0, trial=0, flash=50))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), dict(self.NONE, **{"claude-haiku-5-5": ["zcode/GLM-5.3-Flash-Trial"]}))
+        msg = Fake.messages[0][0]["content"]
+        self.assertIn("兜底已空", msg.splitlines()[0])
+        self.assertIn("claude-opus-5-5", msg.splitlines()[0])
+
+    def test_max_with_room_is_still_used_first(self):
+        # Max 还有余量就照旧用 Max（Trial 每天额度小，留着）
+        self.history(self.zhist(five=70, week=60))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.MAXES)
+
+    def test_account_magpie_no_longer_reads_does_not_count(self):
+        # 旧账号 3 天前就不再读了、它的窗口都过了重置时间：不能把它当成有余量的 Max 或 Trial
+        self.history(self.zhist(week=0, trial=0, flash=0, stale=True))
+        h = self.load("conf/quota-history.json")
+        for pts in h["zcode|old@x.com"].values():
+            pts[0]["left"] = 100
+        self.history(h)
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.calls(), [], "counted a dropped ZCode account as room")
+
+    def test_window_past_its_reset_is_room_again(self):
+        # 周额度读数是 0%，但重置时间已经过了、magpie 还没再读（zcode 关着不读）：周额度已经重新开始，用 Max
+        self.history(self.zhist(week=0, week_reset_min=-10))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.MAXES)
+
+    def test_open_swaps_to_trial_when_max_runs_out(self):
+        # 开着、用的是 Max；ZCode 开着后卡片读到周额度用完（比历史里那个旧读数新）：换成 Trial，先加后拿，zcode 一直开着
+        self.history(self.zhist(week=60, ago_min=30))
+        self.opened(20)
+        self.all_low()
+        Fake.cards.append(self.zcard(week=100))
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS, "kept the Max member after its week ran out")
+        calls = self.calls()
+        self.assertLess(calls.index("group set claude-opus-5-5 models+=zcode/GLM-5.3-Trial"),
+                        calls.index("group set claude-opus-5-5 models-=zcode/GLM-5.3"), calls)
+        self.assertNotIn("provider off zcode", calls)
+        g, z = self.groups()
+        self.assertNotIn("off", z)
+        self.assertNotIn("zcode/GLM-5.3", g["frontier"])  # 别的组还拿着
+        st = self.read_state()
+        self.assertTrue(st["open"])
+        self.assertEqual(st["since"], self.t - 20 * 60)
+        self.assertEqual(len(Fake.messages), 1)
+        first = Fake.messages[0][0]["content"].splitlines()[0]
+        self.assertIn("改用", first)
+        self.assertIn("Trial", first)
+
+    def test_open_goes_empty_then_back_when_trial_resets(self):
+        self.history(self.zhist(week=0))
+        self.all_low()
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        # Trial 也用完：拿掉 Trial，放回别的组，关回守护开的 zcode，消息说兜底已空；守护仍算开着
+        self.t += 300
+        self.all_low()
+        Fake.cards.append(self.zcard(week=100, trial=100, flash=100, trial_reset_min=60))
+        self.history(self.zhist(week=0, trial=0, flash=0, ago_min=1, trial_reset_min=60))
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.NONE)
+        g, z = self.groups()
+        self.assertTrue(z.get("off"))
+        self.assertEqual(g["frontier"], FRONTIER)
+        self.assertTrue(self.read_state()["open"])
+        self.assertEqual(len(Fake.messages), 2)
+        self.assertIn("兜底已空", Fake.messages[1][0]["content"].splitlines()[0])
+        # zcode 关着、卡片里没有它；历史里 Trial 的重置时间一过就重新有余量：再加上 Trial，消息说恢复
+        self.t += 61 * 60
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.TRIALS)
+        g, z = self.groups()
+        self.assertNotIn("off", z)
+        self.assertNotIn("zcode/GLM-5.3", g["frontier"])
+        self.assertEqual(len(Fake.messages), 3)
+        self.assertIn("Trial", Fake.messages[2][0]["content"].splitlines()[0])
+        self.assertNotIn("兜底已空", Fake.messages[2][0]["content"].splitlines()[0])
+
+    def test_close_takes_out_the_trial_members(self):
+        self.history(self.zhist(week=0))
+        self.all_low()
+        self.run_guard()
+        self.t += 20 * 60
+        self.a_reset()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.zcode_members(), self.NONE, "left a Trial member behind on close")
+        g, z = self.groups()
+        self.assertEqual(g["claude-opus-5-5"], ["claude/claude-opus-5-5", "kiro/claude-opus-5.5"])
+        self.assertEqual(g["frontier"], FRONTIER)
+        self.assertTrue(z.get("off"))
+        self.assertIn("已自动关上", Fake.messages[-1][0]["content"].splitlines()[0])
+
+    def test_closed_takes_out_a_trial_member_added_by_hand(self):
+        self.providers(zcode_off=False, extra=["zcode/GLM-5.3-Trial"])
+        self.state(open=False, since=0)
+        Fake.cards[:] = [self.seat("a@x.com", 30, 120), self.seat("b@x.com", 5, 200), self.seat("c@x.com", 20, 60)]
+        self.run_guard()
+        g, _ = self.groups()
+        self.assertEqual(g["claude-opus-5-5"], ["claude/claude-opus-5-5", "kiro/claude-opus-5.5"])
+        self.assertEqual(Fake.messages, [])
+
+    def test_gift_not_started_is_not_room(self):
+        # 卡片上的 Trial 只是一行字（赠送套餐还没生效）：不算余量；Max 周额度也用完 → 兜底已空
+        self.providers(zcode_off=False)
+        self.state(open=False, since=0)
+        self.all_low()
+        Fake.cards.append(self.zcard(week=100, trial_text=True))
+        self.run_guard()
+        self.assertEqual(self.zcode_members(), self.NONE, "a gift row that is only text was counted as room")
+        self.assertIn("兜底已空", Fake.messages[0][0]["content"].splitlines()[0])
+
 
 if __name__ == "__main__":
     unittest.main()
