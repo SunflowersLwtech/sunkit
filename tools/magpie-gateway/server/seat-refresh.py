@@ -17,6 +17,10 @@
 #     自上次重置后没人用过，窗口还没开始），放宽到每 15 分钟。
 #   - 读数超过 10 分钟：刷新（别的机器直连在用，额度会涨）。
 #   每轮最多刷新 4 个，一个接一个。三个座位加一个 Max，正常每个座位约 10 分钟读一次，一小时约 18 次 /usage。
+# 2026-11-01 magpie 升到 v0.1.2421：座位答请求改走 Claude Code 的交互模式（v0.1.2266 起默认），成功的回合不再带
+#   rate_limit_event（claudetui 只在被拒时转出它），magpie 对座位的读数只剩这里和容器里登着的那个座位 5–15 分钟一次的
+#   /usage。所以「读数多旧就刷新」和「同一座位两次刷新至少隔多久」可以用 SR_STALE、SR_UNKNOWN_GAP（秒）改，线上
+#   unit 都设成 180：在接活的座位约 3–4 分钟读一次，一小时约 50 次 /usage（不调模型、不花额度）。
 # 刷新前后的读数写进 $VAR/log（一行一个座位），出错只记日志、不告警。--dry-run 只打印每个座位刷不刷、为什么，不刷新。
 import json, os, re, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
@@ -29,8 +33,8 @@ VAR = os.environ.get("SR_VAR", "/var/lib/magpie-seat-refresh")
 STATE, LOG = VAR + "/state.json", VAR + "/log"
 TZ = timezone(timedelta(hours=8))
 CAP = 95.0             # 5 小时到这个百分比且重置在后面，算撞线，不刷新
-STALE = 10 * 60        # 读数比这旧就刷新
-UNKNOWN_GAP = 5 * 60   # 5 小时没有重置时间的座位，最多这么久刷一次
+STALE = int(os.environ.get("SR_STALE", 10 * 60))             # 读数比这旧就刷新
+UNKNOWN_GAP = int(os.environ.get("SR_UNKNOWN_GAP", 5 * 60))  # 5 小时没有重置时间的座位最多这么久刷一次；也是同一座位两次刷新的最小间隔
 IDLE_GAP = 15 * 60     # 上次刷新回来也没有重置时间（窗口没开始），放宽到这么久
 MAX_PER_RUN = 4
 TIMEOUT = 50           # 一次刷新最多等多久（magpie 那边自己 30 秒超时）
