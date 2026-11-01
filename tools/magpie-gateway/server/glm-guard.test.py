@@ -696,6 +696,72 @@ class GlmGuard(unittest.TestCase):
             self.assertIn("providers.json not as expected", f.read())
         self.assertIn("frontier", [e["group"] for e in self.read_state().get("stripped") or []])
 
+    # ---- 复审第二轮记下的测试缺口 ----
+    def test_two_zcode_members_go_back_in_their_order(self):
+        # 一个组里连着两个 zcode 成员：拿掉时都记成「排在 zed 后面」，放回要倒着放，次序才对
+        two = ["zed/gpt-6.1-sol", "zcode/GLM-5.3", "zcode/GLM-5.3-Flash", "trae-cn/glm-5.3", "group/always-up"]
+        d = self.load("conf/providers.json")
+        next(g for g in d["groups"] if g["id"] == "frontier")["members"] = list(two)
+        self.dump("conf/providers.json", d)
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        g, _ = self.groups()
+        self.assertEqual(g["frontier"], ["zed/gpt-6.1-sol", "trae-cn/glm-5.3", "group/always-up"])
+        self.t += 20 * 60
+        self.a_reset()
+        self.assertEqual(self.run_guard(), 0)
+        g, _ = self.groups()
+        self.assertEqual(g["frontier"], two, "frontier's zcode members came back out of order")
+
+    def test_open_read_back_catches_a_group_still_holding_zcode(self):
+        # 拿 frontier 的 zcode 成员那条退出 0 却没改：打开的读回要抓到（zcode 已开着，frontier 还能用到它），记失败
+        self.flag("noop", "group set frontier models-=")
+        self.all_low()
+        self.assertEqual(self.run_guard(), 1, "opened with zcode still in frontier")
+        g, z = self.groups()
+        self.assertIn("zcode/GLM-5.3", g["frontier"])
+        self.assertNotIn("off", z)
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("providers.json not as expected", f.read())
+        self.assertFalse(self.read_state()["open"])
+        os.remove(self.tmp + "/noop")
+        self.t += 300
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        g, _ = self.groups()
+        self.assertNotIn("zcode/GLM-5.3", g["frontier"])
+        self.assertTrue(self.read_state()["open"])
+
+    def test_provider_off_is_read_back(self):
+        # 关上时 provider off 退出 0 却没关上：读回要抓到、记失败；zcode 仍算守护开着的，下一轮再关
+        self.opened(20)
+        self.flag("noop", "provider off")
+        self.a_reset()
+        self.assertEqual(self.run_guard(), 1, "a provider off that didn't take was counted as done")
+        _, z = self.groups()
+        self.assertNotIn("off", z)
+        with open(self.tmp + "/var/log") as f:
+            self.assertIn("zcode still on after provider off", f.read())
+        self.assertTrue(self.read_state().get("zcode_by_guard"))
+        os.remove(self.tmp + "/noop")
+        self.t += 300
+        self.a_reset()
+        self.assertEqual(self.run_guard(), 0)
+        g, z = self.groups()
+        self.assertTrue(z.get("off"), "zcode left on after the close: %s" % z)
+        self.assertEqual(g["frontier"], FRONTIER)
+        self.assertFalse(self.read_state()["open"])
+
+    def test_speed_open_counts_an_unread_seat_as_no_room(self):
+        # a、b 各剩 10 个百分点到上限，c 读不到；三个座位最近 30 分钟各涨 10 → 1%/分钟。c 按没有余量算：20 分钟用完 → 打开；
+        # c 要是按满额算，余量 120、120 分钟才用完，不开
+        self.history(self.history_burn(10))
+        Fake.cards[:] = [self.seat("a@x.com", 85, 120), self.seat("b@x.com", 85, 120), self.unread("c@x.com")]
+        self.run_guard()
+        self.assertTrue(self.read_state()["open"], "an unread seat was counted as room in the speed rule")
+        first = Fake.messages[0][0]["content"].splitlines()[0]
+        self.assertIn("按最近 30 分钟的速度", first)
+
 
 if __name__ == "__main__":
     unittest.main()
