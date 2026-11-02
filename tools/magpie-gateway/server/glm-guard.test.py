@@ -1462,6 +1462,43 @@ class GlmGuard(unittest.TestCase):
     def test_gz_with_bad_crc_is_read_in_part(self):
         self.check_broken_gz_read_in_part("crc")
 
+    def check_rest_before_break_is_kept(self, kind):
+        # 过了午夜、今天还没有 ZCode 记录，账号歇着只记在昨天那份 .gz 里，而它坏在歇着那几行之后：坏处之前读到的照样算
+        day = (datetime.fromtimestamp(self.t, TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        o = {"id": "zcode", "provider": "zcode", "who": "otmrzlm7", "model": "GLM-5.3", "used": 100, "rest": self.cap_rest()}
+        data = "".join(json.dumps({"time": iso(self.t - 20 * 3600 + i), "model": "claude-opus-5-5", "status": 429,
+                                   "order": [o], "tries": [{"id": "zcode", "model": "GLM-5.3", "status": 429}]}) + "\n"
+                       for i in range(500)).encode()
+        if kind == "zlib":
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            blob = b"\x1f\x8b\x08\x00\0\0\0\0\x00\xff" + c.compress(data) + c.flush(zlib.Z_FULL_FLUSH) + b"\x07" + b"\0" * 16
+        else:
+            blob = gzip.compress(data)
+            blob = blob[:len(blob) // 2] if kind == "eof" else blob[:-8] + bytes(b ^ 0xff for b in blob[-8:-4]) + blob[-4:]
+        path = os.path.join(gg.ROUTING, day + ".jsonl.gz")
+        with open(path, "wb") as f:
+            f.write(blob)
+        got = 0
+        with self.assertRaises((zlib.error, EOFError, gzip.BadGzipFile)):
+            with gzip.open(path, "rt") as f:
+                for _ in f:
+                    got += 1
+        self.assertGreater(got, 0, "the %s .gz gives no line before it breaks" % kind)
+        self.history(self.zhist(stale=False))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "lines before the break dropped: Max added to a resting account (%s)" % kind)
+        self.assertIn("歇到", Fake.messages[0][0]["content"])
+
+    def test_rest_before_break_kept_zlib(self):
+        self.check_rest_before_break_is_kept("zlib")
+
+    def test_rest_before_break_kept_eof(self):
+        self.check_rest_before_break_is_kept("eof")
+
+    def test_rest_before_break_kept_crc(self):
+        self.check_rest_before_break_is_kept("crc")
+
 
 if __name__ == "__main__":
     unittest.main()
