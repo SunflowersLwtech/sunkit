@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # glm-guard.py 的离线测试：假卡片接口、假 mesh 中继、假 ntfy 都在 127.0.0.1，假 magpie 只改临时目录里的 providers.json。
 # python3 tools/magpie-gateway/server/glm-guard.test.py
-import gzip, importlib.util, json, os, shutil, sys, tempfile, threading, time, unittest
+import gzip, importlib.util, json, os, shutil, sys, tempfile, threading, time, unittest, zlib
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -1410,6 +1410,57 @@ class GlmGuard(unittest.TestCase):
         self.run_guard()
         self.assertEqual(self.calls(), [], "yesterday's gzipped log wasn't read: Max added to a resting account")
         self.assertIn("歇到", Fake.messages[0][0]["content"])
+
+    def broken_yesterday(self, kind):
+        """昨天的 .jsonl.gz 读到一半坏掉；账号歇着记在今天的 .jsonl 里。坏法：zlib（压缩数据坏，抛 zlib.error，不是 OSError）、
+        eof（截断，EOFError）、crc（CRC 错，BadGzipFile）。返回那份文件名和读它会抛的异常类"""
+        day = (datetime.fromtimestamp(self.t, TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        o = {"id": "zcode", "provider": "zcode", "who": "otmrzlm7", "model": "GLM-5.3", "used": 40}
+        data = "".join(json.dumps({"time": iso(self.t - 20 * 3600 + i), "model": "claude-opus-5-5", "status": 200,
+                                   "order": [o], "tries": [{"id": "zcode", "model": "GLM-5.3", "status": 200}]}) + "\n"
+                       for i in range(500)).encode()
+        if kind == "zlib":
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            # 前面是完好的块，接着一个类型为保留值 11 的块：zlib 报 invalid block type
+            blob = b"\x1f\x8b\x08\x00\0\0\0\0\x00\xff" + c.compress(data) + c.flush(zlib.Z_FULL_FLUSH) + b"\x07" + b"\0" * 16
+            want = zlib.error
+        else:
+            blob = gzip.compress(data)
+            if kind == "eof":
+                blob, want = blob[:len(blob) // 2], EOFError
+            else:
+                blob, want = blob[:-8] + bytes(b ^ 0xff for b in blob[-8:-4]) + blob[-4:], gzip.BadGzipFile
+        name = day + ".jsonl.gz"
+        with open(os.path.join(gg.ROUTING, name), "wb") as f:
+            f.write(blob)
+        with self.assertRaises(want, msg="the %s .gz doesn't break the way this test means" % kind):
+            with gzip.open(os.path.join(gg.ROUTING, name), "rt") as f:
+                for _ in f:
+                    pass
+        self.routing((5, self.cap_rest()))
+        return name, want
+
+    def check_broken_gz_read_in_part(self, kind):
+        # 昨天那份坏在半路：跳过它、照读今天的，账号歇着照样认出来（不给歇着的账号加 Max）；不是整轮按「不知道」算
+        name, want = self.broken_yesterday(kind)
+        self.history(self.zhist(stale=False))
+        self.all_low()
+        self.assertEqual(self.run_guard(), 0)
+        self.assertEqual(self.calls(), [], "today's log wasn't read after the broken .gz: Max added to a resting account")
+        self.assertIn("歇到", Fake.messages[0][0]["content"])
+        with open(self.tmp + "/var/log") as f:
+            log = f.read()
+        self.assertNotIn("routing log unreadable", log, "a broken %s .gz made every account's rest unknown" % kind)
+        self.assertIn("routing log %s read in part: %s " % (name, want.__name__), log)
+
+    def test_gz_with_bad_deflate_data_is_read_in_part(self):
+        self.check_broken_gz_read_in_part("zlib")
+
+    def test_truncated_gz_is_read_in_part(self):
+        self.check_broken_gz_read_in_part("eof")
+
+    def test_gz_with_bad_crc_is_read_in_part(self):
+        self.check_broken_gz_read_in_part("crc")
 
 
 if __name__ == "__main__":

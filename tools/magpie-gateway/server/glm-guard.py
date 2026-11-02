@@ -48,7 +48,7 @@
 #   之前的 why/until）。组先对齐、再解除：先解除的话，组里还在的 Max 成员可能先被问到、又把账号歇掉。
 # 停用：touch /etc/magpie-glm-guard/paused（每轮直接退出，不改任何东西）；或 systemctl disable --now magpie-glm-guard.timer。
 # --dry-run：只打印判断和会做的动作，不改、不发。
-import fcntl, gzip, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid
+import fcntl, gzip, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid, zlib
 from datetime import datetime, timedelta, timezone
 
 CONTAINER = os.environ.get("GG_CONTAINER", "magpie-magpie-1")
@@ -394,8 +394,9 @@ def zcode_rests(t):
                                 u = o["who"].lower()
                                 if u not in newest or at >= newest[u][0]:
                                     newest[u] = (at, o.get("rest") if isinstance(o.get("rest"), dict) else None)
-            except (OSError, EOFError) as e:
-                # 压缩文件坏了或还在写：读到哪算哪，别的文件照读
+            except (OSError, EOFError, zlib.error) as e:
+                # 压缩文件坏了或还在写：读到哪算哪，别的文件照读。截断是 EOFError、CRC 错是 BadGzipFile（OSError），
+                # 压缩数据本身坏了是 zlib.error，它不是 OSError
                 log("routing log %s read in part: %s %s" % (os.path.basename(f), type(e).__name__, str(e)[:120]))
     out = {}
     for u, (at, rest) in newest.items():
