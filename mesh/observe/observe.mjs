@@ -1,185 +1,162 @@
 #!/usr/bin/env node
-// mesh-observe — one snapshot of who is on the mesh, where, and what state they
-// are in, rendered as a self-contained page (no deps, no build step).
+// mesh observe — the mesh as the desk's Mesh page shows it (foldrender.dev/desk/mesh): who is on
+// it, where, with which harness and model, busy or idle, and each message's delivery.
 //
-//   node mesh/observe/observe.mjs                # JSON to stdout
-//   node mesh/observe/observe.mjs --html OUT     # the page
+//   node mesh/observe/observe.mjs                          # what would be sent, as JSON; nothing sent
+//   node mesh/observe/observe.mjs --desk-feed              # send it to the desk once
+//   node mesh/observe/observe.mjs --desk-feed --every 60   # and again every 60 s, until stopped
 //
-// Reads the relay with the same token the peers use (~/.claude-mesh/token,
-// MESH_HOME honoured). READ-ONLY: only GETs /v1/sessions and /v1/machines.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// Reads the relay with GETs only: /v1/sessions (who is on) and /v1/events (the delivery log, from
+// where the last read stopped). Nothing is written to the mesh. Sends the desk one feed snapshot
+// (PUT <api>/desk/<desk>/feed/<source>, a desk feed token): a `peer` for each session and a
+// `message` for each of the latest messages, with the latency the relay logged. A snapshot
+// replaces the last one; one is sent only when the relay answered, so a relay that is down never
+// empties the page.
+//
+// Environment:
+//   MESH_HOME                     where config.json and the token are (default ~/.claude-mesh);
+//   MESH_RELAY, MESH_TOKEN_FILE   or name the relay and the token file directly
+//   FOLDRENDER_DESK_TOKEN_FILE    a file (mode 600) holding the desk's feed token (frdk_…)
+//   FOLDRENDER_API                default https://foldrender.dev/artifacts/api
+//   FOLDRENDER_DESK               default desk (the token's own desk)
+//   MESH_DESK_SOURCE              default mesh (the feed's name on the desk)
+//   MESH_DESK_MACHINES            a JSON file {"<device or herdr machine>": "<the desk's name>"}
+// Tokens are read from files and sent in request headers only: never on a command line, never
+// printed. Each run prints one JSON line a send (counts, statuses), nothing else.
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { foldEvents, messages, newState, peers, prune } from './feed.mjs'
 
-const home = process.env.MESH_HOME ?? path.join(os.homedir(), ".claude-mesh");
-const cfg = JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8"));
-const token = fs.readFileSync(cfg.token_path ?? path.join(home, "token"), "utf8").trim();
-const relay = (process.env.MESH_RELAY ?? cfg.relay_url).replace(/\/$/, "");
+const TIMEOUT_MS = 15_000
+const EVENT_PAGE = 500
+/** Pages of the log read a send at most: a backlog larger than this is caught up over several. */
+const EVENT_PAGES = 4
 
-async function get(p) {
-  const r = await fetch(relay + p, { headers: { authorization: `Bearer ${token}` } });
-  if (!r.ok) throw new Error(`${p}: HTTP ${r.status}`);
-  return r.json();
-}
-
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const short = (s, n) => (String(s ?? "").length > n ? String(s).slice(0, n - 1) + "…" : String(s ?? ""));
-
-function age(sec) {
-  if (sec == null) return "—";
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.round(sec / 60)}m`;
-  return `${(sec / 3600).toFixed(1)}h`;
-}
-
-const [sessions, machines] = await Promise.all([get("/v1/sessions"), get("/v1/machines")]);
-const now = new Date();
-
-const byStatus = sessions.reduce((a, s) => ((a[s.status] = (a[s.status] ?? 0) + 1), a), {});
-const byAgent = sessions.reduce((a, s) => ((a[s.agent ?? "?"] = (a[s.agent ?? "?"] ?? 0) + 1), a), {});
-const byAccount = sessions.reduce((a, s) => ((a[s.account ?? "?"] = (a[s.account ?? "?"] ?? 0) + 1), a), {});
-
-// A bridge is observable through its own files; report what is there, if anything.
-function bridgeState(name) {
-  const dir = path.join(os.homedir(), ".mesh-names", name);
-  try {
-    const st = JSON.parse(fs.readFileSync(path.join(dir, "bridge.state.json"), "utf8"));
-    const lines = fs.readFileSync(path.join(dir, "inbox.jsonl"), "utf8").trim().split("\n").filter(Boolean);
-    const inbox = lines.length;
-    const recent = lines.slice(-2).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-    const cursor = Number(fs.readFileSync(path.join(dir, "inbox.cursor"), "utf8").trim() || 0);
-    let failed = 0;
-    try {
-      failed = fs.readFileSync(path.join(dir, "outbox.failed.jsonl"), "utf8").trim().split("\n").filter(Boolean).length;
-    } catch {}
-    return { name, ...st, inbox, cursor, unread: Math.max(0, inbox - cursor), failed, recent };
-  } catch {
-    return null;
+export function config(env = process.env) {
+  const home = env.MESH_HOME ?? path.join(os.homedir(), '.claude-mesh')
+  let cfg = {}
+  try { cfg = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')) } catch { /* env names them */ }
+  const relay = String(env.MESH_RELAY ?? cfg.relay_url ?? '').replace(/\/$/, '')
+  const tokenFile = env.MESH_TOKEN_FILE ?? cfg.token_path ?? path.join(home, 'token')
+  let names = {}
+  if (env.MESH_DESK_MACHINES) names = JSON.parse(fs.readFileSync(env.MESH_DESK_MACHINES, 'utf8'))
+  return {
+    relay,
+    meshToken: () => fs.readFileSync(tokenFile, 'utf8').trim(),
+    deskToken: () => (env.FOLDRENDER_DESK_TOKEN_FILE ? fs.readFileSync(env.FOLDRENDER_DESK_TOKEN_FILE, 'utf8').trim() : ''),
+    api: String(env.FOLDRENDER_API ?? 'https://foldrender.dev/artifacts/api').replace(/\/$/, ''),
+    desk: env.FOLDRENDER_DESK ?? 'desk',
+    source: env.MESH_DESK_SOURCE ?? 'mesh',
+    names,
   }
 }
 
-const snapshot = {
-  at: now.toISOString(),
-  relay,
-  sessions: sessions.map((s) => ({
-    name: s.name, ref: s.ref, account: s.account, device: s.device, status: s.status,
-    agent: s.agent, model: s.model, repo: s.repo, branch: s.branch, cwd: s.cwd,
-    machine: s.herdr?.machine ?? s.device, tab: s.herdr?.tab, age_s: s.age_s,
-  })),
-  machines: machines.map((m) => ({
-    machine: m.machine, connected: m.connected, stale: m.stale, age_s: m.age_s,
-    load1: m.report?.load?.load1, cpus: m.report?.load?.cpus, mem_pct: m.report?.load?.mem_used_pct,
-    herdr: m.report?.herdr?.version, kinds: (m.report?.kinds ?? []).map((k) => k.kind),
-  })),
-  summary: { sessions: sessions.length, byStatus, byAgent, byAccount, machines: machines.length },
-  bridge: bridgeState("m4-dsh"),
-};
-
-if (!process.argv.includes("--html")) {
-  console.log(JSON.stringify(snapshot, null, 2));
-  process.exit(0);
+async function relayGet(cfg, p) {
+  const r = await fetch(cfg.relay + p, { headers: { authorization: `Bearer ${cfg.meshToken()}` }, signal: AbortSignal.timeout(TIMEOUT_MS) })
+  if (!r.ok) throw new Error(`relay ${p.split('?')[0]}: HTTP ${r.status}`)
+  return r.json()
 }
-const out = process.argv[process.argv.indexOf("--html") + 1];
 
-// ------------------------------------------------------------------ page
-const STATUS_ORDER = ["busy", "idle", "unknown", "offline"];
-const statusRows = STATUS_ORDER.filter((s) => byStatus[s]).map((s) => ({
-  s, n: byStatus[s], pct: Math.round((byStatus[s] / sessions.length) * 100),
-}));
-const top = [...snapshot.sessions].sort((a, b) => (a.age_s ?? 1e9) - (b.age_s ?? 1e9)).slice(0, 12);
-const machineRows = [...snapshot.machines].sort((a, b) => (a.machine > b.machine ? 1 : -1));
+/** Reads the log from where the fold stopped (the latest page when it has not read any yet). */
+export async function readEvents(cfg, state) {
+  let n = 0
+  for (let i = 0; i < EVENT_PAGES; i++) {
+    const q = state.seq === null ? `?limit=${EVENT_PAGE}` : `?since_seq=${state.seq}&limit=${EVENT_PAGE}`
+    const page = await relayGet(cfg, `/v1/events${q}`)
+    foldEvents(state, page.events ?? [])
+    n += (page.events ?? []).length
+    const had = state.seq
+    state.seq = page.seq
+    if (had === null || (page.events ?? []).length < EVENT_PAGE) break
+  }
+  return n
+}
 
-const page = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mesh 观测台</title>
-<style>
-:root{--paper:#faf9f6;--ink:#1d2025;--muted:#555c69;--soft:#8a90a0;--line:rgba(29,32,37,.14);--card:#fff;
---accent:#b4551f;--accent-tint:rgba(180,85,31,.08);--link:#2f5aa0;--ok:#1c6b46;--chip:rgba(29,32,37,.05);
---sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Segoe UI",sans-serif;
---mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--serif:"Songti SC","Noto Serif CJK SC",Georgia,serif}
-@media (prefers-color-scheme:dark){:root{--paper:#1b1e24;--ink:#eceef2;--muted:#b9bfcc;--soft:#828a9b;
---line:rgba(236,238,242,.15);--card:#242832;--accent:#e08a5a;--accent-tint:rgba(224,138,90,.12);
---link:#7ea3e0;--ok:#69c39a;--chip:rgba(236,238,242,.06)}}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--paper);color:var(--ink);font:15px/1.65 var(--sans);padding:24px 16px 48px}
-main{max-width:820px;margin:0 auto}
-.eyebrow{font:11px/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--soft)}
-h1{font-family:var(--serif);font-size:clamp(24px,6vw,34px);line-height:1.2;margin:8px 0 6px;font-weight:600}
-.at{font:12px/1.6 var(--mono);color:var(--soft);margin-bottom:22px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:26px}
-@media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.stat b{display:block;font-size:22px;line-height:1.2;font-variant-numeric:tabular-nums}
-.stat span{font-size:11.5px;color:var(--soft)}
-h2{font-size:15px;margin:26px 0 8px}
-.bars{display:grid;gap:6px;margin:8px 0 4px}
-.bar{display:grid;grid-template-columns:64px 1fr 44px;align-items:center;gap:8px;font-size:12.5px}
-.track{display:block;height:8px;border-radius:5px;background:var(--chip);overflow:hidden}
-.fill{display:block;height:100%;background:var(--accent);border-radius:5px}
-.bar em{font-style:normal;color:var(--soft);text-align:right;font-family:var(--mono);font-size:11px}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
-th{font-size:11px;color:var(--soft);font-weight:500;text-transform:uppercase;letter-spacing:.04em}
-td.n{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.pill{font-size:10.5px;padding:0 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
-.pill.busy{color:var(--accent);border-color:var(--accent)}
-.pill.idle{color:var(--ok);border-color:var(--ok)}
-.muted{color:var(--soft)}
-code{font-family:var(--mono);font-size:.92em}
-pre{background:var(--chip);border:1px solid var(--line);border-radius:9px;padding:10px 12px;overflow-x:auto;font:11.5px/1.6 var(--mono)}
-@media(max-width:560px){table,thead,tbody,tr,td,th{display:block}thead{display:none}
-tr{border:1px solid var(--line);border-radius:9px;margin-bottom:8px;padding:4px 10px;background:var(--card)}
-td{border:0;padding:2px 0}td:first-child{font-weight:600;margin-top:4px}}
-footer{font-size:12px;color:var(--soft);border-top:1px solid var(--line);margin-top:26px;padding-top:10px}
-</style></head><body><main>
-<p class="eyebrow">mesh observe · 只读快照</p>
-<h1>${sessions.length} 个会话，在 ${machines.length} 台机器上</h1>
-<p class="at">${now.toLocaleString("zh-CN", { hour12: false })} · ${esc(relay)}</p>
-<div class="stats">
-<div class="stat"><b>${sessions.length}</b><span>在线会话</span></div>
-<div class="stat"><b>${byStatus.busy ?? 0}</b><span>正在干活</span></div>
-<div class="stat"><b>${machines.filter((m) => m.connected).length}/${machines.length}</b><span>机器在线</span></div>
-<div class="stat"><b>${snapshot.bridge ? snapshot.bridge.unread : "—"}</b><span>DSH 未读</span></div>
-</div>
+/** One snapshot from the relay: {items, peers, messages, events}. Throws when the relay does not answer. */
+export async function snapshot(cfg, state, now = Date.now()) {
+  // The sessions must come; the log may not (an older relay has none, or it said 429): then the
+  // messages are what was read before, and the next send reads on from there.
+  const [sessions, events] = await Promise.all([relayGet(cfg, '/v1/sessions'), readEvents(cfg, state).catch((err) => ({ error: String(err?.message ?? err) }))])
+  prune(state, now)
+  const p = peers(sessions, cfg.names)
+  const m = messages(state, cfg.names, { now })
+  return { items: [...p, ...m], peers: p.length, messages: m.length, events: typeof events === 'number' ? events : undefined, events_error: events?.error }
+}
 
-<h2>谁在干什么</h2>
-<div class="bars">${statusRows.map((r) => `<div class="bar"><span>${esc(r.s)}</span><span class="track"><span class="fill" style="width:${r.pct}%"></span></span><em>${r.n}</em></div>`).join("")}</div>
+/**
+ * Sends a snapshot to the desk. A thing the desk refuses (400/422 naming its key: a name that
+ * looks like a secret, say) is left out and the rest sent again, three times at most.
+ */
+export async function send(cfg, items, every) {
+  let left = items
+  const dropped = []
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch(`${cfg.api}/desk/${encodeURIComponent(cfg.desk)}/feed/${encodeURIComponent(cfg.source)}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${cfg.deskToken()}`, 'content-type': 'application/json', 'foldrender-api': '2', 'user-agent': 'mesh-observe' },
+      body: JSON.stringify({ every_s: every, items: left }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+    const out = await r.json().catch(() => null)
+    const bad = (r.status === 400 || r.status === 422) && out?.key ? String(out.key).replace(new RegExp(`^${cfg.source}/`), '') : null
+    if (!bad || i === 3) return { status: r.status, changed: out?.changed, removed: out?.removed, error: r.ok ? undefined : out?.error, dropped }
+    dropped.push({ key: bad, error: out.error, field: out.field })
+    left = left.filter((it) => it.key !== bad)
+  }
+  return { status: 0, dropped }
+}
 
-<h2>最近活跃的 12 个</h2>
-<table><thead><tr><th>会话</th><th>状态</th><th>agent / model</th><th>仓库</th><th>机器</th><th>最后</th></tr></thead><tbody>
-${top.map((s) => `<tr><td>${esc(s.name)} <span class="muted">${esc(s.ref)}</span></td>
-<td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td>
-<td>${esc(s.agent ?? "?")}<span class="muted"> · ${esc(short(s.model, 22))}</span></td>
-<td>${esc(short(s.repo ?? "—", 18))}<span class="muted"> ${esc(short(s.branch ?? "", 14))}</span></td>
-<td>${esc(short(s.machine ?? "—", 18))}</td><td class="n">${age(s.age_s)}</td></tr>`).join("")}
-</tbody></table>
+async function once(cfg, state, every) {
+  const at = new Date().toISOString()
+  let snap
+  try {
+    snap = await snapshot(cfg, state)
+  } catch (err) {
+    console.log(JSON.stringify({ at, relay: 'failed', error: String(err?.message ?? err).slice(0, 200), sent: false }))
+    return false
+  }
+  try {
+    const r = await send(cfg, snap.items, every)
+    console.log(JSON.stringify({ at, peers: snap.peers, messages: snap.messages, events: snap.events, events_error: snap.events_error, desk: r.status, changed: r.changed, removed: r.removed, error: r.error, dropped: r.dropped.length ? r.dropped : undefined }))
+    return r.status === 200
+  } catch (err) {
+    console.log(JSON.stringify({ at, peers: snap.peers, messages: snap.messages, desk: 'failed', error: String(err?.message ?? err).slice(0, 200) }))
+    return false
+  }
+}
 
-${snapshot.bridge?.recent?.length ? `<h2>最近投递（DSH 桥）</h2><table><tbody>${snapshot.bridge.recent.map((m) => `<tr><td>${esc(short(m.from, 20))}</td><td class="muted">${esc(short(String(m.content ?? "").replace(/\n/g, " "), 60))}</td><td class="n">${esc((m.ts ?? "").slice(11, 19))}</td></tr>`).join("")}</tbody></table>` : ""}
+async function main(argv) {
+  const cfg = config()
+  if (!cfg.relay) throw new Error('no relay: set MESH_RELAY or MESH_HOME (config.json relay_url)')
+  const state = newState()
+  if (!argv.includes('--desk-feed')) {
+    const snap = await snapshot(cfg, state)
+    console.log(JSON.stringify(snap, null, 2))
+    return
+  }
+  if (!cfg.deskToken()) throw new Error('no desk token: set FOLDRENDER_DESK_TOKEN_FILE to a file holding the feed token')
+  const i = argv.indexOf('--every')
+  const every = i >= 0 ? Number(argv[i + 1]) : 0
+  if (i >= 0 && !(Number.isInteger(every) && every >= 15 && every <= 3600)) throw new Error('--every is 15 to 3600 seconds')
+  if (!every) {
+    process.exitCode = (await once(cfg, state, 60)) ? 0 : 1
+    return
+  }
+  let stop = false
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { stop = true })
+  while (!stop) {
+    const t = Date.now()
+    await once(cfg, state, every)
+    // Sleep in short steps so a stop is quick.
+    while (!stop && Date.now() - t < every * 1000) await new Promise((r) => setTimeout(r, 500))
+  }
+}
 
-<h2>机器</h2>
-<table><thead><tr><th>机器</th><th>连接</th><th>负载</th><th>内存</th><th>herdr</th><th>上报</th></tr></thead><tbody>
-${machineRows.map((m) => `<tr><td>${esc(m.machine)}</td><td>${m.connected ? "✓" : "✗"}${m.stale ? " 陈旧" : ""}</td>
-<td class="n">${m.load1 ?? "—"}${m.cpus ? ` / ${m.cpus}` : ""}</td><td class="n">${m.mem_pct ?? "—"}%</td>
-<td class="n">${esc(m.herdr ?? "—")}</td><td class="n">${age(m.age_s)}</td></tr>`).join("")}
-</tbody></table>
-
-<h2>观测契约（想成为共识的那部分）</h2>
-<p class="muted" style="font-size:13px">任何 agent 消息系统只要能回答这四个问题，就能填进同一张表：谁发给谁、到没到、多久、谁在读。mesh 这边由 relay 的 <code>/v1/sessions</code>（谁在哪）加投递方的游标/失败文件（到没到）拼出来。</p>
-<pre>{
-  "ts": "2026-10-28T13:20:00Z",
-  "system": "mesh",                  // mesh | dsh-team | any
-  "from": { "session": "m4-dsh", "account": "duocode", "device": "duocode-m4" },
-  "to":   { "session": "feishu-assistant", "ref": "s7kexj" },
-  "msg_id": "msg_01M6…",
-  "bytes": 412,
-  "state": "delivered",              // sent | delivered | read | failed
-  "latency_ms": 180
-}</pre>
-<p class="muted" style="font-size:12.5px">DSH bridge 的 <code>inbox.cursor</code> 就是 <code>read</code> 的证据；<code>outbox.failed.jsonl</code> 是 <code>failed</code> 的证据。</p>
-
-<footer>只读：GET /v1/sessions, /v1/machines；桥接状态读本地 <code>~/.mesh-names/m4-dsh</code>。由 <code>mesh/observe/observe.mjs</code> 生成。</footer>
-</main></body></html>`;
-
-fs.writeFileSync(out, page);
-console.error(`wrote ${out} (${sessions.length} sessions, ${machines.length} machines)`);
+const invoked = process.argv[1] && import.meta.url === new URL(`file://${path.resolve(process.argv[1])}`).href
+if (invoked) {
+  main(process.argv.slice(2)).catch((err) => {
+    console.error(`mesh-observe: ${err?.message ?? err}`)
+    process.exit(1)
+  })
+}
