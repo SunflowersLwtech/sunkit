@@ -149,5 +149,24 @@ CREATE TABLE IF NOT EXISTS lease (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lease_live ON lease(team_id, name) WHERE released_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_lease_holder ON lease(holder_session) WHERE released_at IS NULL;
 
+-- v5: the delivery log. One row each time a chat message changes state: 'sent' when the relay
+-- stores it, 'delivered' the first time a live stream takes it. Ids, names, devices and times only,
+-- never content. Read by GET /v1/events. Additive, so an older relay image runs on this file unchanged.
+CREATE TABLE IF NOT EXISTS delivery_event (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('sent','delivered')),
+  at TEXT NOT NULL,
+  from_device TEXT,   -- sent: the sender token's label
+  to_name TEXT,       -- sent: the addressed session's name; delivered: the session whose stream took it
+  to_device TEXT,
+  to_wg TEXT,         -- sent: the addressed session's workgroup (NULL for handle and @team messages)
+  via TEXT CHECK(via IS NULL OR via IN ('live','backlog'))
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_event_team ON delivery_event(team_id, seq);
+CREATE INDEX IF NOT EXISTS idx_delivery_event_msg ON delivery_event(msg_id, state);
+CREATE INDEX IF NOT EXISTS idx_delivery_event_at ON delivery_event(at);
+
 INSERT OR IGNORE INTO schema_version(version) VALUES (1);
 INSERT OR IGNORE INTO schema_version(version) VALUES (2);

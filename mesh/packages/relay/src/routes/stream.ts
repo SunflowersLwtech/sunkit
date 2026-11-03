@@ -77,9 +77,10 @@ export function streamRoute(deps: Deps) {
       const backlog = since
         ? deps.store.fetchSince(team_id, handle, since, session, viewer())
         : deps.store.fetchPendingFor(team_id, handle, session, viewer())
+      const taker = session ? deps.sessions!.get(session) : undefined
       for (const e of backlog) {
         await stream.writeSSE({ event: 'message', data: JSON.stringify(e) })
-        deps.store.markDelivered(e.id)
+        deps.store.markDelivered(e.id, { via: 'backlog', device: c.get('token').label, ...(taker ? { name: taker.name } : {}) })
       }
 
       // Messages are acked (marked delivered) once written; ledger events are fire-and-forget.

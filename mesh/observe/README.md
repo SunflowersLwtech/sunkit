@@ -28,10 +28,8 @@ row if it answers four questions: **who → who, did it arrive, how long, who ha
 ```
 
 Today: `/v1/sessions` answers *who is where*; the sender's outbox offset answers *sent*; the
-receiver's inbox cursor answers *read*; `outbox.failed.jsonl` answers *failed*. The relay keeps no
-per-message history, so `latency_ms` is only known to a sender that records it — a relay-side
-`/v1/events` (or a shared append-only event log) is the missing piece before the page can show
-delivery latency for everyone.
+receiver's inbox cursor answers *read*; `outbox.failed.jsonl` answers *failed*. The relay's
+`GET /v1/events` (the delivery log) answers *arrived, and how long* for every message it carried.
 
 ## Refreshing
 
