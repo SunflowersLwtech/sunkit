@@ -4,6 +4,7 @@ import type { RelayClient } from './outbound.ts'
 import type { ReplyLimiter } from './reply-limiter.ts'
 import { resolveTarget, formatListing, formatAddress } from './resolve-target.ts'
 import { formatInbox, type Inbox } from './inbox.ts'
+import { spawnWorker, sshRunner, type SpawnRunner } from './spawn-worker.ts'
 
 const ListInput = z.object({}).strict()
 const ReadInput = z.object({ limit: z.number().int().min(1).max(100).optional() }).strict()
@@ -11,6 +12,14 @@ const SendMessageInput = z.object({
   to: z.string().min(1),
   message: z.string().min(1),
   in_reply_to: z.string().optional(),
+}).strict()
+const CreateWorkerInput = z.object({
+  machine: z.string().min(1),
+  name: z.string().min(1).max(32).regex(/^[a-z][a-z0-9_-]*$/),
+  cwd: z.string().min(1),
+  prompt: z.string().min(1),
+  kind: z.string().min(1).optional(),
+  agent_args: z.array(z.string()).optional(),
 }).strict()
 
 export const TOOL_DESCRIPTORS = [
@@ -30,6 +39,22 @@ export const TOOL_DESCRIPTORS = [
         in_reply_to: { type: 'string', description: 'msg_id being answered (optional)' },
       },
       required: ['to', 'message'],
+    },
+  },
+  {
+    name: 'create_worker',
+    description: 'Spawn a new interactive coding-agent worker on a reachable machine (ssh alias or herdr machine name) and give it a task prompt. The worker runs inside a herdr-managed pane — watch it with `herdr --remote <machine>` — and is NOT addressable via send_message. Use sparingly: it runs with the machine owner\'s credentials.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'ssh alias / herdr machine name, e.g. devdesk' },
+        name: { type: 'string', description: 'worker name: [a-z][a-z0-9_-]{0,31}' },
+        cwd: { type: 'string', description: 'absolute working directory on the remote machine' },
+        prompt: { type: 'string', description: 'task prompt sent to the worker once it is ready' },
+        kind: { type: 'string', description: 'agent kind, default devin (claude, codex, pi, ...)' },
+        agent_args: { type: 'array', items: { type: 'string' }, description: 'extra argv passed to the agent after --' },
+      },
+      required: ['machine', 'name', 'cwd', 'prompt'],
     },
   },
 ] as const
@@ -53,10 +78,12 @@ export interface ToolOpts {
   replyLimiter?: ReplyLimiter | undefined
   /** Set in pull mode: enables read_messages. */
   inbox?: Inbox | undefined
+  /** create_worker ssh runner; injectable for tests. */
+  spawnRunner?: SpawnRunner | undefined
 }
 
 export function registerTools(client: RelayClient, opts: ToolOpts) {
-  const { selfSessionId, replyLimiter, inbox } = opts
+  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner } = opts
   async function callTool(name: string, args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
     if (name === 'list_agents') {
       ListInput.parse(args)
@@ -87,6 +114,11 @@ export function registerTools(client: RelayClient, opts: ToolOpts) {
     if (name === 'read_messages' && inbox) {
       const input = ReadInput.parse(args ?? {})
       return { content: [{ type: 'text', text: formatInbox(inbox.take(input.limit)) }] }
+    }
+    if (name === 'create_worker') {
+      const input = CreateWorkerInput.parse(args)
+      const text = await spawnWorker({ ...input, agentArgs: input.agent_args }, spawnRunner)
+      return { content: [{ type: 'text', text }] }
     }
     throw new Error(`unknown tool: ${name}`)
   }

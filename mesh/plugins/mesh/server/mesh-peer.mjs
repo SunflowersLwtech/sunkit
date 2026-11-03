@@ -17546,7 +17546,7 @@ var require_mock_interceptor = __commonJS({
 var require_mock_client = __commonJS({
   "node_modules/.pnpm/undici@6.25.0/node_modules/undici/lib/mock/mock-client.js"(exports, module) {
     "use strict";
-    var { promisify } = __require("node:util");
+    var { promisify: promisify2 } = __require("node:util");
     var Client = require_client();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -17586,7 +17586,7 @@ var require_mock_client = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -17599,7 +17599,7 @@ var require_mock_client = __commonJS({
 var require_mock_pool = __commonJS({
   "node_modules/.pnpm/undici@6.25.0/node_modules/undici/lib/mock/mock-pool.js"(exports, module) {
     "use strict";
-    var { promisify } = __require("node:util");
+    var { promisify: promisify2 } = __require("node:util");
     var Pool = require_pool();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -17639,7 +17639,7 @@ var require_mock_pool = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -37272,6 +37272,36 @@ ${m.content}
   return lines.join("\n");
 }
 
+// packages/peer-agent/src/spawn-worker.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileP = promisify(execFile);
+function shq(a) {
+  return `'${a.replace(/'/g, `'\\''`)}'`;
+}
+var sshRunner = async (machine, argv) => {
+  const { stdout } = await execFileP("ssh", [machine, argv.map(shq).join(" ")], {
+    timeout: 9e4,
+    maxBuffer: 4 * 1024 * 1024
+  });
+  return stdout;
+};
+function paneIdFromWorkspaceCreate(stdout) {
+  const parsed = JSON.parse(stdout);
+  const paneId = parsed.result?.root_pane?.pane_id;
+  if (!paneId) throw new Error(`workspace create returned no pane_id: ${stdout.slice(0, 200)}`);
+  return paneId;
+}
+async function spawnWorker(input, run = sshRunner) {
+  const ws = await run(input.machine, ["herdr", "workspace", "create", "--label", input.name, "--cwd", input.cwd]);
+  const paneId = paneIdFromWorkspaceCreate(ws);
+  const start = ["herdr", "agent", "start", input.name, "--kind", input.kind ?? "devin", "--pane", paneId];
+  if (input.agentArgs?.length) start.push("--", ...input.agentArgs);
+  await run(input.machine, start);
+  await run(input.machine, ["herdr", "agent", "prompt", input.name, input.prompt]);
+  return `worker ${input.name} (${input.kind ?? "devin"}) spawned in ${paneId} on ${input.machine}; watch with: herdr --remote ${input.machine}`;
+}
+
 // packages/peer-agent/src/tools.ts
 var ListInput = external_exports.object({}).strict();
 var ReadInput = external_exports.object({ limit: external_exports.number().int().min(1).max(100).optional() }).strict();
@@ -37279,6 +37309,14 @@ var SendMessageInput = external_exports.object({
   to: external_exports.string().min(1),
   message: external_exports.string().min(1),
   in_reply_to: external_exports.string().optional()
+}).strict();
+var CreateWorkerInput = external_exports.object({
+  machine: external_exports.string().min(1),
+  name: external_exports.string().min(1).max(32).regex(/^[a-z][a-z0-9_-]*$/),
+  cwd: external_exports.string().min(1),
+  prompt: external_exports.string().min(1),
+  kind: external_exports.string().min(1).optional(),
+  agent_args: external_exports.array(external_exports.string()).optional()
 }).strict();
 var TOOL_DESCRIPTORS = [
   {
@@ -37298,6 +37336,22 @@ var TOOL_DESCRIPTORS = [
       },
       required: ["to", "message"]
     }
+  },
+  {
+    name: "create_worker",
+    description: "Spawn a new interactive coding-agent worker on a reachable machine (ssh alias or herdr machine name) and give it a task prompt. The worker runs inside a herdr-managed pane \u2014 watch it with `herdr --remote <machine>` \u2014 and is NOT addressable via send_message. Use sparingly: it runs with the machine owner's credentials.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine: { type: "string", description: "ssh alias / herdr machine name, e.g. devdesk" },
+        name: { type: "string", description: "worker name: [a-z][a-z0-9_-]{0,31}" },
+        cwd: { type: "string", description: "absolute working directory on the remote machine" },
+        prompt: { type: "string", description: "task prompt sent to the worker once it is ready" },
+        kind: { type: "string", description: "agent kind, default devin (claude, codex, pi, ...)" },
+        agent_args: { type: "array", items: { type: "string" }, description: "extra argv passed to the agent after --" }
+      },
+      required: ["machine", "name", "cwd", "prompt"]
+    }
   }
 ];
 var PULL_TOOL_DESCRIPTORS = [
@@ -37312,7 +37366,7 @@ var PULL_TOOL_DESCRIPTORS = [
   }
 ];
 function registerTools(client, opts) {
-  const { selfSessionId, replyLimiter, inbox } = opts;
+  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner } = opts;
   async function callTool(name, args) {
     if (name === "list_agents") {
       ListInput.parse(args);
@@ -37343,6 +37397,11 @@ function registerTools(client, opts) {
     if (name === "read_messages" && inbox) {
       const input = ReadInput.parse(args ?? {});
       return { content: [{ type: "text", text: formatInbox(inbox.take(input.limit)) }] };
+    }
+    if (name === "create_worker") {
+      const input = CreateWorkerInput.parse(args);
+      const text = await spawnWorker({ ...input, agentArgs: input.agent_args }, spawnRunner);
+      return { content: [{ type: "text", text }] };
     }
     throw new Error(`unknown tool: ${name}`);
   }

@@ -23,8 +23,47 @@ function fakeClient(rows = ROWS) {
 }
 
 describe('tools', () => {
-  it('advertises exactly list_agents and send_message', () => {
-    expect(TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message'])
+  it('advertises exactly list_agents, send_message and create_worker', () => {
+    expect(TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker'])
+  })
+
+  it('create_worker creates a herdr workspace, starts the agent in its pane and prompts it', async () => {
+    const calls: Array<{ machine: string; argv: string[] }> = []
+    const spawnRunner = async (machine: string, argv: string[]) => {
+      calls.push({ machine, argv })
+      if (argv[1] === 'workspace') {
+        return JSON.stringify({ result: { root_pane: { pane_id: 'wA:p1' } } })
+      }
+      return '{}'
+    }
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
+    const res = await callTool('create_worker', {
+      machine: 'devdesk', name: 'shellnet', cwd: '/home/u/repo', prompt: 'study sandboxing',
+      kind: 'devin', agent_args: ['--permission-mode', 'smart'],
+    })
+    expect(res.content[0]!.text).toContain('worker shellnet (devin) spawned in wA:p1 on devdesk')
+    expect(calls[0]!.argv.slice(0, 3)).toEqual(['herdr', 'workspace', 'create'])
+    expect(calls[0]!.argv).toContain('/home/u/repo')
+    expect(calls[1]!.argv.slice(0, 4)).toEqual(['herdr', 'agent', 'start', 'shellnet'])
+    expect(calls[1]!.argv).toContain('wA:p1')
+    expect(calls[1]!.argv.slice(-3)).toEqual(['--', '--permission-mode', 'smart'])
+    expect(calls[2]!.argv.slice(0, 4)).toEqual(['herdr', 'agent', 'prompt', 'shellnet'])
+    expect(calls[2]!.argv[4]).toBe('study sandboxing')
+  })
+
+  it('create_worker fails when workspace create returns no pane_id', async () => {
+    const spawnRunner = async () => JSON.stringify({ result: {} })
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
+    await expect(callTool('create_worker', {
+      machine: 'devdesk', name: 'w1', cwd: '/x', prompt: 'p',
+    })).rejects.toThrow('pane_id')
+  })
+
+  it('create_worker rejects a malformed worker name', async () => {
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF })
+    await expect(callTool('create_worker', {
+      machine: 'devdesk', name: 'Bad Name!', cwd: '/x', prompt: 'p',
+    })).rejects.toThrow()
   })
 
   it('rejects the legacy tool names', async () => {
