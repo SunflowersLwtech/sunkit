@@ -99,10 +99,13 @@ export async function send(cfg, items, every) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     })
     const out = await r.json().catch(() => null)
-    const bad = (r.status === 400 || r.status === 422) && out?.key ? String(out.key).replace(new RegExp(`^${cfg.source}/`), '') : null
-    if (!bad || i === 3) return { status: r.status, changed: out?.changed, removed: out?.removed, error: r.ok ? undefined : out?.error, dropped }
+    const prefix = `${cfg.source}/`
+    const bad = (r.status === 400 || r.status === 422) && out?.key ? String(out.key).startsWith(prefix) ? String(out.key).slice(prefix.length) : String(out.key) : null
+    if (!bad) return { status: r.status, changed: out?.changed, removed: out?.removed, error: r.ok ? undefined : out?.error, dropped }
     dropped.push({ key: bad, error: out.error, field: out.field })
     left = left.filter((it) => it.key !== bad)
+    // Everything was refused: an empty replace would wipe the page and read as success.
+    if (i === 3 || left.length === 0) return { status: r.status, error: out?.error ?? 'every thing was refused', dropped }
   }
   return { status: 0, dropped }
 }

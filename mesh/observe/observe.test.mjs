@@ -150,3 +150,18 @@ test('send: one PUT with the feed token; a thing the desk refuses is left out an
   assert.deepEqual(puts[1].body.items.map((i) => i.key), ['ok1', 'ok2'])
   await desk.close()
 })
+test('send: when every thing is refused nothing is PUT after it (an empty replace would blank the page)', async () => {
+  const puts = []
+  const desk = await server((_req, body, res) => {
+    puts.push(JSON.parse(body))
+    res.writeHead(422, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'looks_like_secret', field: 'title', key: 'mesh/secret-thing' }))
+  })
+  const dir = files()
+  const cfg = { api: desk.url, desk: 'desk', source: 'mesh', deskToken: () => fs.readFileSync(path.join(dir, 'desk'), 'utf8') }
+  const r = await send(cfg, [{ key: 'secret-thing' }], 60)
+  assert.equal(puts.length, 1)
+  assert.equal(r.status, 422)
+  assert.deepEqual(r.dropped, [{ key: 'secret-thing', error: 'looks_like_secret', field: 'title' }])
+  await desk.close()
+})
+
