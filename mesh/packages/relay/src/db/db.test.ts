@@ -6,7 +6,7 @@ describe('openDatabase', () => {
   beforeEach(() => { db = openDatabase(':memory:') })
 
   it('applies schema and reports latest version', () => {
-    expect(getSchemaVersion(db)).toBe(4)
+    expect(getSchemaVersion(db)).toBe(5)
   })
 
   it('message table has session addressing columns (v3)', () => {
@@ -25,7 +25,7 @@ describe('openDatabase', () => {
     ).all().map((r: any) => r.name)
     expect(names).toEqual(expect.arrayContaining([
       'audit_log', 'human', 'idempotency_key', 'message', 'pair_code',
-      'schema_version', 'team', 'token', 'token_grant', 'task', 'task_seq', 'lease'
+      'schema_version', 'team', 'token', 'token_grant', 'task', 'task_seq', 'lease', 'delivery_event'
     ]))
   })
 

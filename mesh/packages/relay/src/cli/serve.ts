@@ -42,7 +42,7 @@ export function startServer(opts: ServeOpts) {
     audit(db, cmd.team_id, cmd.issuer.human_id, 'dispatch.fail', { cmd_id: cmd.id, op: cmd.op, machine: cmd.machine, reason: 'no_ack' }, new Date().toISOString()))
   const app = buildApp({ db, store, fanout, presence, tasks, leases, machines, commands, now })
   // Independent of the inactivity sweep (which deployments may disable): ledger rows always age out.
-  startLedgerSweeper({ tasks, leases, commands, intervalMs: opts.sweep_interval_ms ?? 60 * 60 * 1000 })
+  startLedgerSweeper({ tasks, leases, commands, messages: store, intervalMs: opts.sweep_interval_ms ?? 60 * 60 * 1000 })
   const server = serve({ fetch: app.fetch, port: opts.port, hostname: opts.host })
 
   const days = opts.inactive_days ?? 30

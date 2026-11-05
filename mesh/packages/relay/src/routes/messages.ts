@@ -5,6 +5,7 @@ import { hashToken } from '../auth/hash.ts'
 import { rateLimit } from '../middleware/rate-limit.ts'
 import type { Deps } from '../deps.ts'
 import type { Route } from '../fanout.ts'
+import type { SendTrace } from '../messages/store.ts'
 
 export function messagesRoute(deps: Deps) {
   const app = new Hono<{ Variables: AuthContext }>()
@@ -50,6 +51,7 @@ export function messagesRoute(deps: Deps) {
 
     // Session-addressed messages need a live (or reconnecting) target owned by `to`.
     const toSession = parsed.data.to_session
+    const trace: SendTrace = { from_device: c.get('token').label }
     if (toSession !== undefined) {
       const target = deps.sessions!.get(toSession)
       if (!target || target.team_id !== c.get('team_id') || target.handle !== parsed.data.to) {
@@ -61,12 +63,13 @@ export function messagesRoute(deps: Deps) {
         && !isReplyTo(parsed.data.in_reply_to ?? null, toSession, c.get('human').handle, sender?.session ?? null)) {
         return c.json({ error: 'cross_workgroup' }, 403)
       }
+      trace.to = { name: target.name, device: target.device, workgroup: target.workgroup }
     }
 
     const route: Route = { from_wg: senderWg, scope: grant.visible }
     let envelope: Envelope
     try {
-      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data, sender, route)
+      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data, sender, route, trace)
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       return c.json({ error: 'invalid_message', message }, 400)

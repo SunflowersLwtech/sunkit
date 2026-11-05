@@ -10,6 +10,7 @@ import { metricsRoute } from './routes/metrics.ts'
 import { permissionRoute } from './routes/permission.ts'
 import { accessLog } from './middleware/access-log.ts'
 import { sessionsRoute } from './routes/sessions.ts'
+import { eventsRoute } from './routes/events.ts'
 import { SessionRegistry } from './sessions/registry.ts'
 import { TaskStore } from './ledger/tasks.ts'
 import { tasksRoute } from './routes/tasks.ts'
@@ -36,6 +37,7 @@ export function buildApp(inputDeps: Deps) {
   app.route('/v1/presence', presenceRoute(deps))
   app.route('/v1/peers', peersRoute(deps))
   app.route('/v1/sessions', sessionsRoute(deps))
+  app.route('/v1/events', eventsRoute(deps))
   app.route('/v1/tasks', tasksRoute({ ...deps, tasks }))
   app.route('/v1/leases', leasesRoute({ ...deps, tasks, leases }))
   app.route('/v1/machines', machinesRoute({ ...deps, machines, commands }))

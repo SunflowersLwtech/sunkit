@@ -529,6 +529,15 @@ task states, artifacts) but not its transport.
   (`probe`, `read`) over `/v1/machines/:machine/commands`; unanswered ones fail as `no_ack` after
   60 s and are never retried on their own, and only the issuing token can read the answer.
 
+- **Delivery log** (`GET /v1/events`, SQLite, read-only): one row each time a chat message
+  changes state, `sent` when the relay stores it and `delivered` the first time a stream takes it
+  (`via: live` when the addressee was connected, `backlog` when it connected later). Each row
+  carries `msg_id`, `from` and `to` (account, session name, ref, device), `bytes`, `sent_at` and,
+  for `delivered`, `latency_ms` on the relay clock; never the content. A row shows to readers who
+  may see the sender's workgroup and the addressed session's. `since_seq` resumes after a row (no
+  `since_seq`: the latest `limit` rows), `limit` is 1–500 (default 200), 30 reads per token per
+  minute; rows go after 14 days. A message still `sent` after a while is waiting for its reader.
+
 From a shell, `mesh machine list|read|probe`, `mesh task list|show|create|update|artifact` and
 `mesh lease list|acquire|renew|release` call these endpoints with the device's pairing (`--session
 <id>` or `MESH_SESSION_ID` names the calling session where one is needed; `--relay` overrides the
