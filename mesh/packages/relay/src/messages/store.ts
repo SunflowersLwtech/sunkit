@@ -213,10 +213,15 @@ export class MessageStore {
              m.id AS msg_id, m.from_handle, m.from_name, m.from_session, m.to_handle, m.to_session, m.sent_at,
              length(CAST(m.content AS BLOB)) AS bytes
       FROM delivery_event e
-      JOIN message m ON m.id = e.msg_id
+      JOIN message m ON m.id = e.msg_id AND m.team_id = e.team_id
       LEFT JOIN delivery_event s ON s.msg_id = e.msg_id AND s.state = 'sent'
       WHERE e.team_id = @team ${tail ? '' : 'AND e.seq > @since'}
         AND (m.from_wg IS NULL OR m.from_wg IN (SELECT value FROM json_each(@visible)))
+        -- Fail closed without the sent row: retention may drop it before the delivered one,
+        -- and a message stored before this log existed never had one. Treating its absence
+        -- as "no addressed session" would show the recipient's session to readers the
+        -- addressed-workgroup check is exactly meant to hide.
+        AND s.seq IS NOT NULL
         AND (s.to_wg IS NULL OR s.to_wg IN (SELECT value FROM json_each(@visible)))
       ORDER BY e.seq ${tail ? 'DESC' : 'ASC'} LIMIT @limit
     `).all({ team: team_id, since: opts.sinceSeq ?? 0, visible: JSON.stringify(visible), limit: opts.limit }) as EventRow[]

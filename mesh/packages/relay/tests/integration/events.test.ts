@@ -171,7 +171,10 @@ describe('GET /v1/events (delivery log)', () => {
   })
 
   it('rate-limits reads per token', async () => {
-    for (let i = 0; i < EVENT_READS_PER_MINUTE; i++) expect((await events(tok.alice)).status).toBe(200)
+    // The documented contract is 30 a minute, written here literally: a loop bounded by
+    // the constant stays green if the constant changes.
+    expect(EVENT_READS_PER_MINUTE).toBe(30)
+    for (let i = 0; i < 30; i++) expect((await events(tok.alice)).status).toBe(200)
     const over = await events(tok.alice)
     expect(over.status).toBe(429)
     expect((await events(tok.bob)).status).toBe(200)
@@ -187,6 +190,23 @@ describe('GET /v1/events (delivery log)', () => {
     expect(store.sweepEvents()).toBe(0)
     t += 2 * 86_400_000
     expect(store.sweepEvents()).toBe(1)
+    expect((await events(tok.alice)).body.events).toEqual([])
+  })
+
+  it('hides a delivered row once its sent row is gone instead of skipping the addressed-workgroup check', async () => {
+    const at = new Date().toISOString()
+    setGrant(db, 'tk_alice', { role: 'worker', workgroup: 'team', visible: ['team', 'bobwg'], machine: null }, at)
+    setGrant(db, 'tk_bob', { role: 'worker', workgroup: 'bobwg', visible: ['bobwg', 'team'], machine: null }, at)
+    await open(tok.bob, S_BOB1, 'repo-x')
+    const sent = await post(tok.alice, { to: 'bob', to_session: S_BOB1, kind: 'chat', content: 'x' })
+    const id = (await sent.json() as { id: string }).id
+    // carol sees team only; the addressed session is in bobwg, so the pair is hidden
+    expect((await events(tok.carol)).body.events).toEqual([])
+    expect((await events(tok.alice)).body.events.filter(e => e.msg_id === id).map(e => e.state)).toEqual(['sent', 'delivered'])
+    // retention can drop the sent row before the delivered one; the delivered row must
+    // not become visible without the check it depends on, so it goes with it
+    db.prepare("DELETE FROM delivery_event WHERE state='sent' AND msg_id=?").run(id)
+    expect((await events(tok.carol)).body.events).toEqual([])
     expect((await events(tok.alice)).body.events).toEqual([])
   })
 })
