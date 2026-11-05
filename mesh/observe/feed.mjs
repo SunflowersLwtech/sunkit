@@ -128,7 +128,6 @@ export function messages(state, names = {}, { now = Date.now() } = {}) {
         title: `${from.name} → ${to.name}`.slice(0, 200),
         state: m.state === 'delivered' ? 'delivered' : 'sent',
         body: drop({
-          system: 'mesh',
           msg_id: m.msg_id,
           from,
           to,
