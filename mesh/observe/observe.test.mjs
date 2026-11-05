@@ -100,7 +100,10 @@ test('snapshot: reads the log from where it stopped; a relay with no log still s
     if (req.url === '/v1/sessions') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify([{ ref: 'aaaaaa', name: 'a', status: 'idle', device: 'sunfl' }])); return }
     if (!events) { res.writeHead(404).end('{}'); return }
     const since = new URL(req.url, 'http://x').searchParams.get('since_seq')
-    const page = since === null ? { events: [ev(7, 'msg_A', 'sent', { sent_at: new Date().toISOString() })], seq: 7 } : { events: [ev(8, 'msg_A', 'delivered', { latency_ms: 55 })], seq: 8 }
+    // sent_at is now, not the fixture's fixed NOW: the pusher prunes what is older than a day
+    // against the real clock, and a delivered row carries the message's own sent_at.
+    const at = new Date().toISOString()
+    const page = since === null ? { events: [ev(7, 'msg_A', 'sent', { sent_at: at })], seq: 7 } : { events: [ev(8, 'msg_A', 'delivered', { latency_ms: 55, sent_at: at })], seq: 8 }
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(page))
   })
   const dir = files()
