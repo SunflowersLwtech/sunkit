@@ -142,7 +142,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             # GLM came off on 10-31: the ZCode week was used up until 11-06 and the
             # provider is off on the gateway. "always-up" is the gateway group that
             # still answers when the seats are out (devin/swe-2, Grok, ZCode when on).
-            "byok_chain": ["claude-haiku-5-5", "always-up"],
+            "byok_chain": ["litellm-claude-api/hipimind/claude-haiku-5-5", "litellm-claude-api/anthropic/claude-haiku-4-5", "claude-haiku-5-5", "always-up"],
             "preserve_buckets": [
                 "file_paths_and_line_ranges",
                 "git_diff_stat",
@@ -991,7 +991,7 @@ def distill_with_byok_llm(
     timeout_sec = float(limits.get("byok_timeout_sec", 35.0))
 
     compactor_cfg = cfg.get("compactors", {}).get("surgical_hybrid", {})
-    byok_chain = compactor_cfg.get("byok_chain") or ["claude-haiku-5-5", "always-up"]
+    byok_chain = compactor_cfg.get("byok_chain") or ["litellm-claude-api/hipimind/claude-haiku-5-5", "litellm-claude-api/anthropic/claude-haiku-4-5", "claude-haiku-5-5", "always-up"]
 
     # Build bounded excerpt from middle conversation turns
     conv = transcript_state.get("conversation_records") or []

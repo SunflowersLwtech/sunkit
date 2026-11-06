@@ -222,9 +222,9 @@ class TestCcCompactor(unittest.TestCase):
             "compactors": {"surgical_hybrid": {"byok_chain": ["first-model", "second-model"]}},
         })
 
-    def test_default_chain_has_no_glm_and_starts_on_haiku(self) -> None:
+    def test_default_chain_has_no_glm_and_starts_on_litellm_api(self) -> None:
         chain = cc.DEFAULT_CONFIG["compactors"]["surgical_hybrid"]["byok_chain"]
-        self.assertEqual(chain[0], "claude-haiku-5-5")
+        self.assertTrue(chain[0].startswith("litellm-claude-api/"), chain)
         self.assertFalse([m for m in chain if "glm" in m.lower()], chain)
 
     def test_byok_chain_falls_through_to_next_model_then_to_deterministic(self) -> None:
