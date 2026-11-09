@@ -52,6 +52,12 @@ function migrateV3ToV4(db: Db): void {
     if (!cols.some(c => c.name === col)) db.exec(`ALTER TABLE message ADD COLUMN ${col} TEXT`)
   }
   db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (4)')
+  migrateV4ToV5(db)
+}
+
+/** v5: the delivery log (`delivery_event`, created by schema.sql). Nothing to rewrite in older tables. */
+function migrateV4ToV5(db: Db): void {
+  db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (5)')
 }
 
 export function getSchemaVersion(db: Db): number {

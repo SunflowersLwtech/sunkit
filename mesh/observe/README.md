@@ -1,44 +1,55 @@
 # mesh observe
 
-One read-only snapshot of the mesh — who is on it, where, doing what — rendered as a
-self-contained page (no deps, no build step). It is the "see it" half of the mesh; the relay is
-the "do it" half.
+The mesh as the desk's Mesh page shows it (`foldrender.dev/desk/mesh`): who is on it, on which
+machine, with which harness and model, busy or idle, and each message it carried — who to whom,
+how long it took to arrive, or that it is still waiting. The relay is the "do it" half; this is
+the "see it" half.
 
 ```bash
-node mesh/observe/observe.mjs                 # JSON (pipe it anywhere)
-node mesh/observe/observe.mjs --html out.html # the page
+node mesh/observe/observe.mjs                          # what would be sent, as JSON; nothing sent
+node mesh/observe/observe.mjs --desk-feed              # send one snapshot to the desk
+node mesh/observe/observe.mjs --desk-feed --every 60   # and again every minute, until stopped
 ```
 
-Data comes from two GETs only: `/v1/sessions` and `/v1/machines` on the relay, with the token in
-`~/.claude-mesh/token` (`MESH_HOME` and `MESH_RELAY` override). Nothing is written to the mesh.
-If a DSH bridge is running for `m4-dsh`, its `bridge.state.json`, inbox cursor and failed-send file
-are folded in — that is the only place a delivery *state* exists today.
+Data comes from two GETs only — `/v1/sessions` (who is on) and `/v1/events` (the delivery log,
+read from where the last read stopped) — with the mesh token in `~/.claude-mesh/token`
+(`MESH_HOME`, `MESH_RELAY`, `MESH_TOKEN_FILE` override). The snapshot goes to the desk as one
+feed replace (`PUT <api>/desk/<desk>/feed/<source>`, a desk feed token from a 600 file). Nothing
+is written to the mesh, and no message's words are read or sent.
+
+## What it sends
+
+One `peer` thing per session (key its ref): state `busy`/`idle`/`away`/`unknown`, body `machine`,
+`account`, `ref`, `harness`, `model`, `mode` (`push`/`pull`) and `where` (the repository). One
+`message` thing per message (key its id): state `sent` or `delivered`, body `msg_id`, `from`,
+`to`, `sent_at`, and when delivered `at`, `latency_ms` (the relay's own number, copied) and
+`via`. A body carries only what changes with the state — no ages, no last-seen times — so a
+snapshot with no news writes nothing on the desk.
+
+The desk's names for machines are `MESH_DESK_MACHINES`, a JSON file of `{"<device or herdr
+machine>": "<the desk's name>"}`; `desk-machines.json` is the mapping the N150 pusher runs with.
+
+A relay that does not answer for its sessions sends nothing (the page is never emptied); a relay
+without the delivery log still sends the sessions; a thing the desk refuses is dropped and the
+rest sent; a `429` from the log is read again on the next send.
+
+## Running it here
+
+On N150 the pusher runs beside the relay as its own small container (`mesh-observe`), host
+network, 128 MB, the repository read-only at /app and the two tokens read-only at /secrets:
+
+```bash
+docker run -d --name mesh-observe --restart unless-stopped --network host --memory 128m \
+  -v /opt/data/mesh/observe:/app:ro -v /opt/data/mesh/observe/secrets:/secrets:ro \
+  node:22-bookworm-slim node /app/observe.mjs --desk-feed --every 60
+```
+
+with `MESH_TOKEN_FILE=/secrets/mesh-token`, `FOLDRENDER_DESK_TOKEN_FILE=/secrets/desk-feed-token`
+and `MESH_DESK_MACHINES=/app/desk-machines.json` in the environment.
 
 ## The contract it proposes
 
 Any agent-messaging system (claude-mesh, DSH Agent Teams, a community plugin) can fill the same
-row if it answers four questions: **who → who, did it arrive, how long, who has read it**.
-
-```json
-{ "ts": "…", "system": "mesh",
-  "from": { "session": "m4-dsh", "account": "duocode", "device": "duocode-m4" },
-  "to":   { "session": "feishu-assistant", "ref": "s7kexj" },
-  "msg_id": "msg_…", "bytes": 412,
-  "state": "delivered", "latency_ms": 180 }
-```
-
-Today: `/v1/sessions` answers *who is where*; the sender's outbox offset answers *sent*; the
-receiver's inbox cursor answers *read*; `outbox.failed.jsonl` answers *failed*. The relay keeps no
-per-message history, so `latency_ms` is only known to a sender that records it — a relay-side
-`/v1/events` (or a shared append-only event log) is the missing piece before the page can show
-delivery latency for everyone.
-
-## Refreshing
-
-A page is a snapshot. To keep one current, run it on a timer and republish the same slug:
-
-```bash
-*/10 * * * * node …/observe.mjs --html /tmp/mesh-observe.html && foldrender publish /tmp/mesh-observe.html --slug mesh-observe
-```
-
-`foldrender publish` updates the page in place when the content changed and says so when it did not.
+row if it answers four questions: **who → who, did it arrive, how long, who has read it**. The
+desk's `message` kind is that row; `/v1/events` answers *arrived, and how long* for every message
+the relay carried.

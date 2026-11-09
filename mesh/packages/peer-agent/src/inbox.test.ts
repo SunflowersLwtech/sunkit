@@ -72,7 +72,7 @@ describe('pull-mode tools', () => {
 
   it('read_messages exists only in pull mode', async () => {
     expect(TOOL_DESCRIPTORS.map(t => t.name)).not.toContain('read_messages')
-    expect(PULL_TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message', 'read_messages'])
+    expect(PULL_TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker', 'read_messages'])
     const push = registerTools(client, { selfSessionId: SELF })
     await expect(push.callTool('read_messages', {})).rejects.toThrow(/unknown tool/)
   })
