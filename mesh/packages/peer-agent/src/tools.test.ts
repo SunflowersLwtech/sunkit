@@ -59,11 +59,14 @@ describe('tools', () => {
     })).rejects.toThrow('pane_id')
   })
 
-  it('create_worker rejects a malformed worker name', async () => {
-    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF })
+  it('create_worker rejects a malformed worker name before running anything on the machine', async () => {
+    const calls: string[][] = []
+    const spawnRunner = async (_machine: string, argv: string[]) => { calls.push(argv); return '{}' }
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
     await expect(callTool('create_worker', {
       machine: 'devdesk', name: 'Bad Name!', cwd: '/x', prompt: 'p',
-    })).rejects.toThrow()
+    })).rejects.toThrow(/name/)
+    expect(calls).toEqual([])
   })
 
   it('rejects the legacy tool names', async () => {
