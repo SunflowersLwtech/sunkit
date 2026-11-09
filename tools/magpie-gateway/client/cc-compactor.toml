@@ -1,16 +1,24 @@
-# cc-compactor.toml — 5-Layer Hot-Configurable Policy & Weights
+# cc-compactor.toml — what to do with a Claude Code session stopped on a usage limit.
 #
-# Controls the client-side multi-dimensional weighted cost minimization engine
-# for Claude Code + Magpie multi-seat pools + cross-harness subagents.
+# Three actions are scored: wait (等额度), compact (压缩后 --resume), handoff (写交接换人).
+# Each gets a penalty in [0, 1] on four dimensions, and
+#   J = (timing*P_timing + session*P_session + cost*P_cost + account*P_account) / sum of [weights]
+# The lowest J is the recommendation. Every key below is read by cc-compactor.py; a key it doesn't
+# know shows up as "config: unknown key ..." under `cc-compactor explain` (and compact refuses unknown
+# bucket names).
 
 [general]
 default_profile = "balanced"
+# A key of [timing.tolerable_wait_min]; `--urgency` overrides it per call.
+default_urgency = "normal"
 magpie_settings_path = "~/.claude/magpie-settings.json"
+# For --route seat: the seat this machine's Claude Code is signed in to (oauthAccount.emailAddress only).
+claude_json_path = "~/.claude.json"
 state_dir = "~/.cache/cc-compactor"
 handoff_relpath = ".claude/handoff/current.md"
 
 [limits]
-# Hard bill & safety guardrails (upper bounds on any BYOK compaction call)
+# Hard bill & safety guardrails (upper bounds on any summary call)
 max_byok_input_chars = 18000
 # The reply is bounded by the prompt (<1200 words), the input cap and the rate
 # limits, not by cutting the model's output short.
@@ -20,146 +28,134 @@ byok_timeout_sec = 90
 live_guard_sec = 120
 min_compaction_cooldown_sec = 180
 max_compactions_per_hour = 6
-preserve_tail_messages = 10
-preserve_head_messages = 2
-auto_trigger_min_tokens = 155000
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Layer 1: 5D Objective Weight Profiles
-# J(a | s) = w_quota * Phi_quota + w_cache * Phi_cache + w_wait * Phi_wait
-#          + w_loss * Phi_loss + w_stampede * Phi_stampede
-# ──────────────────────────────────────────────────────────────────────────────
+[compaction]
+# Gateway models tried in order for the summary; with none answering the digest is used alone.
+# "always-up" still answers when the seats are out (it may land on GLM when glm-guard opens ZCode).
+byok_chain = ["claude-haiku-5-5", "always-up"]
+preserve_tail_messages = 10
+# Summary plus kept tail; tail records are dropped from the front past this (the last two always stay).
+target_post_compact_tokens = 40000
+# Expected summary size, for the tail cap above and the cost estimate.
+summary_tokens = 3000
+# Digest sections and summary instructions kept:
+#   user_requests todos files_touched git_state commands errors decisions
+preserve_buckets = ["user_requests", "todos", "files_touched", "git_state", "commands", "errors", "decisions"]
+# Excerpts left out of what the summary model reads (it gets 18,000 characters, these crowd it):
+#   read_results (file contents a Read returned; the file can be read again)
+#   passing_test_logs (tool output that only says tests passed)
+evict_buckets = ["read_results", "passing_test_logs"]
+
+# ── Seats and pools ───────────────────────────────────────────────────────────
+
+[seats]
+# Cards counted as the gateway's Claude seats. The personal Max card (plan "max") is not.
+plans = ["team"]
+# A seat is full at its cap: the gateway stops giving it work there. Mirror of providers.json on the
+# gateway (claude accountCaps 95 for every Team seat on 2026-11-03; the week counts as full at 100).
+caps = { "5 hours" = 95, "7 days" = 100 }
+window_tokens = 1000000
+safe_window_ratio = 0.90
+
+# Per-seat overrides, keyed like accountWindowCaps (the card's user in lower case). They go in each
+# machine's own config, not in this file, so the shipped file names no account:
+#   [seats.seat_caps."<card user in lower case>"]
+#   "5 hours" = 100
+
+# Other gateway pools, by provider name in /v1/magpie/quotas. usable = the gateway falls back to it for
+# a resumed session and that model is fine for the work; only then is it room for wait/compact.
+# seat_pct_factor: a pool's spend in seat-percent (how scarce it is next to a Claude seat).
+[pools.zcode]
+window_tokens = 1000000
+usable = false
+min_remaining_pct = 5
+seat_pct_factor = 0.12
+
+[pools.devin]
+window_tokens = 1000000
+usable = false
+min_remaining_pct = 5
+seat_pct_factor = 0.22
+
+[pools.grok]
+window_tokens = 256000
+usable = false
+min_remaining_pct = 5
+seat_pct_factor = 0.15
+
+# ── The four dimensions ───────────────────────────────────────────────────────
+
+[weights]
+timing = 0.30    # 时机: seat/pool reset times, the live guard, urgency
+session = 0.25   # 会话: context dropped, raw context near the window, a warm cache thrown away
+cost = 0.25      # 成本: seat allowance spent by the resume turn, the turns after, the summary call
+account = 0.20   # 账号: that spend against the room left on the seats (5 hours and week)
+
+[timing]
+# The wait (minutes) at which the timing penalty is one half: penalty = minutes / (minutes + this).
+# From the secretary's rule (limit-migration-judgment): back within half an hour -> wait; an hour
+# or more and the work is urgent or long -> hand it to another executor.
+tolerable_wait_min = { high = 10, normal = 30, low = 120 }
+# Wait assumed when neither seat readings nor the stop message give one (and it counts as a guess).
+unknown_wait_min = 60
+compact_min = 2
+# Minutes until another executor has picked the work up.
+handoff_min = 10
+w_wait = 0.8
+w_uncertain = 0.2
+
+[session]
+cache_ttl_sec = 3600
+# Below this a summary saves too little to be worth what it drops.
+compact_min_tokens = 100000
+# Loss of a summary = compact_loss * share of context dropped * (1 - tool_relief * share that is tool output)
+compact_loss = 0.6
+tool_relief = 0.5
+handoff_loss = 0.8
+w_loss = 0.6
+w_size = 0.25
+w_cache = 0.15
+
+[cost]
+# Input-equivalent tokens per percent of a seat's 5-hour window (5% was about 1.5M on 2026-10-24).
+tokens_per_seat_pct = 300000
+cache_write_mult = 2.0
+cache_read_mult = 0.1
+output_mult = 5.0
+# Price of the summary model next to the session's (Haiku against Opus).
+compactor_price_factor = 0.2
+turns_after_resume = 15
+handoff_reread_tokens = 80000
+# Seat-percent at which the cost penalty reaches 1.
+norm_pct = 20
+
+[account]
+w_5h = 0.7
+w_7d = 0.3
+# Weekly percent one 5-hour percent of a seat uses up (estimate).
+pct_7d_per_pct_5h = 0.15
+min_headroom_pct = 1
+# Room a handoff lands on (another executor or session); 100 = a whole fresh seat.
+handoff_headroom_pct = 100
+
+# ── Profiles: deep-merged over [weights] [timing] [session] [cost] [account] [seats] [pools] ──
 
 [profiles.balanced]
-w_quota = 0.30
-w_cache = 0.25
-w_wait = 0.20
-w_loss = 0.15
-w_stampede = 0.10
-theta_5h = 0.85
-theta_7d = 0.90
-tau_wait_max_min = 15.0
-target_post_compact_tokens = 38000
 
-[profiles.cache_first]
-w_quota = 0.20
-w_cache = 0.42
-w_wait = 0.13
-w_loss = 0.15
-w_stampede = 0.10
-theta_5h = 0.92
-theta_7d = 0.94
-tau_wait_max_min = 25.0
-target_post_compact_tokens = 48000
+[profiles.speed_first.weights]
+timing = 0.50
+session = 0.20
+cost = 0.15
+account = 0.15
 
-[profiles.zero_claude_burn]
-w_quota = 0.50
-w_cache = 0.15
-w_wait = 0.10
-w_loss = 0.15
-w_stampede = 0.10
-theta_5h = 0.72
-theta_7d = 0.80
-tau_wait_max_min = 10.0
-target_post_compact_tokens = 32000
+[profiles.quality_first.weights]
+timing = 0.20
+session = 0.50
+cost = 0.15
+account = 0.15
 
-[profiles.speed_first]
-w_quota = 0.20
-w_cache = 0.18
-w_wait = 0.40
-w_loss = 0.14
-w_stampede = 0.08
-theta_5h = 0.88
-theta_7d = 0.92
-tau_wait_max_min = 4.0
-target_post_compact_tokens = 36000
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Layer 2: Provider Pool Constraints & Cost Multipliers
-# Not read by cc-compactor.py (descriptive only): evaluate_actions uses a fixed
-# 200K * 0.9 - 16384 budget. Real windows on the gateway: `magpie model context`.
-# ──────────────────────────────────────────────────────────────────────────────
-
-[pools.claude_primary]
-provider = "claude"
-window_tokens = 1000000
-safe_window_ratio = 0.90
-reserve_output_tokens = 16384
-cache_ttl_sec = 3600
-cache_write_Verify_multiplier = 1.25
-cache_read_multiplier = 0.10
-quota_scarcity = 1.00
-
-[pools.zcode_glm]
-provider = "zcode"
-model = "GLM-5.3"
-window_tokens = 200000
-safe_window_ratio = 0.90
-reserve_output_tokens = 16384
-quota_scarcity = 0.12
-
-[pools.bedrock_glm5]
-provider = "bedrock-glm5"
-model = "glm-5.1"
-window_tokens = 202752
-safe_window_ratio = 0.90
-reserve_output_tokens = 16384
-quota_scarcity = 0.15
-
-[pools.devin_fallback]
-provider = "devin"
-model = "claude-opus-4-6"
-window_tokens = 262144
-safe_window_ratio = 0.90
-reserve_output_tokens = 16384
-quota_scarcity = 0.22
-
-[pools.opencode_go]
-provider = "opencode-go"
-window_tokens = 200000
-safe_window_ratio = 0.90
-reserve_output_tokens = 16384
-quota_scarcity = 0.15
-
-[pools.gemini_pro]
-provider = "gemini"
-window_tokens = 1000000
-safe_window_ratio = 0.90
-reserve_output_tokens = 32768
-quota_scarcity = 0.18
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Layer 3: Surgical Hybrid Compactor & BYOK Fallback Chain
-# ──────────────────────────────────────────────────────────────────────────────
-
-[compactors.surgical_hybrid]
-mode = "hybrid"
-# Gateway models tried in order for the summary. GLM came off on 10-31 (ZCode's week
-# used up until 11-06, provider off on the gateway); "always-up" still answers when
-# the seats are out (devin/swe-2, Grok, ZCode when on). Haiku costs a little seat.
-byok_chain = ["claude-haiku-5-5", "always-up"]
-# preserve_buckets / evict_buckets: not read by cc-compactor.py (descriptive only)
-preserve_buckets = [
-  "file_paths_and_line_ranges",
-  "git_diff_stat",
-  "failing_assertions_and_tracebacks",
-  "architectural_decisions",
-  "todo_state_machine",
-]
-evict_buckets = [
-  "stale_read_buffers",
-  "passing_test_logs",
-  "superseded_reasoning",
-  "old_base64_images",
-]
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Layer 4: Cache Keep-Warm Guard (Anti-TTL-Cliff)
-# ──────────────────────────────────────────────────────────────────────────────
-
-[keep_warm]
-enabled = true
-ttl_seconds = 3600
-ping_after_idle_seconds = 3120
-min_cached_tokens = 90000
-min_remaining_5h_pct = 12
+[profiles.seat_saver.weights]
+timing = 0.15
+session = 0.20
+cost = 0.35
+account = 0.30
