@@ -78,7 +78,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "compaction": {
         # Gateway models tried in order for the summary; with none answering the digest is used alone.
-        "byok_chain": ["claude-haiku-5-5", "always-up"],
+        # LiteLLM's Claude API first (its own cc-compactor key: Haiku only, $25 / 30 days, 30 rpm), so a
+        # compaction spends no seat; seat Haiku next, "always-up" last.
+        "byok_chain": ["litellm-claude-api/hipimind/claude-haiku-5-5", "litellm-claude-api/anthropic/claude-haiku-4-5", "claude-haiku-5-5", "always-up"],
         "preserve_tail_messages": 10,
         # The summary plus the kept tail; tail records are dropped from the front past this.
         "target_post_compact_tokens": 40000,

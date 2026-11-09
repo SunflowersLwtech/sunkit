@@ -558,9 +558,11 @@ class TestCompaction(unittest.TestCase):
                 text, source = cc.distill_with_byok_llm("digest", {"conversation_records": []}, cfg, tried)
             self.assertEqual((text, source, tried), (None, "deterministic_fallback", ["first-model: TimeoutError", "second-model: TimeoutError"]))
 
-    def test_default_chain_starts_on_haiku_without_glm(self):
+    def test_default_chain_starts_on_litellm_api_then_seat_haiku_without_glm(self):
         chain = cc.DEFAULT_CONFIG["compaction"]["byok_chain"]
-        self.assertEqual(chain[0], "claude-haiku-5-5")
+        self.assertTrue(chain[0].startswith("litellm-claude-api/"), chain)
+        self.assertLess(chain.index("claude-haiku-5-5"), chain.index("always-up"), chain)
+        self.assertTrue(all(m.startswith("litellm-claude-api/") for m in chain[:chain.index("claude-haiku-5-5")]), chain)
         self.assertFalse([m for m in chain if "glm" in m.lower()], chain)
 
     def test_rate_limit_cooldown_and_hourly_cap_and_force_still_counts(self):
