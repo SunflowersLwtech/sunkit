@@ -81,6 +81,24 @@
       "keywords": ["diagram", "architecture", "interactive", "html"]
     },
     {
+      "name": "answer-me-with-html",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/QingYunA/answer-me-with-html.git",
+        "path": "skills",
+        "ref": "main",
+        "sha": "5bebfd3974b20b7a89e039cae0fba5e11d933678"
+      },
+      "strict": false,
+      "defaultEnabled": false,
+      "description": "QingYunA/answer-me-with-html v0.5.11 pinned to a reviewed commit: a Markdown draft rendered into a standalone one-page HTML explainer by the bundled single-file CLI (am.mjs), with auto-laid-out diagrams and a controlled-writing check. Installs disabled; the show-me skill reads its SKILL.md by path.",
+      "author": { "name": "QingYunA", "url": "https://github.com/QingYunA" },
+      "homepage": "https://github.com/QingYunA/answer-me-with-html",
+      "license": "MIT",
+      "category": "visualization",
+      "keywords": ["explainer", "one-page", "html", "diagram", "markdown"]
+    },
+    {
       "name": "frontier",
       "source": "./plugins/frontier",
       "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client.",
