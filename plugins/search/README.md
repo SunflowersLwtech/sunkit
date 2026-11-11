@@ -14,7 +14,7 @@ path's detail skill shipped alongside it. Part of [sunkit](../../README.md).
 |---|---|---|
 | `search` | The router: picks a tool by task shape, then reads the matching detail doc by path | This repo, Apache-2.0 |
 | `verbatim-fetch` | Which retrieval rung returns a page's actual words (WebFetch summarizes), what each rung silently drops, x.com handling | This repo, Apache-2.0 |
-| `anysearch` | Structured vertical search CLI (17 domains / 40 sub-domains), hybrid batch search, URL extract | Vendored from the AnySearch skill distribution, Apache-2.0 — see its `LICENSE` and `NOTICE` |
+| `anysearch` | Structured vertical search CLI | Vendored from [anysearch-ai/anysearch-skill](https://github.com/anysearch-ai/anysearch-skill) tag `v3.1.1`, Apache-2.0 — see its `LICENSE`/`NOTICE` and `UPSTREAM.md` for the small local diff |
 | `exa-research` | Research orchestrator: plans and dispatches subagents for deep dives, literature reviews, "find me all X" | Vendored from [exa-labs/exa-mcp-server](https://github.com/exa-labs/exa-mcp-server), MIT — see its `LICENSE` and `UPSTREAM.md` |
 | `exa-agent` | Exa Agent (`agent_run`, usage-billed): list-building, enrichment, structured output, extra data providers | Vendored from [exa-labs/exa-mcp-server](https://github.com/exa-labs/exa-mcp-server), MIT — see its `LICENSE` and `UPSTREAM.md` |
 
