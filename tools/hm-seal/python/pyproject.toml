@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "hm-seal"
+version = "0.1.0"
+description = "End-to-end encryption among one person's own devices: an MLS group (RFC 9420), frame keys from it (RFC 9605), a data key. Python binding of the Rust crate."
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+
+[tool.maturin]
+module-name = "hm_seal"
+features = ["pyo3/extension-module"]

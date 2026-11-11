@@ -19,7 +19,8 @@
 //!   XChaCha20-Poly1305 with a random 24-byte nonce (RustCrypto), keys from
 //!   HKDF-SHA256 (RFC 5869).
 //!
-//! State lives in memory. Persisting a member between runs is the next step.
+//! A [`Member`] lives in memory; [`Member::save`] and [`Member::load`] carry it
+//! across a restart.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,7 +33,7 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 use rand::RngCore;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use sframe::frame::validation::{ReplayAttackProtection, Tolerance};
 use sframe::frame::{EncryptedFrame, MediaFrame, MonotonicCounter};
 use sframe::header::KeyId;
@@ -54,6 +55,9 @@ pub const FRAME_INDEX_BITS: u8 = 8;
 pub const FRAME_REPLAY_TOLERANCE: usize = 128;
 
 const DATA_VERSION: u8 = 1;
+const SAVE_MAGIC: &[u8; 4] = b"HMS1";
+/// A save ends with the SHA-256 of everything before it.
+const SAVE_DIGEST_LEN: usize = 32;
 const RECOVERY_SALT: &[u8] = b"hm-seal recovery v1";
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +74,10 @@ pub enum SealError {
     Frame(String),
     #[error("sealed data could not be opened")]
     Open,
+    #[error("this device's state is damaged; it refuses every call, save included")]
+    Damaged,
+    #[error("the saved state could not be read")]
+    BadSave,
 }
 
 pub type Result<T> = std::result::Result<T, SealError>;
@@ -111,6 +119,8 @@ pub struct Member {
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
     group: Option<MlsGroup>,
+    /// Set when a call panicked inside OpenMLS: the state may be half changed.
+    damaged: bool,
 }
 
 impl Member {
@@ -123,16 +133,40 @@ impl Member {
             credential: BasicCredential::new(name.to_vec()).into(),
             signature_key: signer.public().into(),
         };
-        Ok(Self { provider, signer, credential, group: None })
+        Ok(Self { provider, signer, credential, group: None, damaged: false })
+    }
+
+    /// Runs a call that reaches OpenMLS's storage. That storage unwraps what it
+    /// reads (openmls_memory_storage 0.6), so a damaged state, or a bug reached
+    /// by a strange message, panics deep inside it. The panic becomes
+    /// [`SealError::Damaged`], and since the group may be half changed, every
+    /// later call that reads or changes the group or its keys is refused too,
+    /// `save` included, so the half-changed state is never written over a good
+    /// save. (Where panics abort, as on WebAssembly, there is nothing to catch.)
+    fn guarded<T>(&mut self, call: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
+        match catching(|| call(&mut *self)) {
+            Ok(result) => result,
+            Err(_) => {
+                self.damaged = true;
+                Err(SealError::Damaged)
+            }
+        }
     }
 
     /// This device's public signing key: what an owner compares when adding it.
+    /// The one call that still answers once the device is damaged: it is public.
     pub fn signature_key(&self) -> Vec<u8> {
         self.signer.public().to_vec()
     }
 
     /// A key package another device can add this one with (TLS-encoded MLS message).
     pub fn key_package(&self) -> Result<Vec<u8>> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
         let bundle = KeyPackage::builder()
             .build(CIPHERSUITE, &self.provider, &self.signer, self.credential.clone())
             .map_err(mls)?;
@@ -143,6 +177,10 @@ impl Member {
 
     /// Start the owner's group with this device as its only member.
     pub fn create_group(&mut self, group_id: &[u8]) -> Result<()> {
+        self.guarded(|m| m.create_group_unguarded(group_id))
+    }
+
+    fn create_group_unguarded(&mut self, group_id: &[u8]) -> Result<()> {
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
             .use_ratchet_tree_extension(true)
@@ -161,6 +199,10 @@ impl Member {
 
     /// Join with the Welcome a device already in the group made when it added this one.
     pub fn join(&mut self, welcome: &[u8]) -> Result<()> {
+        self.guarded(|m| m.join_unguarded(welcome))
+    }
+
+    fn join_unguarded(&mut self, welcome: &[u8]) -> Result<()> {
         let message = MlsMessageIn::tls_deserialize_exact(welcome)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let MlsMessageBodyIn::Welcome(welcome) = message.extract() else {
@@ -174,12 +216,19 @@ impl Member {
     }
 
     fn group(&self) -> Result<&MlsGroup> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
         self.group.as_ref().ok_or(SealError::NoGroup)
     }
 
     /// Add the device whose key package this is. The commit goes to every other
     /// member; the Welcome to the new device. This device moves to the new epoch.
     pub fn add(&mut self, key_package: &[u8]) -> Result<Added> {
+        self.guarded(|m| m.add_unguarded(key_package))
+    }
+
+    fn add_unguarded(&mut self, key_package: &[u8]) -> Result<Added> {
         let message = MlsMessageIn::tls_deserialize_exact(key_package)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let MlsMessageBodyIn::KeyPackage(kp) = message.extract() else {
@@ -198,6 +247,10 @@ impl Member {
 
     /// Remove the device at `leaf`. The commit goes to every remaining member.
     pub fn remove(&mut self, leaf: u32) -> Result<Vec<u8>> {
+        self.guarded(|m| m.remove_unguarded(leaf))
+    }
+
+    fn remove_unguarded(&mut self, leaf: u32) -> Result<Vec<u8>> {
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
         let (commit, _, _) = group
@@ -209,6 +262,10 @@ impl Member {
 
     /// Seal application bytes for every other device in the group.
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        self.guarded(|m| m.seal_unguarded(plaintext))
+    }
+
+    fn seal_unguarded(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
         group
@@ -220,6 +277,10 @@ impl Member {
 
     /// Read one message from the group: an application message or a commit.
     pub fn handle(&mut self, message: &[u8]) -> Result<Incoming> {
+        self.guarded(|m| m.handle_unguarded(message))
+    }
+
+    fn handle_unguarded(&mut self, message: &[u8]) -> Result<Incoming> {
         let message = MlsMessageIn::tls_deserialize_exact(message)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let protocol = message
@@ -265,6 +326,87 @@ impl Member {
             .members()
             .map(|m| (m.index.u32(), m.credential.serialized_content().to_vec()))
             .collect())
+    }
+
+    /// Everything this device needs to carry on after a restart, its private
+    /// keys included: keep it where only this device's user can read it (a file
+    /// of mode 600, the Keychain) or seal it under a key that is. Save again
+    /// after every call that changes the group or its keys (`key_package`,
+    /// `create_group`, `join`, `add`, `remove`, `seal`, `handle`), so a restart
+    /// never goes back to an older state.
+    pub fn save(&self) -> Result<Vec<u8>> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(SAVE_MAGIC);
+        put_field(&mut out, self.credential.credential.serialized_content());
+        put_field(&mut out, self.signer.public());
+        put_field(&mut out, self.group.as_ref().map(|g| g.group_id().as_slice()).unwrap_or(&[]));
+        let values = self.provider.storage().values.read().map_err(|_| SealError::BadSave)?;
+        let mut entries: Vec<_> = values.iter().collect();
+        entries.sort();
+        out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (k, v) in entries {
+            put_field(&mut out, k);
+            put_field(&mut out, v);
+        }
+        let digest = Sha256::digest(&out);
+        out.extend_from_slice(&digest);
+        Ok(out)
+    }
+
+    /// A device from what [`Member::save`] wrote. A damaged save is refused
+    /// with [`SealError::BadSave`]: the digest is checked before anything is
+    /// read, and a save that matches its digest but holds values OpenMLS cannot
+    /// read (its storage unwraps them, openmls_memory_storage 0.6) is refused
+    /// too rather than panicking.
+    pub fn load(saved: &[u8]) -> Result<Self> {
+        let split = saved.len().checked_sub(SAVE_DIGEST_LEN).ok_or(SealError::BadSave)?;
+        let (body, digest) = saved.split_at(split);
+        if Sha256::digest(body).as_slice() != digest {
+            return Err(SealError::BadSave);
+        }
+        catching(|| Self::load_body(body)).unwrap_or(Err(SealError::BadSave))
+    }
+
+    fn load_body(saved: &[u8]) -> Result<Self> {
+        let mut r = Reader(saved);
+        if r.take(4)? != SAVE_MAGIC {
+            return Err(SealError::BadSave);
+        }
+        let name = r.field()?.to_vec();
+        let public = r.field()?.to_vec();
+        let group_id = r.field()?.to_vec();
+        let count = u32::from_be_bytes(r.take(4)?.try_into().map_err(|_| SealError::BadSave)?);
+        let provider = OpenMlsRustCrypto::default();
+        {
+            let mut values = provider.storage().values.write().map_err(|_| SealError::BadSave)?;
+            for _ in 0..count {
+                let key = r.field()?.to_vec();
+                let value = r.field()?.to_vec();
+                values.insert(key, value);
+            }
+        }
+        if !r.0.is_empty() {
+            return Err(SealError::BadSave);
+        }
+        let signer = SignatureKeyPair::read(provider.storage(), &public, CIPHERSUITE.signature_algorithm())
+            .ok_or(SealError::BadSave)?;
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(name).into(),
+            signature_key: signer.public().into(),
+        };
+        let group = if group_id.is_empty() {
+            None
+        } else {
+            Some(
+                MlsGroup::load(provider.storage(), &GroupId::from_slice(&group_id))
+                    .map_err(|_| SealError::BadSave)?
+                    .ok_or(SealError::BadSave)?,
+            )
+        };
+        Ok(Self { provider, signer, credential, group, damaged: false })
     }
 
     fn frame_base_key(&self) -> Result<Vec<u8>> {
@@ -330,6 +472,46 @@ impl Member {
     }
 }
 
+thread_local! {
+    static CATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+static CAUGHT_PANICS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many panics [`catching`] has caught in this process, so a test can tell
+/// that a panic did happen.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn caught_panics_for_test() -> usize {
+    CAUGHT_PANICS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Runs `call`, turning a panic into `Err`. A panic while it runs is printed
+/// as where it happened only, not with its message: OpenMLS's storage panics
+/// with serde errors that can quote the stored bytes, keys included. Panics
+/// anywhere else go to whatever hook was set before.
+fn catching<T>(call: impl FnOnce() -> T) -> std::thread::Result<T> {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if CATCHING.with(|c| c.get()) {
+                let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
+                eprintln!("hm-seal: refused a state OpenMLS could not read (it panicked{at})");
+            } else {
+                previous(info);
+            }
+        }));
+    });
+    let was = CATCHING.with(|c| c.replace(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call));
+    CATCHING.with(|c| c.set(was));
+    if result.is_err() {
+        CAUGHT_PANICS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    result
+}
+
 fn frame_encryption_key<K: Into<sframe::header::KeyId>>(base: &[u8], kid: K) -> Result<EncryptionKey> {
     EncryptionKey::derive_from(FRAME_SUITE, kid, base).map_err(|e| SealError::Frame(format!("{e:?}")))
 }
@@ -345,6 +527,29 @@ pub fn seal_frame_with_base_key(base_key: &[u8], kid: u64, counter: u64, payload
         .map_err(|e| SealError::Frame(format!("{e:?}")))?;
     let encrypted = frame.encrypt(&key).map_err(|e| SealError::Frame(format!("{e:?}")))?;
     Ok(encrypted.as_ref()[meta.len()..].to_vec())
+}
+
+fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if self.0.len() < n {
+            return Err(SealError::BadSave);
+        }
+        let (head, rest) = self.0.split_at(n);
+        self.0 = rest;
+        Ok(head)
+    }
+
+    fn field(&mut self) -> Result<&'a [u8]> {
+        let len = u32::from_be_bytes(self.take(4)?.try_into().map_err(|_| SealError::BadSave)?);
+        self.take(len as usize)
+    }
 }
 
 fn frame_bits() -> MlsKeyIdBitRange {
