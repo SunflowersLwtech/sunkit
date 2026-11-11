@@ -1,0 +1,41 @@
+# Tests for the magpie gateway's middleware under tools/magpie-gateway/plugins.
+# The gateway runs these modules in magpie's own JavaScript engine (moejs); node is only the
+# test runner here. Until this job existed nothing in CI ran them (mesh-ci.yml runs under mesh/).
+name: magpie-gateway CI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/magpie-gateway/**'
+      - '.github/workflows/magpie-gateway-ci.yml'
+  pull_request:
+    paths:
+      - 'tools/magpie-gateway/**'
+      - '.github/workflows/magpie-gateway-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  middleware:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/magpie-gateway
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # node --test expands a glob itself and passes, with 0 tests, when it matches nothing
+      # (node 22 and 24), so the files are listed here and an empty list fails the job.
+      - run: |
+          files=(plugins/*/*.test.mjs)
+          if [ ! -e "${files[0]}" ]; then echo "no middleware tests under plugins/*/"; exit 1; fi
+          echo "${#files[@]} test files: ${files[*]}"
+          node --test "${files[@]}"
