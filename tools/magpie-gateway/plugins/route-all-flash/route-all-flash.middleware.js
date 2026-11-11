@@ -10,7 +10,8 @@
 // magpie reads from the User-Agent (ctx.agent), which names fleet-watch.
 //
 //   feishu assistant        -> group/flash-paid (on the gateway: Devin Opus,
-//                             then SWE-2; no GLM, the assistant is Opus only)
+//                             then the seats, then SWE-2 once the seats answer
+//                             429; no GLM, the assistant is Opus only)
 //   deepseek/*, always-up,  -> untouched (real routes of their own)
 //   group/flash-paid        -> itself
 //   zcode/*                 -> untouched (the CLI's own plan)
