@@ -11,7 +11,8 @@
 //! - [`FrameSealer`] / [`FrameOpener`]: media frames encrypted with SFrame
 //!   (RFC 9605), keyed from the MLS group exactly as RFC 9605 §5.2 says:
 //!   `base_key = MLS-Exporter("SFrame 1.0 Base Key", "", AEAD.Nk)` per epoch and
-//!   one KID range per member (sframe-rs).
+//!   one KID range per member (sframe-rs). A frame proves it came from the
+//!   group, not from which member (RFC 9605 §7.2): commands never travel as frames.
 //! - [`DataKey`]: the key what is stored is sealed under (event history,
 //!   conversations, a vlog's edit), so a device added later can read it; sent to
 //!   each device inside the group, and wrapped under a recovery secret.
