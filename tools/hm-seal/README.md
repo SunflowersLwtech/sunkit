@@ -14,11 +14,20 @@ Frames authenticate the group, not the member: SFrame "does not provide per-send
 
 Pairing is not checked yet: `add()` cannot compare a key package's signature key with the one the owner scanned, and `join()` does not check who added the device. Both land before any binding is used to pair devices.
 
-A `Member` lives in memory; `save()` writes everything it needs after a restart, private keys included (keep it where only the device's user can read it), and `load()` reads it back, refusing a damaged save. `tests/persist.rs` holds those promises.
+## Saving a device
+
+A `Member` lives in memory; `save()` writes everything it needs after a restart, private keys included, and `load()` reads it back. `tests/persist.rs` holds these promises.
+
+- **Damage is refused, never a crash.** A save ends with the SHA-256 of everything before it, and `load()` checks it before reading anything, so a partial write or a bad sector gives `BadSave`. A save that matches its digest but holds values OpenMLS cannot read (written wrong, or forged) is refused too: OpenMLS's storage unwraps what it reads and panics, and `load()` turns that into `BadSave`. Some such saves load and only panic later, when OpenMLS reads more of its storage; every call that reaches that storage turns the panic into `Damaged`, and the device then refuses every call, `save()` included, so a half-changed state is never written over a good save. A seeded test damages 4,000 saves and checks for both. (On WebAssembly a panic stops the module; the digest still refuses accidental damage.)
+- **The save is the device.** Keep it where only the device's user can read it (a file of mode 600, the Keychain), or seal it under a platform key store where there is one. Anyone holding a copy, together with the ciphertexts the relay forwards, can process later commits exactly as the device does after a restart, and keeps reading until the device is removed from the group: hm-seal has no self-update of a device's own keys yet.
+- **An old save is a key.** A save taken before a message still decrypts that message after it has been handled. So replace the save atomically (write a temporary file, fsync, rename over the old one) and keep no backups or older copies.
+- **Save after every call that changes the group or its keys** (`key_package`, `create_group`, `join`, `add`, `remove`, `seal`, `handle`). A device restarted from an older save reuses a generation the others already consumed, and they refuse its next message (`SecretReuseError`).
+- A `FrameOpener` is not saved: after a restart it starts with an empty replay window for the current epoch.
+- The format depends on how `openmls_memory_storage` lays out its keys. Upgrading OpenMLS needs a test that loads a save written by the previous version.
 
 ## Python
 
-`python/` is the binding (PyO3, abi3, Python 3.10 and later): `Member`, `FrameSealer`, `FrameOpener`, `DataKey`, and the exceptions `SealError` (a `ValueError`) and `Removed`. Bytes go in and come out as `bytes`; each object can be used from any thread.
+`python/` is the binding (PyO3, abi3, Python 3.10 and later): `Member`, `FrameSealer`, `FrameOpener`, `DataKey`, and the exceptions `SealError` (a `ValueError`) and `Removed`. Bytes go in and come out as `bytes`; each object can be used from any thread. `handle()` gives a sender only as a leaf index for now. A leaf index is reused after a removal, so the room device must not act on commands until the binding also gives the sender's signature key (the pairing change).
 
 ```
 python -m venv .venv && .venv/bin/pip install maturin pytest

@@ -1,5 +1,6 @@
 """The Python binding hands each promise of hm-seal through unchanged."""
 
+import hashlib
 import threading
 
 import pytest
@@ -97,3 +98,15 @@ def test_a_member_can_be_used_from_another_thread():
     t.start()
     t.join()
     assert out == [("application", phone.leaf_index(), b"from a thread")]
+
+
+def test_a_damaged_save_raises_seal_error_not_a_panic():
+    _, room, _ = trio()
+    saved = bytearray(room.save())
+    saved[bytes(saved).index(b'"mac_value"') + 1] ^= 0x20
+    with pytest.raises(hm_seal.SealError):
+        hm_seal.Member.load(bytes(saved))
+    # Under a matching digest the damage reaches OpenMLS, which unwraps what it reads.
+    body = saved[:-32]
+    with pytest.raises(hm_seal.SealError):
+        hm_seal.Member.load(bytes(body) + hashlib.sha256(body).digest())
