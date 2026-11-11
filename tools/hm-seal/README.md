@@ -14,8 +14,20 @@ Frames authenticate the group, not the member: SFrame "does not provide per-send
 
 Pairing is not checked yet: `add()` cannot compare a key package's signature key with the one the owner scanned, and `join()` does not check who added the device. Both land before any binding is used to pair devices.
 
-State is kept in memory. Persistence and the Python, WebAssembly, Swift and Kotlin bindings come next.
+A `Member` lives in memory; `save()` writes everything it needs after a restart, private keys included (keep it where only the device's user can read it), and `load()` reads it back, refusing a damaged save. `tests/persist.rs` holds those promises.
+
+## Python
+
+`python/` is the binding (PyO3, abi3, Python 3.10 and later): `Member`, `FrameSealer`, `FrameOpener`, `DataKey`, and the exceptions `SealError` (a `ValueError`) and `Removed`. Bytes go in and come out as `bytes`; each object can be used from any thread.
+
+```
+python -m venv .venv && .venv/bin/pip install maturin pytest
+VIRTUAL_ENV=$PWD/.venv PATH=$PWD/.venv/bin:$PATH maturin develop -m python/Cargo.toml --locked
+.venv/bin/python -m pytest python/tests
+```
+
+The WebAssembly, Swift and Kotlin bindings come next.
 
 ## Dependencies
 
-`cargo deny check` (in CI) checks advisories, licenses, sources and wildcard versions of the shipped tree; `deny.toml` records the two ignored advisories and why. Licenses are MIT, Apache-2.0, BSD, ISC and Unicode, plus MPL-2.0 for hpke-rs, hpke-rs-crypto and hpke-rs-rust-crypto (pulled in by openmls_rust_crypto): file-level copyleft, compatible with Apache-2.0 and with closed apps. An app that ships this has to say where those crates' source is (https://github.com/celabshq/libcrux).
+`cargo deny check` (in CI) checks advisories, licenses, sources and wildcard versions of the shipped tree (every crate of the workspace, bindings included); `deny.toml` records the two ignored advisories and why. Licenses are MIT, Apache-2.0, BSD, ISC and Unicode, plus MPL-2.0 for hpke-rs, hpke-rs-crypto and hpke-rs-rust-crypto (pulled in by openmls_rust_crypto): file-level copyleft, compatible with Apache-2.0 and with closed apps. An app that ships this has to say where those crates' source is (https://github.com/celabshq/libcrux).

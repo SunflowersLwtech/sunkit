@@ -6,6 +6,9 @@ license = "Apache-2.0"
 description = "End-to-end encryption core for a person's own devices: an MLS group (RFC 9420, OpenMLS), media frame keys from it (SFrame, RFC 9605) and a data key for what is stored."
 publish = false
 
+[workspace]
+members = ["python"]
+
 [dependencies]
 openmls = "=0.9.2"
 openmls_rust_crypto = "=0.6.0"

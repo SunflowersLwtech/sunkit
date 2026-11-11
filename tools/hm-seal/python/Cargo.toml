@@ -1,0 +1,15 @@
+[package]
+name = "hm-seal-python"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Python binding of hm-seal."
+publish = false
+
+[lib]
+name = "hm_seal"
+crate-type = ["cdylib"]
+
+[dependencies]
+seal_core = { package = "hm-seal", path = ".." }
+pyo3 = { version = "=0.30.1", features = ["extension-module", "abi3-py310"] }
