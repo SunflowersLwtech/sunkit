@@ -1,0 +1,50 @@
+{
+  "source": "RFC 9605 Appendix C (sframe vectors; only the fields tests/core.rs reads; each value also appears in the RFC text)",
+  "sframe": [
+    {
+      "cipher_suite": 1,
+      "kid": 291,
+      "ctr": 17767,
+      "base_key": "000102030405060708090a0b0c0d0e0f",
+      "metadata": "4945544620534672616d65205747",
+      "pt": "64726166742d696574662d736672616d652d656e63",
+      "ct": "9901234567449408b6f490086165b9d6f62b24ae1a59a56486b4ae8ed036b88912e24f11"
+    },
+    {
+      "cipher_suite": 2,
+      "kid": 291,
+      "ctr": 17767,
+      "base_key": "000102030405060708090a0b0c0d0e0f",
+      "metadata": "4945544620534672616d65205747",
+      "pt": "64726166742d696574662d736672616d652d656e63",
+      "ct": "99012345673f31438db4d09434e43afa0f8a2f00867a2be085046a9f5cb4f101d607"
+    },
+    {
+      "cipher_suite": 3,
+      "kid": 291,
+      "ctr": 17767,
+      "base_key": "000102030405060708090a0b0c0d0e0f",
+      "metadata": "4945544620534672616d65205747",
+      "pt": "64726166742d696574662d736672616d652d656e63",
+      "ct": "990123456717fc8af28a5a695afcfc6c8df6358a17e26b2fcb3bae32e443"
+    },
+    {
+      "cipher_suite": 4,
+      "kid": 291,
+      "ctr": 17767,
+      "base_key": "000102030405060708090a0b0c0d0e0f",
+      "metadata": "4945544620534672616d65205747",
+      "pt": "64726166742d696574662d736672616d652d656e63",
+      "ct": "9901234567b7412c2513a1b66dbb48841bbaf17f598751176ad847681a69c6d0b091c07018ce4adb34eb"
+    },
+    {
+      "cipher_suite": 5,
+      "kid": 291,
+      "ctr": 17767,
+      "base_key": "000102030405060708090a0b0c0d0e0f",
+      "metadata": "4945544620534672616d65205747",
+      "pt": "64726166742d696574662d736672616d652d656e63",
+      "ct": "990123456794f509d36e9beacb0e261d99c7d1e972f1fed787d4049f17ca21353c1cc24d56ceabced279"
+    }
+  ]
+}
