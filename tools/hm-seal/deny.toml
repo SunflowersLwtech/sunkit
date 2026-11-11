@@ -22,6 +22,8 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "MPL-2.0",
+    # target-lexicon, used by pyo3-build-config when the Python binding is built.
+    "Apache-2.0 WITH LLVM-exception",
 ]
 confidence-threshold = 0.8
 
