@@ -24,6 +24,8 @@ packaged as a plugin marketplace.
 | [obsidian-wiki](plugins/obsidian-wiki) | Skill | Use an Obsidian vault as the agent's long-term memory — recall before answering, indexed writes, self-correcting wiki, multi-device sync lessons |
 | [mesh](mesh) | Channel plugin + relay | `list_agents` / `send_message` between Claude Code sessions on different accounts and machines, through a self-hosted relay |
 | [show-me](plugins/show-me) | Skill | Delivery discipline for diagrams and explainers — information on the canvas, prose budgets, self-contained multi-diagram pages; hands off to diagram-design / archify / answer-me-with-html, each optional |
+| [brief-pdf](plugins/brief-pdf) | Skill | Polished A4 brief PDFs from an HTML source via headless Chrome — measures every page for overflow and renders cache-proof, so the PDF always contains what was measured |
+| [web-deploy](plugins/web-deploy) | Skill + Script | Deploy to Vercel or Render through APIs and GitHub Actions — env vars, deploy state, GHCR-image Render services, Supabase migration repair; no dashboard clicking |
 | [archify](https://github.com/tt-a1i/archify) | Skill (third-party, installs disabled) | tt-a1i/archify pinned to a reviewed commit: typed JSON rendered as interactive standalone HTML diagrams. Not a slash command of its own; the [show-me](plugins/show-me) skill reads its `SKILL.md` from the install path |
 | [cua](plugins/cua) | Skills | One entry point for computer / browser / phone automation: router skill, macOS desktop harness, phone & emulator skill with working scripts, install pointers for third-party CDP tools |
 
@@ -89,6 +91,8 @@ original repositories with full commit history preserved (`git subtree`):
 - `show-me` works standalone; the renderers it hands off to are optional (diagram-design from its own marketplace, [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design); `archify` and `answer-me-with-html` from this one, installed disabled by design).
 - `mcp-creator-growth` needs [uv](https://docs.astral.sh/uv/) installed (`uvx` launches the server straight from its plugin directory).
 - `archify` needs Node.js 18+ and a Chrome or Chromium binary (`ARCHIFY_CHROME`); on macOS wrap the binary so it gets `--use-mock-keychain --password-store=basic`, otherwise headless runs can prompt for the login keychain.
+- `brief-pdf` needs a Chrome/Chromium binary (`CHROME_BIN`, or `npx playwright install chromium`) and `poppler-utils` (`pdfinfo`, `pdftoppm`).
+- `web-deploy`'s Vercel paths need the `vercel` CLI and a `VERCEL_TOKEN` env var; `scripts/render.sh` needs `gh` and `jq`, with `RENDER_API_KEY` / `RENDER_OWNER_ID` / `RENDER_REGISTRY_CRED` as environment variables.
 - `mesh` needs Node.js 22+ on each machine, Claude Code 2.1.80+ signed in with a claude.ai account (channels are a research preview), and Docker wherever the relay runs.
 
 ## License
