@@ -22,6 +22,7 @@ packaged as a plugin marketplace.
 | [search-harness](plugins/search-harness) | Knowledge skill | Domain knowledge and roadmap for building a search harness for coding agents |
 | [mesh](mesh) | Channel plugin + relay | `list_agents` / `send_message` between Claude Code sessions on different accounts and machines, through a self-hosted relay |
 | [archify](https://github.com/tt-a1i/archify) | Skill (third-party, installs disabled) | tt-a1i/archify pinned to a reviewed commit: typed JSON rendered as interactive standalone HTML diagrams. Not a slash command of its own; another skill reads its `SKILL.md` from the install path |
+| [cua](plugins/cua) | Skills | One entry point for computer / browser / phone automation: router skill, macOS desktop harness, phone & emulator skill with working scripts, install pointers for third-party CDP tools |
 
 Not a plugin: [tools/session-rescue](tools/session-rescue) holds two standalone Python scripts that get stuck or archived Claude sessions back.
 [tools/magpie-gateway](tools/magpie-gateway) deploys a magpie gateway for Claude Code on a server, with two gateway middlewares and the client scripts. It is also not a plugin.
