@@ -140,14 +140,14 @@ impl Member {
     /// reads (openmls_memory_storage 0.6), so a damaged state, or a bug reached
     /// by a strange message, panics deep inside it. The panic becomes
     /// [`SealError::Damaged`], and since the group may be half changed, every
-    /// later call is refused too, `save` included, so the half-changed state is
-    /// never written over a good save. (Where panics abort, as on WebAssembly,
-    /// there is nothing to catch.)
+    /// later call that reads or changes the group or its keys is refused too,
+    /// `save` included, so the half-changed state is never written over a good
+    /// save. (Where panics abort, as on WebAssembly, there is nothing to catch.)
     fn guarded<T>(&mut self, call: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         if self.damaged {
             return Err(SealError::Damaged);
         }
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut *self))) {
+        match catching(|| call(&mut *self)) {
             Ok(result) => result,
             Err(_) => {
                 self.damaged = true;
@@ -157,12 +157,16 @@ impl Member {
     }
 
     /// This device's public signing key: what an owner compares when adding it.
+    /// The one call that still answers once the device is damaged: it is public.
     pub fn signature_key(&self) -> Vec<u8> {
         self.signer.public().to_vec()
     }
 
     /// A key package another device can add this one with (TLS-encoded MLS message).
     pub fn key_package(&self) -> Result<Vec<u8>> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
         let bundle = KeyPackage::builder()
             .build(CIPHERSUITE, &self.provider, &self.signer, self.credential.clone())
             .map_err(mls)?;
@@ -212,6 +216,9 @@ impl Member {
     }
 
     fn group(&self) -> Result<&MlsGroup> {
+        if self.damaged {
+            return Err(SealError::Damaged);
+        }
         self.group.as_ref().ok_or(SealError::NoGroup)
     }
 
@@ -360,7 +367,7 @@ impl Member {
         if Sha256::digest(body).as_slice() != digest {
             return Err(SealError::BadSave);
         }
-        std::panic::catch_unwind(|| Self::load_body(body)).unwrap_or(Err(SealError::BadSave))
+        catching(|| Self::load_body(body)).unwrap_or(Err(SealError::BadSave))
     }
 
     fn load_body(saved: &[u8]) -> Result<Self> {
@@ -463,6 +470,46 @@ impl Member {
     pub fn export_secret_for_test(&self, label: &str, context: &[u8], len: usize) -> Result<Vec<u8>> {
         self.group()?.export_secret(self.provider.crypto(), label, context, len).map_err(mls)
     }
+}
+
+thread_local! {
+    static CATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+static CAUGHT_PANICS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many panics [`catching`] has caught in this process, so a test can tell
+/// that a panic did happen.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn caught_panics_for_test() -> usize {
+    CAUGHT_PANICS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Runs `call`, turning a panic into `Err`. A panic while it runs is printed
+/// as where it happened only, not with its message: OpenMLS's storage panics
+/// with serde errors that can quote the stored bytes, keys included. Panics
+/// anywhere else go to whatever hook was set before.
+fn catching<T>(call: impl FnOnce() -> T) -> std::thread::Result<T> {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if CATCHING.with(|c| c.get()) {
+                let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
+                eprintln!("hm-seal: refused a state OpenMLS could not read (it panicked{at})");
+            } else {
+                previous(info);
+            }
+        }));
+    });
+    let was = CATCHING.with(|c| c.replace(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call));
+    CATCHING.with(|c| c.set(was));
+    if result.is_err() {
+        CAUGHT_PANICS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    result
 }
 
 fn frame_encryption_key<K: Into<sframe::header::KeyId>>(base: &[u8], kid: K) -> Result<EncryptionKey> {

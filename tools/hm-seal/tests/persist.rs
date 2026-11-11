@@ -145,6 +145,10 @@ impl Rng {
 
 /// One random change: a bit flipped, a byte set, a cut, a range dropped, bytes inserted or a range repeated.
 fn damage(rng: &mut Rng, b: &mut Vec<u8>) {
+    if b.is_empty() {
+        b.push(rng.next() as u8);
+        return;
+    }
     let at = rng.below(b.len());
     match rng.below(6) {
         0 => b[at] ^= 1 << rng.below(8),
@@ -176,7 +180,8 @@ fn thousands_of_damaged_saves_never_crash_the_device() {
     let msg = p.phone.seal(b"after the save").unwrap();
     let tablet = Member::new(b"tablet").unwrap();
     let commit = p.phone.add(&tablet.key_package().unwrap()).unwrap().commit;
-    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let seed = 0x9e37_79b9_7f4a_7c15;
+    let mut rng = Rng(seed);
     let (mut refused, mut loaded, mut damaged, mut crashed) = (0, 0, 0, vec![]);
     for case in 0..4000 {
         let mut b = body(&saved).to_vec();
@@ -193,9 +198,16 @@ fn thousands_of_damaged_saves_never_crash_the_device() {
                     return Ok("loaded");
                 }
                 // Once damaged, nothing more is done and nothing is written.
-                match (m.save(), m.seal(b"y")) {
-                    (Err(SealError::Damaged), Err(SealError::Damaged)) => Ok("damaged"),
-                    (save, seal) => Err(format!("after Damaged: save {:?}, seal {:?}", save.map(|_| ()), seal.map(|_| ()))),
+                let after = [
+                    ("save", m.save().map(|_| ())),
+                    ("seal", m.seal(b"y").map(|_| ())),
+                    ("epoch", m.epoch().map(|_| ())),
+                    ("key_package", m.key_package().map(|_| ())),
+                    ("frame_sealer", m.frame_sealer().map(|_| ())),
+                ];
+                match after.iter().find(|(_, r)| !matches!(r, Err(SealError::Damaged))) {
+                    None => Ok("damaged"),
+                    Some((call, r)) => Err(format!("after Damaged: {call} gave {r:?}")),
                 }
             }
         });
@@ -208,7 +220,13 @@ fn thousands_of_damaged_saves_never_crash_the_device() {
         }
     }
     eprintln!("damaged saves: {refused} refused, {loaded} loaded and used, {damaged} became Damaged, {} crashed", crashed.len());
-    assert!(crashed.is_empty(), "{} of 4000 damaged saves crashed, first: {:?}", crashed.len(), &crashed[..crashed.len().min(5)]);
+    assert!(
+        crashed.is_empty(),
+        "{} of 4000 damaged saves crashed (seed {seed:#x}, a save of {} bytes), first (case, what): {:?}",
+        crashed.len(),
+        saved.len(),
+        &crashed[..crashed.len().min(5)]
+    );
     // Without this the guard might never have been reached at this seed.
     assert!(damaged > 0, "no damaged save loaded and then reached the panic guard at this seed");
 }
