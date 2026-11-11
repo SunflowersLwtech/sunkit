@@ -125,6 +125,13 @@
       "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client.",
       "category": "agents",
       "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie"]
+    },
+    {
+      "name": "skill-forge",
+      "source": "./plugins/skill-forge",
+      "description": "Session-closeout audit and skill-forging rules: reconcile every user ask, sweep scratchpad residue, run the seven hard obligations before retiring a skill.",
+      "category": "workflow",
+      "keywords": ["closeout", "handoff", "audit", "skill-authoring", "eval"]
     }
   ]
 }

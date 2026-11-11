@@ -1,0 +1,10 @@
+{
+  "name": "skill-forge",
+  "version": "1.0.0",
+  "description": "Session closeout audit and skill-forging rules for agent fleets.",
+  "author": { "name": "SunflowersLwtech" },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "license": "Apache-2.0",
+  "keywords": ["skill", "closeout", "audit", "handoff", "eval"],
+  "skills": "./skills/"
+}
