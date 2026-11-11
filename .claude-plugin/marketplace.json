@@ -125,6 +125,13 @@
       "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client.",
       "category": "agents",
       "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie"]
+    },
+    {
+      "name": "cua",
+      "source": "./plugins/cua",
+      "description": "One entry point for computer, browser and phone automation: a router skill that sends each GUI task to the right detail skill; a macOS desktop skill documenting the browser-use/macos-harness CLI; a mobile skill with working scripts (Android/iOS emulators, cloud devices); install pointers for third-party CDP tools.",
+      "category": "automation",
+      "keywords": ["gui", "browser-automation", "accessibility", "android", "ios"]
     }
   ]
 }
