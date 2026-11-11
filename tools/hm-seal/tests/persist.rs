@@ -28,8 +28,8 @@ fn pair() -> Pair {
     let mut phone = Member::new(b"phone").unwrap();
     let mut room = Member::new(b"room").unwrap();
     phone.create_group(b"account-1").unwrap();
-    let added = phone.add(&room.key_package().unwrap()).unwrap();
-    room.join(&added.welcome).unwrap();
+    let added = phone.add(&room.key_package().unwrap(), &room.signature_key()).unwrap();
+    room.join(&added.welcome, &phone.signature_key()).unwrap();
     Pair { phone, room }
 }
 
@@ -57,9 +57,9 @@ fn a_key_package_survives_a_restart_until_its_welcome_arrives() {
     let tablet = Member::new(b"tablet").unwrap();
     let kp = tablet.key_package().unwrap();
     let mut tablet = restart(&tablet);
-    let added = p.phone.add(&kp).unwrap();
+    let added = p.phone.add(&kp, &tablet.signature_key()).unwrap();
     p.room.handle(&added.commit).unwrap();
-    tablet.join(&added.welcome).unwrap();
+    tablet.join(&added.welcome, &p.phone.signature_key()).unwrap();
     let msg = p.phone.seal(b"hello tablet").unwrap();
     assert!(matches!(tablet.handle(&msg).unwrap(), Incoming::Application { .. }));
 }
@@ -179,7 +179,7 @@ fn thousands_of_damaged_saves_never_crash_the_device() {
     let saved = p.room.save().unwrap();
     let msg = p.phone.seal(b"after the save").unwrap();
     let tablet = Member::new(b"tablet").unwrap();
-    let commit = p.phone.add(&tablet.key_package().unwrap()).unwrap().commit;
+    let commit = p.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap().commit;
     let seed = 0x9e37_79b9_7f4a_7c15;
     let mut rng = Rng(seed);
     let (mut refused, mut loaded, mut damaged, mut crashed) = (0, 0, 0, vec![]);

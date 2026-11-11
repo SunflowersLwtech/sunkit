@@ -7,7 +7,7 @@ description = "End-to-end encryption core for a person's own devices: an MLS gro
 publish = false
 
 [workspace]
-members = ["python"]
+members = ["python", "wasm"]
 
 [dependencies]
 openmls = "=0.9.2"
@@ -31,3 +31,10 @@ hm-seal = { path = ".", features = ["test-support"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+
+# For the browser: smaller, slower to build (`--profile wasm`).
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

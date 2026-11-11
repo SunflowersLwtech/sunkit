@@ -15,12 +15,12 @@ fn trio() -> Trio {
     let mut laptop = Member::new(b"laptop").unwrap();
     phone.create_group(b"account-1").unwrap();
 
-    let added = phone.add(&room.key_package().unwrap()).unwrap();
-    room.join(&added.welcome).unwrap();
+    let added = phone.add(&room.key_package().unwrap(), &room.signature_key()).unwrap();
+    room.join(&added.welcome, &phone.signature_key()).unwrap();
 
-    let added = phone.add(&laptop.key_package().unwrap()).unwrap();
+    let added = phone.add(&laptop.key_package().unwrap(), &laptop.signature_key()).unwrap();
     assert_eq!(room.handle(&added.commit).unwrap(), Incoming::Commit { epoch: 2 });
-    laptop.join(&added.welcome).unwrap();
+    laptop.join(&added.welcome, &phone.signature_key()).unwrap();
     Trio { phone, room, laptop }
 }
 
@@ -32,11 +32,12 @@ fn leaf_of(m: &Member, name: &[u8]) -> u32 {
 fn every_device_reads_the_others_and_knows_who_sent() {
     let mut t = trio();
     let phone_leaf = t.phone.leaf_index().unwrap();
+    let phone_key = t.phone.signature_key();
     let msg = t.phone.seal(b"video off").unwrap();
     for other in [&mut t.room, &mut t.laptop] {
         assert_eq!(
             other.handle(&msg).unwrap(),
-            Incoming::Application { sender: phone_leaf, bytes: b"video off".to_vec() }
+            Incoming::Application { sender: phone_leaf, sender_key: phone_key.clone(), bytes: b"video off".to_vec() }
         );
     }
     let names: Vec<Vec<u8>> = t.phone.members().unwrap().into_iter().map(|(_, n)| n).collect();
@@ -169,10 +170,10 @@ fn a_device_added_later_reads_the_history_through_the_data_key_not_through_old_m
     t.room.handle(&old).unwrap();
 
     let mut tablet = Member::new(b"tablet").unwrap();
-    let added = t.phone.add(&tablet.key_package().unwrap()).unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
     t.room.handle(&added.commit).unwrap();
     t.laptop.handle(&added.commit).unwrap();
-    tablet.join(&added.welcome).unwrap();
+    tablet.join(&added.welcome, &t.phone.signature_key()).unwrap();
 
     assert!(tablet.handle(&old).is_err(), "a new device read a message from before it joined");
     let handover = t.phone.seal(&key.to_bytes()).unwrap();
@@ -265,10 +266,10 @@ fn a_frame_sealed_before_an_add_still_opens_after_it() {
     assert_eq!(phone_opener.open(&first, b"").unwrap(), b"before the add");
 
     let mut tablet = Member::new(b"tablet").unwrap();
-    let added = t.phone.add(&tablet.key_package().unwrap()).unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
     t.room.handle(&added.commit).unwrap();
     t.laptop.handle(&added.commit).unwrap();
-    tablet.join(&added.welcome).unwrap();
+    tablet.join(&added.welcome, &t.phone.signature_key()).unwrap();
     t.phone.update_opener(&mut phone_opener).unwrap();
 
     assert_eq!(
@@ -319,11 +320,103 @@ fn the_frame_key_is_the_mls_exporter_with_the_rfc_9605_label_empty_context_and_n
 #[test]
 fn a_received_message_prints_its_length_not_its_bytes() {
     let secret = b"canary-5f3a".to_vec();
-    let text = format!("{:?}", Incoming::Application { sender: 1, bytes: secret.clone() });
+    let text = format!("{:?}", Incoming::Application { sender: 1, sender_key: vec![7; 32], bytes: secret.clone() });
     let as_list = format!("{secret:?}");
     assert!(
         !text.contains("canary") && !text.contains(&as_list[1..as_list.len() - 1]),
         "the plaintext is in the Debug text: {text}"
     );
     assert!(text.contains("11 bytes"), "{text}");
+}
+
+#[test]
+fn adding_refuses_a_key_package_from_any_device_but_the_confirmed_one() {
+    // The owner confirmed the new room device's key; the relay hands over a key package of its own.
+    let mut t = trio();
+    let epoch = t.phone.epoch().unwrap();
+    let new_room = Member::new(b"room 2").unwrap();
+    let relay = Member::new(b"room 2").unwrap();
+    let got = t.phone.add(&relay.key_package().unwrap(), &new_room.signature_key());
+    assert!(
+        matches!(got, Err(SealError::WrongDevice)),
+        "a key package from another device was added: {:?}",
+        got.map(|_| ())
+    );
+    assert_eq!(t.phone.epoch().unwrap(), epoch);
+    assert_eq!(t.phone.members().unwrap().len(), 3);
+    t.phone.add(&new_room.key_package().unwrap(), &new_room.signature_key()).unwrap();
+    assert_eq!(t.phone.members().unwrap().len(), 4);
+}
+
+#[test]
+fn joining_refuses_a_welcome_from_any_device_but_the_expected_one() {
+    let mut t = trio();
+    let phone_key = t.phone.signature_key();
+
+    // The relay has the new device's key package and adds it to a group of its own.
+    let mut tablet = Member::new(b"tablet").unwrap();
+    let mut relay = Member::new(b"phone").unwrap();
+    relay.create_group(b"account-1").unwrap();
+    let fake = relay.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    let got = tablet.join(&fake.welcome, &phone_key);
+    assert!(matches!(got, Err(SealError::WrongDevice)), "the device joined the relay's group: {got:?}");
+    assert!(matches!(tablet.epoch(), Err(SealError::NoGroup)));
+
+    // A member that is not the device the owner paired with does not count either.
+    let by_room = t.room.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    let got = tablet.join(&by_room.welcome, &phone_key);
+    assert!(matches!(got, Err(SealError::WrongDevice)), "a Welcome from the room device passed as the phone's: {got:?}");
+
+    // After the refusals the device pairs with a new key package.
+    let mut other = trio();
+    let real = other.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    tablet.join(&real.welcome, &other.phone.signature_key()).unwrap();
+    assert_eq!(tablet.members().unwrap().len(), 4);
+}
+
+#[test]
+fn a_received_message_names_its_senders_key_even_when_a_leaf_is_reused() {
+    let mut t = trio();
+    let laptop_leaf = leaf_of(&t.phone, b"laptop");
+    let laptop_key = t.laptop.signature_key();
+    let msg = t.laptop.seal(b"from the laptop").unwrap();
+    let Incoming::Application { sender, sender_key, .. } = t.room.handle(&msg).unwrap() else { panic!() };
+    assert_eq!((sender, &sender_key), (laptop_leaf, &laptop_key));
+
+    let commit = t.phone.remove(laptop_leaf).unwrap();
+    t.room.handle(&commit).unwrap();
+    let mut tablet = Member::new(b"tablet").unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    t.room.handle(&added.commit).unwrap();
+    tablet.join(&added.welcome, &t.phone.signature_key()).unwrap();
+    assert_eq!(tablet.leaf_index().unwrap(), laptop_leaf, "the tablet did not take the laptop's leaf");
+
+    let msg = tablet.seal(b"from the tablet").unwrap();
+    let Incoming::Application { sender, sender_key, .. } = t.room.handle(&msg).unwrap() else { panic!() };
+    assert_eq!(sender, laptop_leaf);
+    assert_eq!(sender_key, tablet.signature_key());
+    assert_ne!(sender_key, laptop_key, "the tablet's message was put down to the removed laptop");
+}
+
+#[test]
+fn a_remove_and_an_add_in_one_commit_still_drop_the_previous_epoch() {
+    // One commit removes the laptop and adds a tablet, which takes the laptop's
+    // leaf: the leaf indices before and after are the same, the devices are not.
+    let mut t = trio();
+    let mut laptop_stream = t.laptop.frame_sealer().unwrap();
+    let mut room_opener = FrameOpener::default();
+    t.room.update_opener(&mut room_opener).unwrap();
+    let laptop = leaf_of(&t.phone, b"laptop");
+    let tablet = Member::new(b"tablet").unwrap();
+    let commit = t.phone.remove_and_add_in_one_commit_for_test(laptop, &tablet.key_package().unwrap()).unwrap();
+    assert!(matches!(t.room.handle(&commit).unwrap(), Incoming::Commit { .. }));
+    assert_eq!(leaf_of(&t.room, b"tablet"), laptop, "the tablet did not get the laptop's leaf");
+    t.room.update_opener(&mut room_opener).unwrap();
+    let forged = laptop_stream.seal(b"forged after remove+add", b"").unwrap();
+    let got = room_opener.open(&forged, b"");
+    assert!(
+        got.is_err(),
+        "after one commit that removed the laptop and gave its leaf to a tablet, the opener accepted the laptop's frame: {:?}",
+        got.map(|p| String::from_utf8_lossy(&p).into_owned())
+    );
 }

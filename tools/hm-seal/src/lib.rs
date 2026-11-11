@@ -4,7 +4,9 @@
 //! nothing here invents a cryptographic construction:
 //!
 //! - [`Member`]: one device's place in its owner's MLS group (RFC 9420, OpenMLS).
-//!   Adding a device takes a commit signed by a device already in the group;
+//!   Adding a device takes a commit signed by a device already in the group
+//!   and the new device's signature key as the owner confirmed it; joining
+//!   takes the signature key of the device that should be adding this one;
 //!   removing one moves the group to a key the removed device cannot compute.
 //!   Application messages (state, events, commands) are MLS messages, so each
 //!   carries its sender's authentication: a relay can drop them, not forge them.
@@ -76,6 +78,8 @@ pub enum SealError {
     Open,
     #[error("this device's state is damaged; it refuses every call, save included")]
     Damaged,
+    #[error("not the device the owner confirmed")]
+    WrongDevice,
     #[error("the saved state could not be read")]
     BadSave,
 }
@@ -89,8 +93,11 @@ fn mls<E: std::fmt::Debug>(e: E) -> SealError {
 /// What a device received through its group.
 #[derive(PartialEq, Eq)]
 pub enum Incoming {
-    /// An application message and the leaf index of the device that sent it.
-    Application { sender: u32, bytes: Vec<u8> },
+    /// An application message, the leaf index of the device that sent it, and
+    /// that device's signature key. MLS gives a removed device's leaf index to
+    /// the next device added, so anything that decides by sender (a command,
+    /// say) has to go by `sender_key`.
+    Application { sender: u32, sender_key: Vec<u8>, bytes: Vec<u8> },
     /// A commit was applied; the group is now at this epoch.
     Commit { epoch: u64 },
 }
@@ -99,9 +106,12 @@ pub enum Incoming {
 impl std::fmt::Debug for Incoming {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Incoming::Application { sender, bytes } => {
-                write!(f, "Application {{ sender: {sender}, {} bytes }}", bytes.len())
-            }
+            Incoming::Application { sender, sender_key, bytes } => write!(
+                f,
+                "Application {{ sender: {sender}, sender_key: {} bytes, {} bytes }}",
+                sender_key.len(),
+                bytes.len()
+            ),
             Incoming::Commit { epoch } => write!(f, "Commit {{ epoch: {epoch} }}"),
         }
     }
@@ -197,12 +207,16 @@ impl Member {
         Ok(())
     }
 
-    /// Join with the Welcome a device already in the group made when it added this one.
-    pub fn join(&mut self, welcome: &[u8]) -> Result<()> {
-        self.guarded(|m| m.join_unguarded(welcome))
+    /// Join the group a Welcome adds this device to. `adder_signature_key` is
+    /// the signature key of the device that should have added this one, as the
+    /// owner confirmed it while pairing; a Welcome from any other device (a
+    /// relay's own group, say) is refused. A refused Welcome uses up the key
+    /// package it was for: pairing starts again with a new one.
+    pub fn join(&mut self, welcome: &[u8], adder_signature_key: &[u8]) -> Result<()> {
+        self.guarded(|m| m.join_unguarded(welcome, adder_signature_key))
     }
 
-    fn join_unguarded(&mut self, welcome: &[u8]) -> Result<()> {
+    fn join_unguarded(&mut self, welcome: &[u8], adder_signature_key: &[u8]) -> Result<()> {
         let message = MlsMessageIn::tls_deserialize_exact(welcome)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let MlsMessageBodyIn::Welcome(welcome) = message.extract() else {
@@ -211,6 +225,9 @@ impl Member {
         let config = MlsGroupJoinConfig::builder().use_ratchet_tree_extension(true).build();
         let staged = StagedWelcome::new_from_welcome(&self.provider, &config, welcome, None)
             .map_err(mls)?;
+        if staged.welcome_sender().map_err(mls)?.signature_key().as_slice() != adder_signature_key {
+            return Err(SealError::WrongDevice);
+        }
         self.group = Some(staged.into_group(&self.provider).map_err(mls)?);
         Ok(())
     }
@@ -222,19 +239,26 @@ impl Member {
         self.group.as_ref().ok_or(SealError::NoGroup)
     }
 
-    /// Add the device whose key package this is. The commit goes to every other
-    /// member; the Welcome to the new device. This device moves to the new epoch.
-    pub fn add(&mut self, key_package: &[u8]) -> Result<Added> {
-        self.guarded(|m| m.add_unguarded(key_package))
+    /// Add the device whose key package this is. `signature_key` is that
+    /// device's signature key as the owner confirmed it while pairing (scanned
+    /// from its screen, say); a key package signed by any other key is refused,
+    /// so a relay cannot slip in a device of its own. The commit goes to every
+    /// other member; the Welcome to the new device. This device moves to the
+    /// new epoch.
+    pub fn add(&mut self, key_package: &[u8], signature_key: &[u8]) -> Result<Added> {
+        self.guarded(|m| m.add_unguarded(key_package, signature_key))
     }
 
-    fn add_unguarded(&mut self, key_package: &[u8]) -> Result<Added> {
+    fn add_unguarded(&mut self, key_package: &[u8], signature_key: &[u8]) -> Result<Added> {
         let message = MlsMessageIn::tls_deserialize_exact(key_package)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let MlsMessageBodyIn::KeyPackage(kp) = message.extract() else {
             return Err(SealError::BadMessage("not a key package".into()));
         };
         let kp = kp.validate(self.provider.crypto(), ProtocolVersion::Mls10).map_err(mls)?;
+        if kp.leaf_node().signature_key().as_slice() != signature_key {
+            return Err(SealError::WrongDevice);
+        }
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
         let (commit, welcome, _) = group.add_members(provider, signer, &[kp]).map_err(mls)?;
@@ -292,13 +316,17 @@ impl Member {
             return Err(SealError::Removed);
         }
         let processed = group.process_message(provider, protocol).map_err(mls)?;
-        let sender = match processed.sender() {
-            Sender::Member(leaf) => leaf.u32(),
+        let leaf = match processed.sender() {
+            Sender::Member(leaf) => *leaf,
             _ => return Err(SealError::BadMessage("not from a member".into())),
         };
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => {
-                Ok(Incoming::Application { sender, bytes: app.into_bytes() })
+                let sender_key = group
+                    .member_at(leaf)
+                    .ok_or_else(|| SealError::BadMessage("the sender is not in the group".into()))?
+                    .signature_key;
+                Ok(Incoming::Application { sender: leaf.u32(), sender_key, bytes: app.into_bytes() })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 group.merge_staged_commit(provider, *staged).map_err(mls)?;
@@ -461,6 +489,26 @@ impl Member {
             .epochs
             .insert(epoch % (1 << FRAME_EPOCH_BITS), OpenerEpoch { epoch, base_key, senders, signers });
         Ok(())
+    }
+
+    /// One commit that removes the device at `leaf` and adds the one whose key
+    /// package this is, which then takes the freed leaf. This crate's own calls
+    /// never make such a commit, but `handle` merges one from any member, so a
+    /// test needs to make it.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn remove_and_add_in_one_commit_for_test(&mut self, leaf: u32, key_package: &[u8]) -> Result<Vec<u8>> {
+        let message = MlsMessageIn::tls_deserialize_exact(key_package)
+            .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
+        let MlsMessageBodyIn::KeyPackage(kp) = message.extract() else {
+            return Err(SealError::BadMessage("not a key package".into()));
+        };
+        let kp = kp.validate(self.provider.crypto(), ProtocolVersion::Mls10).map_err(mls)?;
+        let (provider, signer) = (&self.provider, &self.signer);
+        let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
+        let swapped = group.swap_members(provider, signer, &[LeafNodeIndex::new(leaf)], &[kp]).map_err(mls)?;
+        group.merge_pending_commit(provider).map_err(mls)?;
+        swapped.commit.tls_serialize_detached().map_err(mls)
     }
 
     /// The group's MLS exporter with any label, context and length, so a test can

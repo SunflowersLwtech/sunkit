@@ -55,11 +55,32 @@
       "keywords": ["search", "harness", "domain-knowledge", "roadmap"]
     },
     {
+      "name": "search",
+      "source": "./plugins/search",
+      "description": "One search router, four member skills: structured vertical search (anysearch, Apache-2.0 vendored), open-web search/fetch via Exa's MCP with the vendored exa-research and exa-agent detail skills (MIT), and verbatim-fetch, the rung-by-rung guide to getting a page's actual words.",
+      "category": "search",
+      "keywords": ["search", "research", "web", "exa", "fetch", "router"]
+    },
+    {
+      "name": "obsidian-wiki",
+      "source": "./plugins/obsidian-wiki",
+      "description": "Use the user's Obsidian vault as the agent's long-term memory: recall in tiers before answering, write session conclusions back as indexed notes, keep the wiki self-correcting, and survive multi-device sync.",
+      "category": "knowledge",
+      "keywords": ["obsidian", "memory", "vault", "knowledge-base", "agent-memory"]
+    },
+    {
       "name": "mesh",
       "source": "./mesh/plugins/mesh",
       "description": "list_agents / send_message across Claude Code sessions on other accounts and machines, via a self-hosted relay and a channel. Start sessions with --channels plugin:mesh@sunkit.",
       "category": "communication",
       "keywords": ["channels", "messaging", "multi-agent", "cross-account"]
+    },
+    {
+      "name": "show-me",
+      "source": "./plugins/show-me",
+      "description": "Delivery discipline for anything shown to another person: information on the canvas, prose budgets, multi-diagram pages that stand alone, and a handoff table for the renderer - static diagrams (diagram-design), browser-explored system diagrams (archify), one-page HTML explainers (answer-me-with-html). Works standalone; every renderer is optional.",
+      "category": "visualization",
+      "keywords": ["diagram", "visualization", "architecture", "explainer", "html"]
     },
     {
       "name": "archify",

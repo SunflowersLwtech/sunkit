@@ -1,0 +1,11 @@
+{
+  "name": "obsidian-wiki",
+  "version": "1.0.0",
+  "description": "Use the user's Obsidian vault as the agent's long-term memory: recall in tiers before answering, write session conclusions back as indexed notes, keep the wiki self-correcting, and survive multi-device sync. Loosely built on the official obsidian CLI.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["obsidian", "memory", "knowledge-base", "markdown", "skill"],
+  "skills": "./skills/"
+}

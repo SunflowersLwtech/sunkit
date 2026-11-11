@@ -24,8 +24,8 @@ fn a_caught_panic_keeps_its_message_to_itself_and_others_still_reach_the_hook() 
     let mut phone = Member::new(b"phone").unwrap();
     let mut room = Member::new(b"room").unwrap();
     phone.create_group(b"account-1").unwrap();
-    let added = phone.add(&room.key_package().unwrap()).unwrap();
-    room.join(&added.welcome).unwrap();
+    let added = phone.add(&room.key_package().unwrap(), &room.signature_key()).unwrap();
+    room.join(&added.welcome, &phone.signature_key()).unwrap();
 
     // A save OpenMLS cannot read, under a matching digest: its storage panics inside load().
     let saved = room.save().unwrap();

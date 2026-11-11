@@ -8,11 +8,11 @@ End-to-end encryption among one person's own devices (phones, browsers, a room c
 | live video frames | SFrame, RFC 9605 (keys from MLS as in §5.2) | [sframe-rs](https://github.com/TobTheRock/sframe-rs) 2.1.0 |
 | stored data and its recovery wrap | XChaCha20-Poly1305, HKDF-SHA256 (RFC 5869) | RustCrypto |
 
-`cargo test` runs the promises as tests: every device reads the others and knows who sent; a removed device reads nothing sent after its removal, opens no frame of the next epoch, and can no longer inject frames under the epoch it knew; a frame in flight across an add still opens; an opener refuses its own device's frames; tampered messages and frames, frames under other metadata, replayed frames and messages from outside the group are refused; frames match RFC 9605 Appendix C, their KID has the RFC's layout, and their key is the MLS exporter called with the label copied from the RFC text, an empty context and Nk; stored data opens only with its key and purpose; a device added later reads stored history through the data key, not old messages; a received message prints its length, not its bytes. The raw-key and raw-exporter entry points those tests use exist only with the `test-support` feature.
+`cargo test` runs the promises as tests: every device reads the others and knows who sent; a removed device reads nothing sent after its removal, opens no frame of the next epoch, and can no longer inject frames under the epoch it knew; a frame in flight across an add still opens; an opener refuses its own device's frames; adding refuses a key package from any device but the confirmed one, and joining refuses a Welcome from any device but the expected one; a received message names its sender's signature key, also when a leaf index is reused; tampered messages and frames, frames under other metadata, replayed frames and messages from outside the group are refused; frames match RFC 9605 Appendix C, their KID has the RFC's layout, and their key is the MLS exporter called with the label copied from the RFC text, an empty context and Nk; stored data opens only with its key and purpose; a device added later reads stored history through the data key, not old messages; a received message prints its length, not its bytes. The raw-key and raw-exporter entry points those tests use exist only with the `test-support` feature.
 
-Frames authenticate the group, not the member: SFrame "does not provide per-sender authentication of media data" (RFC 9605 §7.2), so any device in the group can seal a frame under another device's KID. A removed device still knows the previous epoch's key, so as soon as a device leaves, the opener drops the previous epoch (devices are compared by signature key, because MLS gives a removed device's leaf index to the next device added); after an add it keeps the previous epoch for frames in flight. Call `update_opener` after every commit: until then an opener accepts frames of the epochs it knows. Commands and anything else that must come from a particular device travel as MLS application messages, which carry their sender. That sender is a leaf index, which MLS reuses after a removal, so a caller that authorizes commands has to check the sender's signature key; this crate has no command path, the room device's code enforces it.
+Frames authenticate the group, not the member: SFrame "does not provide per-sender authentication of media data" (RFC 9605 §7.2), so any device in the group can seal a frame under another device's KID. A removed device still knows the previous epoch's key, so as soon as a device leaves, the opener drops the previous epoch (devices are compared by signature key, because MLS gives a removed device's leaf index to the next device added); after an add it keeps the previous epoch for frames in flight. Call `update_opener` after every commit: until then an opener accepts frames of the epochs it knows. Commands and anything else that must come from a particular device travel as MLS application messages, which carry their sender. A received message names its sender twice: the leaf index, which MLS gives to the next device added after a removal, and the sender's signature key (`sender_key`), which is what a caller that acts on commands has to check. This crate has no command path; the room device's code enforces it.
 
-Pairing is not checked yet: `add()` cannot compare a key package's signature key with the one the owner scanned, and `join()` does not check who added the device. Both land before any binding is used to pair devices.
+Pairing checks both sides against what the owner confirmed (a key scanned from a screen, say): `add(key_package, signature_key)` refuses a key package signed by any other key, so a relay cannot slip in a device of its own, and `join(welcome, adder_signature_key)` refuses a Welcome from any device but the expected one, so a relay cannot hand the new device a group of its own. Both refusals are `WrongDevice`. OpenMLS uses up a key package as soon as it reads a Welcome for it, even one that is then refused, so after a refusal the new device makes a new key package and pairing starts again. How the two keys reach the two devices is the pairing protocol's job, not this crate's.
 
 ## Saving a device
 
@@ -27,7 +27,7 @@ A `Member` lives in memory; `save()` writes everything it needs after a restart,
 
 ## Python
 
-`python/` is the binding (PyO3, abi3, Python 3.10 and later): `Member`, `FrameSealer`, `FrameOpener`, `DataKey`, and the exceptions `SealError` (a `ValueError`) and `Removed`. Bytes go in and come out as `bytes`; each object can be used from any thread. `handle()` gives a sender only as a leaf index for now. A leaf index is reused after a removal, so the room device must not act on commands until the binding also gives the sender's signature key (the pairing change).
+`python/` is the binding (PyO3, abi3, Python 3.10 and later): `Member`, `FrameSealer`, `FrameOpener`, `DataKey`, and the exceptions `SealError` (a `ValueError`), `Removed` and `WrongDevice`. `handle()` returns `("application", sender, bytes, sender_key)` or `("commit", epoch, b"", b"")`. Bytes go in and come out as `bytes`; each object can be used from any thread. A leaf index is reused after a removal, so the room device decides commands by `sender_key`.
 
 ```
 python -m venv .venv && .venv/bin/pip install maturin pytest
@@ -35,7 +35,20 @@ VIRTUAL_ENV=$PWD/.venv PATH=$PWD/.venv/bin:$PATH maturin develop -m python/Cargo
 .venv/bin/python -m pytest python/tests
 ```
 
-The WebAssembly, Swift and Kotlin bindings come next.
+## WebAssembly
+
+`wasm/` is the binding for the browser (wasm-bindgen 0.2.130): the same four classes, with `Uint8Array` in and out, `handle()` returning `{kind: "application", sender, senderKey, bytes}` or `{kind: "commit", epoch}`, and refusals thrown as an `Error` named `SealError`, `Removed` or `WrongDevice`. Randomness comes from `crypto.getRandomValues`, and OpenMLS reads the clock through `web-time`. The `wasm` profile builds it for size: 1.76 MB, 517 KB gzipped (measured on the wasm-bindgen output).
+
+```
+cargo build -p hm-seal-wasm --target wasm32-unknown-unknown --profile wasm --locked
+wasm-bindgen --target web --out-dir wasm/pkg-web target/wasm32-unknown-unknown/wasm/hm_seal.wasm    # for the page
+wasm-bindgen --target nodejs --out-dir wasm/pkg-node target/wasm32-unknown-unknown/wasm/hm_seal.wasm  # for the tests
+HM_SEAL_PYTHON=.venv/bin/python node --test wasm/tests/binding.test.mjs
+```
+
+The tests include a Python device and a browser exchanging a message and a frame in both directions, so they need the Python binding installed in `HM_SEAL_PYTHON`; without it that test fails rather than skips. A page can only be as trustworthy as the server that sends its code: nothing in a browser today checks that the script and this `.wasm` are the published ones.
+
+The Swift and Kotlin bindings come next.
 
 ## Dependencies
 
