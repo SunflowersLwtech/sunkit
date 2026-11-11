@@ -1,6 +1,7 @@
 //! WebAssembly binding of hm-seal, for the browser. Bytes go in and come out
 //! as `Uint8Array`. A refusal throws an `Error` whose `name` is "SealError",
-//! or "Removed" when this device was removed from its group.
+//! "Removed" when this device was removed from its group, or "WrongDevice"
+//! when pairing met a device other than the one the owner confirmed.
 
 use js_sys::{Array, Error, Object, Reflect, Uint8Array};
 use seal_core as core_;
@@ -10,7 +11,11 @@ type Result<T> = std::result::Result<T, JsValue>;
 
 fn err(e: core_::SealError) -> JsValue {
     let error = Error::new(&e.to_string());
-    error.set_name(if matches!(e, core_::SealError::Removed) { "Removed" } else { "SealError" });
+    error.set_name(match e {
+        core_::SealError::Removed => "Removed",
+        core_::SealError::WrongDevice => "WrongDevice",
+        _ => "SealError",
+    });
     error.into()
 }
 
@@ -78,14 +83,17 @@ impl Member {
         self.0.create_group(group_id).map_err(err)
     }
 
-    pub fn join(&mut self, welcome: &[u8]) -> Result<()> {
-        self.0.join(welcome).map_err(err)
+    /// Join the group a Welcome adds this device to. `adderSignatureKey` is the
+    /// key of the device that should be adding this one, as confirmed while pairing.
+    pub fn join(&mut self, welcome: &[u8], adder_signature_key: &[u8]) -> Result<()> {
+        self.0.join(welcome, adder_signature_key).map_err(err)
     }
 
-    /// Add the device whose key package this is: `{commit, welcome}`, the
-    /// commit for the others and the Welcome for it.
-    pub fn add(&mut self, key_package: &[u8]) -> Result<Object> {
-        let added = self.0.add(key_package).map_err(err)?;
+    /// Add the device whose key package this is and whose signature key the
+    /// owner confirmed: `{commit, welcome}`, the commit for the others and the
+    /// Welcome for it.
+    pub fn add(&mut self, key_package: &[u8], signature_key: &[u8]) -> Result<Object> {
+        let added = self.0.add(key_package, signature_key).map_err(err)?;
         object(&[("commit", bytes(&added.commit)), ("welcome", bytes(&added.welcome))])
     }
 
@@ -98,12 +106,14 @@ impl Member {
         self.0.seal(plaintext).map_err(err)
     }
 
-    /// `{kind: "application", sender, bytes}` or `{kind: "commit", epoch}`.
+    /// `{kind: "application", sender, senderKey, bytes}` or `{kind: "commit", epoch}`.
+    /// Leaf indices are reused after a removal: decide by `senderKey`.
     pub fn handle(&mut self, message: &[u8]) -> Result<Object> {
         match self.0.handle(message).map_err(err)? {
-            core_::Incoming::Application { sender, bytes: b } => object(&[
+            core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
                 ("kind", JsValue::from_str("application")),
                 ("sender", JsValue::from(sender)),
+                ("senderKey", bytes(&sender_key)),
                 ("bytes", bytes(&b)),
             ]),
             core_::Incoming::Commit { epoch } => {

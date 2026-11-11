@@ -11,11 +11,11 @@ import hm_seal
 def trio():
     phone, room, laptop = hm_seal.Member(b"phone"), hm_seal.Member(b"room"), hm_seal.Member(b"laptop")
     phone.create_group(b"account-1")
-    commit, welcome = phone.add(room.key_package())
-    room.join(welcome)
-    commit, welcome = phone.add(laptop.key_package())
-    assert room.handle(commit) == ("commit", 2, b"")
-    laptop.join(welcome)
+    commit, welcome = phone.add(room.key_package(), room.signature_key())
+    room.join(welcome, phone.signature_key())
+    commit, welcome = phone.add(laptop.key_package(), laptop.signature_key())
+    assert room.handle(commit) == ("commit", 2, b"", b"")
+    laptop.join(welcome, phone.signature_key())
     return phone, room, laptop
 
 
@@ -28,9 +28,9 @@ def test_every_device_reads_the_others_and_knows_who_sent():
     msg = phone.seal(b"video off")
     assert isinstance(msg, bytes)
     for other in (room, laptop):
-        assert other.handle(msg) == ("application", phone.leaf_index(), b"video off")
+        assert other.handle(msg) == ("application", phone.leaf_index(), b"video off", phone.signature_key())
     back = room.seal(b"done")
-    assert phone.handle(back) == ("application", room.leaf_index(), b"done")
+    assert phone.handle(back) == ("application", room.leaf_index(), b"done", room.signature_key())
     assert sorted(n for _, n in phone.members()) == [b"laptop", b"phone", b"room"]
 
 
@@ -69,7 +69,7 @@ def test_a_device_saved_and_loaded_goes_on():
     assert isinstance(saved, bytes)
     room2 = hm_seal.Member.load(saved)
     assert room2.signature_key() == room.signature_key() and room2.epoch() == room.epoch()
-    assert room2.handle(phone.seal(b"after restart")) == ("application", phone.leaf_index(), b"after restart")
+    assert room2.handle(phone.seal(b"after restart")) == ("application", phone.leaf_index(), b"after restart", phone.signature_key())
     with pytest.raises(hm_seal.SealError):
         hm_seal.Member.load(saved[:-1])
 
@@ -97,7 +97,20 @@ def test_a_member_can_be_used_from_another_thread():
     t = threading.Thread(target=lambda: out.append(room.handle(phone.seal(b"from a thread"))))
     t.start()
     t.join()
-    assert out == [("application", phone.leaf_index(), b"from a thread")]
+    assert out == [("application", phone.leaf_index(), b"from a thread", phone.signature_key())]
+
+
+def test_pairing_refuses_another_device_on_either_side():
+    phone, room, _ = trio()
+    tablet, relay = hm_seal.Member(b"tablet"), hm_seal.Member(b"tablet")
+    with pytest.raises(hm_seal.WrongDevice):
+        phone.add(relay.key_package(), tablet.signature_key())
+    assert issubclass(hm_seal.WrongDevice, hm_seal.SealError)
+    _, welcome = room.add(tablet.key_package(), tablet.signature_key())
+    with pytest.raises(hm_seal.WrongDevice):
+        tablet.join(welcome, phone.signature_key())
+    with pytest.raises(hm_seal.SealError):
+        tablet.epoch()
 
 
 def test_a_damaged_save_raises_seal_error_not_a_panic():
