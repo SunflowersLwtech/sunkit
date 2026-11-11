@@ -144,16 +144,54 @@ test("the older user_id form names the session too", () => {
   assert.equal(run(b, ctx("claude", { sessions: [SESSION] })), "claude/claude-opus-5-5")
 })
 
-test("the secretary gets a seat only while its lease runs", () => {
+test("the secretary gets the seat group only while its lease runs", () => {
   const o = (until) => ({ secretary: [DEVICE], seatUntil: until })
-  assert.equal(run(cc("group/auto-deepseek-v4-1-flash", "x"), ctx("claude", o(Date.now() + 60000))), "claude/claude-opus-5-5")
+  assert.equal(run(cc("group/auto-deepseek-v4-1-flash", "x"), ctx("claude", o(Date.now() + 60000))), "group/secretary-seat")
   assert.equal(run(cc("group/auto-deepseek-v4-1-flash", "x"), ctx("claude", o(Date.now() - 1))), "group/flash-ds")
 })
 
-test("the Feishu assistant goes to group/flash-paid", () => {
-  const b = cc("group/auto-deepseek-v4-1-flash", "x")
-  b.system = [{ type: "text", text: "你是刘维的个人助理。" }]
-  assert.equal(run(b, ctx("claude")), "group/flash-paid")
+test("the leased secretary asking for a Claude model still gets the group, never the claude provider's own model", () => {
+  // claude/claude-opus-5-5 straight is answered by the provider's fallback (GLM) when every seat is at its cap
+  const o = { secretary: [DEVICE], seatUntil: Date.now() + 60000 }
+  for (const m of ["claude-opus-5-5", "group/claude-opus-5-5", "claude/claude-opus-5-5", "claude-sonnet-5-5"]) {
+    assert.equal(run(cc(m, "x"), ctx("claude", o)), "group/secretary-seat", m)
+  }
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...o, secretarySeat: "group/other" })), "group/other")
+})
+
+const feishu = "你是刘维的个人助理。"
+
+test("the Feishu assistant, known by its system prompt, goes to group/flash-paid when not leased", () => {
+  const blocks = cc("group/auto-deepseek-v4-1-flash", "x")
+  blocks.system = [{ type: "text", text: "You are Claude Code." }, { type: "text", text: feishu }]
+  assert.equal(run(blocks, ctx("claude")), "group/flash-paid")
+  const str = cc("group/auto-deepseek-v4-1-flash", "x")
+  str.system = "x " + feishu
+  assert.equal(run(str, ctx("claude")), "group/flash-paid")
+  const chat = { model: "group/auto-deepseek-v4-1-flash", messages: [{ role: "system", content: feishu }, { role: "user", content: "hi" }] }
+  assert.equal(run(chat, ctx("litellm")), "group/flash-paid")
+  const dev = { model: "x", messages: [{ role: "developer", content: [{ type: "text", text: feishu }] }] }
+  assert.equal(run(dev, ctx("litellm")), "group/flash-paid")
+  const resp = { model: "x", instructions: feishu, input: [{ role: "user", content: "hi" }] }
+  assert.equal(run(resp, ctx("codex")), "group/flash-paid")
+})
+
+test("the assistant's phrase anywhere but the system prompt is not the assistant", () => {
+  // 11-11: a devdesk session in the vault read the assistant's files and was sent to group/flash-paid
+  const user = cc("claude-opus-5-5", "x")
+  user.system = [{ type: "text", text: "You are Claude Code." }]
+  user.messages = [{ role: "user", content: "what does " + feishu + " mean in this note?" }]
+  assert.equal(run(user, ctx("claude")), "group/flash-ds")
+  const tool = cc("claude-opus-5-5", "x")
+  tool.messages = [
+    { role: "user", content: "read the config" },
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "cat config.toml" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "append_system_prompt = \"" + feishu + "\"" }] }] },
+  ]
+  assert.equal(run(tool, ctx("claude")), "group/flash-ds")
+  const meta = cc("claude-opus-5-5", "x")
+  meta.metadata.note = feishu
+  assert.equal(run(meta, ctx("claude")), "group/flash-ds")
 })
 
 test("real routes of their own are left as asked", () => {

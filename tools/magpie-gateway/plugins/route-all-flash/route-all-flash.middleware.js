@@ -2,12 +2,16 @@
 // (onRequest: before routing). The gateway resolves model aliases first
 // (auto/x -> group/auto-x), and Info carries no caller key, so the split
 // uses what the body itself carries: cc-connect's append_system_prompt
-// ("刘维的个人助理…") for the Feishu assistant, and Claude Code's
+// ("刘维的个人助理…", looked for in the system prompt only: a session that
+// reads the assistant's files carries the phrase in its messages too) for
+// the Feishu assistant, and Claude Code's
 // metadata.user_id (a JSON string: device_id, account_uuid, session_id)
 // for the sessions kept on their own model. Info does carry the agent
 // magpie reads from the User-Agent (ctx.agent), which names fleet-watch.
 //
-//   feishu assistant        -> group/flash-paid
+//   feishu assistant        -> group/flash-paid (on the gateway: Devin Opus,
+//                             then the seats, then SWE-2 once the seats answer
+//                             429; no GLM, the assistant is Opus only)
 //   deepseek/*, always-up,  -> untouched (real routes of their own)
 //   group/flash-paid        -> itself
 //   zcode/*                 -> untouched (the CLI's own plan)
@@ -30,29 +34,51 @@
 //                             fallback takes it
 //   a session or device in options.secretary, while options.seatUntil is
 //   a moment still ahead (Date.now() < seatUntil)
-//                           -> claude/claude-opus-5-5 too: the secretary
-//                             gets a seat only while a timer renews that
-//                             lease from the seats' own 5-hour usage, so it
-//                             never eats a window on its own
+//                           -> options.secretarySeat, else
+//                             group/secretary-seat (on the gateway: the seats,
+//                             then Devin Opus, then SWE-2): the secretary gets
+//                             a seat only while a timer renews that lease from
+//                             the seats' own usage, so it never eats a window
+//                             on its own. A group, not claude/claude-opus-5-5:
+//                             the claude provider's own fallback (GLM) answers
+//                             a request for its model when every seat is at
+//                             its cap, but not a group's member
 //   everything else         -> group/flash-ds
 //
 //   {"free": "group/flash-ds", "paid": "group/flash-paid",
 //    "sessions": ["<session id>", …], "secretary": ["<device or session>", …],
-//    "seatUntil": <epoch ms>, "probe": "<provider/model>", "off": false}
+//    "seatUntil": <epoch ms>, "secretarySeat": "<model or group>",
+//    "probe": "<provider/model>", "off": false}
 
 const FREE = "group/flash-ds"
 const PAID = "group/flash-paid"
 const SEAT = "claude/claude-opus-5-5"
 const PROBE = "fleet-watch"
+const SECRETARY_SEAT = "group/secretary-seat"
 const PASSTHROUGH = /^(deepseek\/|always-up|devin\/|group\/flash-paid|zcode\/|workbuddy\/|litellm-claude-api\/)/  // 11-09: cc-compactor 的压缩请求发 litellm-claude-api/*，不放行就被改写到 flash-ds（现为 WorkBuddy），专用 Haiku 通道一个都走不到
 const FEISHU = "刘维的个人助理"
 
-function isFeishu(body) {
-  try {
-    return JSON.stringify(body).includes(FEISHU)
-  } catch (e) {
-    return false
+// systemText: the request's system prompt, in each API's shape: Anthropic's
+// system (a string or text blocks), the system and developer messages of
+// chat completions, the Responses API's instructions and its system and
+// developer input items.
+function systemText(body) {
+  const out = []
+  const add = (c) => {
+    if (typeof c === "string") out.push(c)
+    else if (Array.isArray(c)) for (const b of c) if (b && typeof b.text === "string") out.push(b.text)
   }
+  add(body.system)
+  if (typeof body.instructions === "string") out.push(body.instructions)
+  for (const k of ["messages", "input"]) {
+    if (!Array.isArray(body[k])) continue
+    for (const m of body[k]) if (m && (m.role === "system" || m.role === "developer")) add(m.content)
+  }
+  return out.join("\n")
+}
+
+function isFeishu(body) {
+  return systemText(body).includes(FEISHU)
 }
 
 // who is Claude Code's conversation, from the body's metadata.user_id:
@@ -139,7 +165,7 @@ export function onRequest(body, ctx) {
   }
   const leased = typeof o.seatUntil === "number" && Date.now() < o.seatUntil
   if (leased && (listed(o.secretary, who.session) || listed(o.secretary, who.device))) {
-    body.model = seatModel(m) || SEAT
+    body.model = typeof o.secretarySeat === "string" && o.secretarySeat ? o.secretarySeat : SECRETARY_SEAT
     return body
   }
   body.model = isFeishu(body) ? PAID : (typeof o.free === "string" && o.free ? o.free : FREE)
