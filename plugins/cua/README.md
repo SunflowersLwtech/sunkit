@@ -30,10 +30,11 @@ drive an emulator, or take a screenshot and it will pick the right member.
 | Piece | Included? | Notes |
 |---|---|---|
 | Router logic (`skills/cua`) | yes | pure routing, no dependencies |
-| `macos-harness` skill | yes (documentation) | documents a six-verb CLI contract (`see`/`key`/`type`/`click`/`ax`/`script`) and its behavioral rules; the CLI wrapper itself is not distributed — assemble it from [Peekaboo](https://github.com/steipete/peekaboo), Quartz `CGEventPost`, `osascript`, `screencapture`, or your own equivalent |
+| `macos-harness` skill | yes (documentation; CLI from upstream) | documents the six-verb CLI of [browser-use/macos-harness](https://github.com/browser-use/macos-harness) (MIT, pinned v0.1.x — v0.2.0 rewrote the interface). Upstream `LICENSE` + `UPSTREAM.md` ship in the skill directory; the Electron, native-panel, input-dead and HID-only failure-mode sections are written here |
 | `phone-use` skill + scripts | yes | working scripts: `droid.py` (Android element control, no root), `ios-sim-paste.sh` (Chinese input into the iOS Simulator), `pinch-probe.html` (zoom calibration), `bs_probe.py` (BrowserStack smoke probe). Needs `adb`, `uv` (for `droid.py`), `brew install axe`, optional `appium` |
 | agent-browser | pointer only | [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0): `npm i -g agent-browser && agent-browser install` |
 | browser-harness | pointer only | [browser-use/browser-harness](https://github.com/browser-use/browser-harness) (MIT): attaches to the user's own running Chrome |
+| macos-harness | upstream CLI + local doc skill | [browser-use/macos-harness](https://github.com/browser-use/macos-harness) (MIT): `uv tool install --python 3.12 --from git+https://github.com/browser-use/macos-harness@v0.1.2 macos-harness`; see the table inside `skills/cua` |
 | agent-desktop | pointer only | [vercel-labs/agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0): cross-platform accessibility-tree desktop control |
 | cua-driver | pointer only | [trycua/cua](https://github.com/trycua/cua) (MIT): driver-verified input, VM fleets, recording |
 

@@ -33,7 +33,7 @@ description: >-
 | 公开网页取数据 | 不进 GUI——先 curl / xh 等 HTTP 手段；被反爬挡或必须 JS 渲染再回来 |
 | **默认**：打开网页、填表、截图、QA、已登录的站点、多账号并行 | 浏览器自动化 CLI（下方「第三方工具」：agent-browser 或 browser-harness） |
 | Electron 应用（VS Code、Slack、Figma、Notion 等 Chromium 内壳）里的页面 | 同上，给 app 带 `--remote-debugging-port` 重启（见「通用边界」） |
-| 应用弹出的原生打开/保存面板、浏览器外的窗口与对话框、OS 级输入、不能抢焦点 / PID 定向输入 / Apple Events | `macos-harness`（本插件） |
+| 应用弹出的原生打开/保存面板、浏览器外的窗口与对话框、OS 级输入、不能抢焦点 / PID 定向输入 / Apple Events | `macos-harness`（本插件带文档，CLI 见下方第三方表） |
 | 后台输入但要驱动回读验证（effect confirmed / refused）、跨 OS、VM/沙箱 fleet、轨迹录制 | `cua-driver`（第三方，见下） |
 | 桌面应用走系统无障碍树，macOS / Windows / Linux 一套流程 | `agent-desktop`（第三方，见下） |
 | **手机相关全部**：安卓模拟器 / adb、iOS 模拟器、真机、云真机、投屏、按元素点击、中文输入、双指缩放、截图录屏、装包与日志、深链、移动端 QA | `phone-use`（本插件） |
@@ -48,6 +48,7 @@ macOS 桌面 App 里怎么选：页面内容在 Chromium 内核里 → CDP；窗
 |---|---|---|
 | agent-browser | [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)，Apache-2.0 | `npm i -g agent-browser && agent-browser install`；用法用 `agent-browser skills get core` 从 CLI 现取（内容随安装版本走，不会过期） |
 | browser-harness | [browser-use/browser-harness](https://github.com/browser-use/browser-harness)，MIT | 按上游 install.md 安装；它附在用户自己跑着的 Chrome/Chromium 上复用已登录会话，不另起实例、不克隆 profile |
+| macos-harness | [browser-use/macos-harness](https://github.com/browser-use/macos-harness)，MIT | `uv tool install --python 3.12 --from git+https://github.com/browser-use/macos-harness@v0.1.2 macos-harness`（钉在 v0.1.x：上游 v0.2.0 重写了接口，六动词只在 v0.1.x 有）；本插件带的 `macos-harness` skill 是它的说明文档加本地新写的章节，出处见该目录的 UPSTREAM.md 与 LICENSE |
 | agent-desktop | [vercel-labs/agent-desktop](https://github.com/vercel-labs/agent-desktop)，Apache-2.0 | 按上游 README 安装；`agent-desktop skills get platform` 取当前平台的用法 |
 | cua-driver | [trycua/cua](https://github.com/trycua/cua)，MIT | 按上游文档装 CLI 或 MCP server；随发行版分发的 skill 包不要手改 |
 

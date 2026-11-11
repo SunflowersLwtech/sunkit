@@ -1,13 +1,13 @@
 ---
 name: macos-harness
 description: >-
-  macOS desktop automation protocol, companion detail skill of the `cua`
-  router — whole-Mac control from one persistent session: screenshots,
-  PID-targeted input, virtual pointer, Apple Accessibility, Apple Events, and
-  a CDP escape hatch for Chromium-backed apps; without moving the physical
-  cursor or forcing apps into the foreground. Includes the failure modes that
-  cost real debugging time: Electron web views with no accessibility tree,
-  native open/save panels invisible to CDP, input-dead apps, HID-only apps.
+  Documentation skill for the browser-use/macos-harness CLI (MIT, v0.1.x) —
+  whole-Mac control from one persistent session: screenshots, PID-targeted
+  input, virtual pointer, Apple Accessibility, Apple Events, and a CDP escape
+  hatch for Chromium-backed apps; without moving the physical cursor or
+  forcing apps into the foreground. Adds locally written failure-mode guides:
+  Electron web views with no accessibility tree, native open/save panels
+  invisible to CDP, input-dead apps, HID-only apps.
 ---
 
 # macOS Harness
@@ -28,16 +28,24 @@ PY
 The CLI preloads `mac`, `browser`, `Path`, and `subprocess`. Prefer bounded stdin
 programs; reserve `macos-harness repl` for manual exploration and always exit it.
 
-> **The CLI itself is not part of this plugin.** This skill documents its
-> six-verb contract — `see`, `key`, `type`, `click`, `ax`, `script` — and, more
-> importantly, the behavioral rules and failure modes that any macOS automation
-> stack hits. A thin Python wrapper over standard pieces reproduces it:
-> screenshots plus the accessibility tree (e.g.
-> [Peekaboo](https://github.com/steipete/peekaboo)), Quartz event posting
-> (`CGEventPost`) for PID-targeted input, `osascript` for Apple Events,
-> `screencapture`, and raw CDP for Chromium surfaces. The sections below tell
-> you exactly when each piece is the right one and where each one silently
-> fails.
+> **This skill documents the
+> [browser-use/macos-harness](https://github.com/browser-use/macos-harness)
+> CLI (MIT), pinned to the v0.1.x line** — upstream v0.2.0 rewrote the
+> interface, and the six-verb contract below (`see`, `key`, `type`, `click`,
+> `ax`, `script`) exists only there. Install v0.1.2:
+>
+> ```bash
+> uv tool install --python 3.12 --from git+https://github.com/browser-use/macos-harness@v0.1.2 macos-harness
+> ```
+>
+> The core sections are upstream's `skills/macos-harness/SKILL.md` (v0.1.0)
+> with local additions and generalizations — see `UPSTREAM.md` and `LICENSE`
+> in this directory. If you prefer not to depend on that CLI, wrap your own
+> over the standard pieces (screenshots plus the accessibility tree, e.g.
+> [Peekaboo](https://github.com/steipete/peekaboo); Quartz event posting via
+> `CGEventPost`; `osascript` for Apple Events; `screencapture`; raw CDP for
+> Chromium surfaces) and follow the same conventions — the behavioral rules
+> and failure modes below are what matter.
 
 ## Minimize round trips
 

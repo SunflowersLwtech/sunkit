@@ -108,7 +108,7 @@
     {
       "name": "cua",
       "source": "./plugins/cua",
-      "description": "One entry point for computer, browser and phone automation: a router skill that sends each GUI task to the right detail skill, plus macOS desktop and mobile (Android/iOS emulator, cloud device) skills with working scripts, and install pointers for third-party CDP tools.",
+      "description": "One entry point for computer, browser and phone automation: a router skill that sends each GUI task to the right detail skill; a macOS desktop skill documenting the browser-use/macos-harness CLI; a mobile skill with working scripts (Android/iOS emulators, cloud devices); install pointers for third-party CDP tools.",
       "category": "automation",
       "keywords": ["gui", "browser-automation", "accessibility", "android", "ios"]
     }
