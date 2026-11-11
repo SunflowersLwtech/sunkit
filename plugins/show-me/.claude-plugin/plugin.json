@@ -1,0 +1,11 @@
+{
+  "name": "show-me",
+  "version": "1.0.0",
+  "description": "Delivery discipline for anything you show another person: information belongs on the canvas, prose budgets keep pages self-contained, and a handoff table picks the renderer - static diagrams (diagram-design), browser-explored interactive system diagrams (archify), or one-page HTML explainers (answer-me-with-html). Works standalone; every renderer is optional.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["diagram", "visualization", "architecture", "explainer", "skill"],
+  "skills": "./skills/"
+}

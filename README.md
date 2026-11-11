@@ -23,7 +23,8 @@ packaged as a plugin marketplace.
 | [search](plugins/search) | Skills | One search router with its member skills alongside: structured vertical search (anysearch), Exa MCP search/fetch and the vendored exa research/agent skills, and verbatim page retrieval |
 | [obsidian-wiki](plugins/obsidian-wiki) | Skill | Use an Obsidian vault as the agent's long-term memory — recall before answering, indexed writes, self-correcting wiki, multi-device sync lessons |
 | [mesh](mesh) | Channel plugin + relay | `list_agents` / `send_message` between Claude Code sessions on different accounts and machines, through a self-hosted relay |
-| [archify](https://github.com/tt-a1i/archify) | Skill (third-party, installs disabled) | tt-a1i/archify pinned to a reviewed commit: typed JSON rendered as interactive standalone HTML diagrams. Not a slash command of its own; another skill reads its `SKILL.md` from the install path |
+| [show-me](plugins/show-me) | Skill | Delivery discipline for diagrams and explainers — information on the canvas, prose budgets, self-contained multi-diagram pages; hands off to diagram-design / archify / answer-me-with-html, each optional |
+| [archify](https://github.com/tt-a1i/archify) | Skill (third-party, installs disabled) | tt-a1i/archify pinned to a reviewed commit: typed JSON rendered as interactive standalone HTML diagrams. Not a slash command of its own; the [show-me](plugins/show-me) skill reads its `SKILL.md` from the install path |
 
 Not a plugin: [tools/session-rescue](tools/session-rescue) holds two standalone Python scripts that get stuck or archived Claude sessions back.
 [tools/magpie-gateway](tools/magpie-gateway) deploys a magpie gateway for Claude Code on a server, with two gateway middlewares and the client scripts. It is also not a plugin.
@@ -84,6 +85,7 @@ original repositories with full commit history preserved (`git subtree`):
 
 ## Requirements
 
+- `show-me` works standalone; the renderers it hands off to are optional (diagram-design from its own marketplace, [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design); `archify` and `answer-me-with-html` from this one, installed disabled by design).
 - `mcp-creator-growth` needs [uv](https://docs.astral.sh/uv/) installed (`uvx` launches the server straight from its plugin directory).
 - `archify` needs Node.js 18+ and a Chrome or Chromium binary (`ARCHIFY_CHROME`); on macOS wrap the binary so it gets `--use-mock-keychain --password-store=basic`, otherwise headless runs can prompt for the login keychain.
 - `mesh` needs Node.js 22+ on each machine, Claude Code 2.1.80+ signed in with a claude.ai account (channels are a research preview), and Docker wherever the relay runs.

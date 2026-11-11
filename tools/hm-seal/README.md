@@ -35,7 +35,20 @@ VIRTUAL_ENV=$PWD/.venv PATH=$PWD/.venv/bin:$PATH maturin develop -m python/Cargo
 .venv/bin/python -m pytest python/tests
 ```
 
-The WebAssembly, Swift and Kotlin bindings come next.
+## WebAssembly
+
+`wasm/` is the binding for the browser (wasm-bindgen 0.2.130): the same four classes, with `Uint8Array` in and out, `handle()` returning `{kind: "application", sender, bytes}` or `{kind: "commit", epoch}`, and refusals thrown as an `Error` named `SealError` or `Removed`. Randomness comes from `crypto.getRandomValues`, and OpenMLS reads the clock through `web-time`. The `wasm` profile builds it for size: 1.76 MB, 517 KB gzipped (measured on the wasm-bindgen output).
+
+```
+cargo build -p hm-seal-wasm --target wasm32-unknown-unknown --profile wasm --locked
+wasm-bindgen --target web --out-dir wasm/pkg-web target/wasm32-unknown-unknown/wasm/hm_seal.wasm    # for the page
+wasm-bindgen --target nodejs --out-dir wasm/pkg-node target/wasm32-unknown-unknown/wasm/hm_seal.wasm  # for the tests
+HM_SEAL_PYTHON=.venv/bin/python node --test wasm/tests/binding.test.mjs
+```
+
+The tests include a Python device and a browser exchanging a message and a frame in both directions, so they need the Python binding installed in `HM_SEAL_PYTHON`; without it that test fails rather than skips. A page can only be as trustworthy as the server that sends its code: nothing in a browser today checks that the script and this `.wasm` are the published ones.
+
+The Swift and Kotlin bindings come next.
 
 ## Dependencies
 

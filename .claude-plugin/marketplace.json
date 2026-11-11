@@ -76,6 +76,13 @@
       "keywords": ["channels", "messaging", "multi-agent", "cross-account"]
     },
     {
+      "name": "show-me",
+      "source": "./plugins/show-me",
+      "description": "Delivery discipline for anything shown to another person: information on the canvas, prose budgets, multi-diagram pages that stand alone, and a handoff table for the renderer - static diagrams (diagram-design), browser-explored system diagrams (archify), one-page HTML explainers (answer-me-with-html). Works standalone; every renderer is optional.",
+      "category": "visualization",
+      "keywords": ["diagram", "visualization", "architecture", "explainer", "html"]
+    },
+    {
       "name": "archify",
       "source": {
         "source": "git-subdir",
