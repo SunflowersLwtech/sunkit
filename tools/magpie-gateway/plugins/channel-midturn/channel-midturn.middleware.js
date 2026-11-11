@@ -44,15 +44,22 @@
 //     turns a new entry on with no options before `magpie plugin options` can set any, so
 //     the entry it adds must be inert;
 //   - 0: every channel message moves, one without a msg_id too;
-//   - a time (ISO, or epoch ms as a number or digits): only channel messages whose msg_id
-//     (a ULID, so a send time) is at it or later move; one without a msg_id stays;
-//   - anything else (a negative number, a string that names no moment): nothing moves.
+//   - a time (an ISO date-time ending in Z or ±hh:mm, or epoch ms as a number or digits):
+//     only channel messages whose msg_id (a ULID, so a send time) is at it or later move;
+//     one without a msg_id stays. The msg_id is read from the <channel …> tag only, so a
+//     message without one that quotes another message's msg_id still stays;
+//   - anything else (a negative number, -0, a date-time with no zone, which the host would
+//     read in its own local time and so land hours off, a string that names no moment):
+//     nothing moves.
 // Set `since` to a moment just after the middleware is turned on.
 //
 //   {"providers": ["claude"], "since": "2026-11-11T02:00:00Z", "log": true, "off": false}
 
 const CHANNEL = /(^|\n\n|<\/tools-used-before-summary>\n)(A message arrived from [^\n]+? while you were working:\n<channel source="[\s\S]*?<\/channel>(?:\n\nIMPORTANT: This is NOT from your user[^\n]*)?)/g
-const MSG_ID = /\bmsg_id="msg_([0-9A-HJKMNP-TV-Z]{26})"/
+// in the segment's own opening tag (attribute values carry no ">": mesh escapes it)
+const MSG_ID = /^A message arrived from [^\n]+? while you were working:\n<channel source="[^>]*?\bmsg_id="msg_([0-9A-HJKMNP-TV-Z]{26})"/
+// a date-time that names its zone
+const ZONED = /(?:Z|[+-]\d{2}:\d{2})$/
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 /** The send time (epoch ms) of a ULID: its first ten characters. */
@@ -69,10 +76,13 @@ export function ulidTime(ulid) {
 // undefined when absent, NaN when it names no moment
 function sinceOf(v) {
   if (v === undefined || v === null || v === "") return undefined
-  if (typeof v === "number") return v
+  // -0 < 0 is false, and since > 0 too: it would move every message
+  if (typeof v === "number") return Object.is(v, -0) ? NaN : v
   const s = String(v).trim()
-  // Date.parse("0") is a day in 2000 and Date.parse("-5") a date too, so digits are epoch ms
-  return /^-?\d+$/.test(s) ? Number(s) : Date.parse(s)
+  // Date.parse("0") is a day in 2000 and Date.parse("-5") a date too, so digits are epoch ms;
+  // a leading minus is a negative number (or -0), which names no moment here
+  if (/^-?\d+$/.test(s)) return s[0] === "-" ? NaN : Number(s)
+  return ZONED.test(s) ? Date.parse(s) : NaN
 }
 
 // The channel messages in text, where Claude Code puts them: [start, end) and the words.

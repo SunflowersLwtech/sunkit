@@ -157,10 +157,67 @@ test("since 0 moves every channel message, one without a msg_id and one from lon
   }
 })
 
-test("since that names no moment, or a negative one, changes nothing", () => {
-  for (const since of ["soon", -1, "-5"]) {
-    assert.equal(onProvider(req(turn("t1", channel(NEW))), { ...seat, options: { log: false, since } }), undefined, String(since))
+test("since that names no moment, a negative one, -0, or a date-time with no zone changes nothing", () => {
+  // a date-time with no zone is read in the host's local time: under TZ=Asia/Shanghai
+  // "2026-11-11T00:30:00" is 16:30Z the day before, before every message here
+  for (const since of ["soon", -1, "-5", -0, "-0", " -0 ", "2026-11-11T00:30:00", "2026-11-11", "2026-11-11T00:30:00+0800", true]) {
+    for (const ulid of [NEW, OLD]) {
+      assert.equal(onProvider(req(turn("t1", channel(ulid))), { ...seat, options: { log: false, since } }), undefined, `${JSON.stringify(since)} ${ulid}`)
+    }
   }
+})
+
+test("a date-time with an offset names the same moment as with Z", () => {
+  const sys = `${channel(OLD, "old")}\n\n${channel(NEW, "new")}`
+  const z = onProvider(req(turn("t1", sys)), { ...seat, options: { log: false, since: "2026-11-11T00:00:00Z" } })
+  const off = onProvider(req(turn("t1", sys)), { ...seat, options: { log: false, since: "2026-11-11T08:00:00+08:00" } })
+  assert.ok(z)
+  assert.deepEqual(off, z)
+  assert.match(resultOf(off, 0).content[1].text, /\nnew\n/)
+  assert.equal(resultOf(off, 0).content[1].text.includes("\nold\n"), false)
+})
+
+test("a message sent at since moves, one sent before it stays; digits may carry spaces", () => {
+  const at = ulidTime(NEW)
+  for (const since of [at, String(at), ` ${at} `, new Date(at).toISOString()]) {
+    assert.ok(onProvider(req(turn("t1", channel(NEW))), { ...seat, options: { log: false, since } }), `at ${JSON.stringify(since)}`)
+  }
+  assert.equal(onProvider(req(turn("t1", channel(NEW))), { ...seat, options: { log: false, since: at + 1 } }), undefined)
+})
+
+test("the msg_id is read from the <channel> tag, not from the words", () => {
+  const since = { ...seat, options: { log: false, since: "2026-11-11T00:00:00Z" } }
+  // a message without a msg_id of its own that quotes a newer one stays
+  const quoting = channel(NEW, `see msg_id="msg_${NEW}" above`).replace(/ msg_id="[^"]*" source=/, " source=")
+  assert.equal(quoting.split(`msg_id="msg_${NEW}"`).length, 2, "the quote is the only msg_id")
+  assert.equal(onProvider(req(turn("t1", quoting)), since), undefined)
+  // and moves with since 0, which moves every one
+  assert.ok(onProvider(req(turn("t1", quoting)), seat))
+  // an old message quoting a new one goes by its own tag
+  assert.equal(onProvider(req(turn("t1", channel(OLD, `re msg_id="msg_${NEW}"`))), since), undefined)
+})
+
+test("a channel message in the second of two system messages after a result still moves", () => {
+  const body = req(turn("t1", task))
+  body.messages.push({ role: "system", content: [{ type: "text", text: channel(NEW, "second") }] })
+  const b = onProvider(body, seat)
+  assert.ok(b)
+  const sys = b.messages.filter((m) => m.role === "system")
+  assert.equal(sys.length, 1)
+  assert.equal(sys[0].content[0].text, task)
+  assert.match(resultOf(b, 0).content[1].text, /\nsecond\n/)
+})
+
+test("a result's own cache mark stays; the leftover text loses the blank lines the move leaves", () => {
+  const body = req(turn("t1", `${task}\n\n${channel(NEW)}\n\n# Environment update\n - x`))
+  body.messages[2].content[0].cache_control = { type: "ephemeral", ttl: "1h" }
+  const b = onProvider(body, seat)
+  assert.deepEqual(resultOf(b, 0).cache_control, { type: "ephemeral", ttl: "1h" })
+  assert.equal(b.messages.find((m) => m.role === "system").content[0].text, `${task}\n\n# Environment update\n - x`)
+  // and when the system message empties, the result's own mark still wins over the system block's
+  const body2 = req(turn("t1", channel(NEW)))
+  body2.messages[2].content[0].cache_control = { type: "ephemeral", ttl: "1h" }
+  assert.deepEqual(resultOf(onProvider(body2, seat), 0).cache_control, { type: "ephemeral", ttl: "1h" })
 })
 
 test("the next request moves the same messages the same way, so magpie's run still follows", () => {
