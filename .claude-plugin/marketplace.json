@@ -127,6 +127,13 @@
       "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie"]
     },
     {
+      "name": "skill-forge",
+      "source": "./plugins/skill-forge",
+      "description": "Session-closeout audit and skill-forging rules: reconcile every user ask, sweep scratchpad residue, run the seven hard obligations before retiring a skill.",
+      "category": "workflow",
+      "keywords": ["closeout", "handoff", "audit", "skill-authoring", "eval"]
+    },
+    {
       "name": "brief-pdf",
       "source": "./plugins/brief-pdf",
       "description": "Polished A4 brief PDFs from an HTML source via headless Chrome, with the two proofs hand-built PDFs skip: per-page overflow measurement (refuses to write when a footer would clip) and cache-proof rendering through never-fetched URLs. Brand, palette and footer are template config tokens.",
