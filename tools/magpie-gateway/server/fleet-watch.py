@@ -23,7 +23,7 @@ TZ = timezone(timedelta(hours=8))  # routing 日志按北京时间分天
 # 11-05 起 route-all-flash 把客户端请求改写到 flash-ds（白名单外）、flash-paid（秘书）和座位（claude/…，日志里没有组），
 # 客户端已经不点前面这几个组了；long-* 10-28 删掉。
 GROUPS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1",
-          "frontier", "always-up", "flash-ds", "flash-paid"]
+          "frontier", "always-up", "flash-paid"]
 # 只看客户端、闲着不探的组：flash-ds 的成员里有按次计费的 Copilot（每月 200 次），闲着的探测在 Devin、Grok 都用完时
 # 正落在它上面（按 11-05..11-11 的日志算，一天最多 22 次）。它客户端多，坏了被动统计就报；坏了之后照样每轮探，靠探测判恢复。
 # flash-paid 不在这里：成员是 DeepSeek 官方（按 token）和 ZCode（预付），探一次几十个 token；它一小时常只有几个请求，
