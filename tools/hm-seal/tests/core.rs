@@ -180,3 +180,18 @@ fn a_device_added_later_reads_the_history_through_the_data_key_not_through_old_m
     let got = DataKey::from_bytes(&bytes).unwrap();
     assert_eq!(got.open(b"room-event", &stored).unwrap(), b"reminder before the tablet joined");
 }
+
+#[test]
+fn two_sealers_in_one_epoch_never_share_a_key() {
+    // A second sealer in the same epoch: a second stream, or the same device
+    // after a restart. Each counts its frames from 0, so a shared key would mean
+    // a repeated AES-GCM nonce: the same frame would come out byte for byte.
+    let t = trio();
+    let mut opener = FrameOpener::default();
+    t.phone.update_opener(&mut opener).unwrap();
+    let a = t.room.frame_sealer().unwrap().seal(b"jpeg", b"").unwrap();
+    let b = t.room.frame_sealer().unwrap().seal(b"jpeg", b"").unwrap();
+    assert_ne!(a, b, "two sealers of one epoch encrypted under the same key and counter");
+    assert_eq!(opener.open(&a, b"").unwrap(), b"jpeg");
+    assert_eq!(opener.open(&b, b"").unwrap(), b"jpeg");
+}

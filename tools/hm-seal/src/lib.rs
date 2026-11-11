@@ -21,7 +21,7 @@
 //!
 //! State lives in memory. Persisting a member between runs is the next step.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -35,6 +35,7 @@ use rand::RngCore;
 use sha2::Sha256;
 use sframe::frame::validation::{ReplayAttackProtection, Tolerance};
 use sframe::frame::{EncryptedFrame, MediaFrame, MonotonicCounter};
+use sframe::header::KeyId;
 use sframe::key::{DecryptionKey, EncryptionKey};
 use sframe::mls::{MlsKeyId, MlsKeyIdBitRange};
 use sframe::CipherSuite as FrameSuite;
@@ -260,31 +261,32 @@ impl Member {
             .map_err(mls)
     }
 
-    /// The key this device encrypts its own frames with, for the current epoch.
+    /// A sealer for this device's frames in the current epoch.
+    ///
+    /// Each sealer takes a fresh random context value in its KID (RFC 9605 §5.2:
+    /// "Senders may choose any KID value within their assigned set of KID
+    /// values"), and the frame key is derived from the KID, so two sealers of one
+    /// epoch (two streams, or the same device after a restart) never share a key
+    /// although each counts its frames from 0.
     pub fn frame_sealer(&self) -> Result<FrameSealer> {
         let base = self.frame_base_key()?;
-        let kid = frame_kid(self.epoch()?, self.leaf_index()?)?;
+        let kid = frame_kid(random_context(), self.epoch()?, self.leaf_index()?)?;
         Ok(FrameSealer { key: frame_encryption_key(&base, kid)?, counter: MonotonicCounter::default() })
     }
 
-    /// Add the current epoch's keys for every other member to `opener`.
-    /// Keys of epochs before the previous one are dropped.
+    /// Let `opener` read the other members' frames of the current epoch. The
+    /// previous epoch stays readable (frames in flight across a commit); older
+    /// ones are dropped, with their keys and replay windows.
     pub fn update_opener(&self, opener: &mut FrameOpener) -> Result<()> {
-        let base = self.frame_base_key()?;
         let epoch = self.epoch()?;
         let me = self.leaf_index()?;
-        let mut keys = HashMap::new();
-        for (leaf, _) in self.members()? {
-            if leaf == me {
-                continue;
-            }
-            let kid = frame_kid(epoch, leaf)?;
-            let key = DecryptionKey::derive_from(FRAME_SUITE, kid, &base)
-                .map_err(|e| SealError::Frame(format!("{e:?}")))?;
-            keys.insert(sframe::header::KeyId::from(kid), key);
-        }
-        opener.epochs.retain(|e, _| *e + 1 >= epoch);
-        opener.epochs.insert(epoch, keys);
+        let senders = self.members()?.into_iter().map(|(leaf, _)| leaf).filter(|leaf| *leaf != me).collect();
+        let base_key = self.frame_base_key()?;
+        opener.epochs.retain(|_, e| e.epoch + 1 >= epoch);
+        opener.keys.retain(|(e, _), _| *e + 1 >= epoch);
+        opener.replay.retain(|(e, _), _| *e + 1 >= epoch);
+        // RFC 9605 §5.2: an epoch with the same low bits replaces the old one.
+        opener.epochs.insert(epoch % (1 << FRAME_EPOCH_BITS), OpenerEpoch { epoch, base_key, senders });
         Ok(())
     }
 }
@@ -304,14 +306,18 @@ pub fn seal_frame_with_base_key(base_key: &[u8], kid: u64, counter: u64, payload
     Ok(encrypted.as_ref()[meta.len()..].to_vec())
 }
 
-fn frame_kid(epoch: u64, leaf: u32) -> Result<MlsKeyId> {
-    MlsKeyId::try_new(
-        0u64,
-        epoch,
-        u64::from(leaf),
-        MlsKeyIdBitRange::new(FRAME_EPOCH_BITS, FRAME_INDEX_BITS),
-    )
-    .map_err(|e| SealError::Frame(format!("{e:?}")))
+fn frame_bits() -> MlsKeyIdBitRange {
+    MlsKeyIdBitRange::new(FRAME_EPOCH_BITS, FRAME_INDEX_BITS)
+}
+
+/// A random context value filling the KID bits above epoch and member index.
+fn random_context() -> u64 {
+    rand::rngs::OsRng.next_u64() >> (FRAME_EPOCH_BITS + FRAME_INDEX_BITS)
+}
+
+fn frame_kid(context: u64, epoch: u64, leaf: u32) -> Result<MlsKeyId> {
+    MlsKeyId::try_new(context, epoch, u64::from(leaf), frame_bits())
+        .map_err(|e| SealError::Frame(format!("{e:?}")))
 }
 
 /// Encrypts one device's frames (RFC 9605) for the epoch it was made in.
@@ -331,34 +337,50 @@ impl FrameSealer {
     }
 }
 
+struct OpenerEpoch {
+    epoch: u64,
+    base_key: Vec<u8>,
+    senders: HashSet<u32>,
+}
+
 /// Decrypts the other members' frames, refusing a frame seen before.
+///
+/// A frame's key is derived from its KID (sender, epoch, the sealer's context)
+/// and kept only once a frame under it has opened, so frames under made-up
+/// KIDs cost a derivation and a failed tag check, and leave nothing behind.
 #[derive(Default)]
 pub struct FrameOpener {
-    epochs: HashMap<u64, HashMap<u64, DecryptionKey>>,
-    replay: HashMap<u64, ReplayAttackProtection>,
+    epochs: HashMap<u64, OpenerEpoch>,
+    keys: HashMap<(u64, KeyId), DecryptionKey>,
+    replay: HashMap<(u64, KeyId), ReplayAttackProtection>,
 }
 
 impl FrameOpener {
     pub fn open(&mut self, frame: &[u8], meta: &[u8]) -> Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(meta.len() + frame.len());
-        buf.extend_from_slice(meta);
-        buf.extend_from_slice(frame);
-        let encrypted = EncryptedFrame::try_with_meta_data(&buf[meta.len()..], meta)
-            .map_err(|e| SealError::Frame(format!("{e:?}")))?;
+        let bad = |e: &dyn std::fmt::Debug| SealError::Frame(format!("{e:?}"));
+        let encrypted = EncryptedFrame::try_with_meta_data(frame, meta).map_err(|e| bad(&e))?;
         let kid = encrypted.header().key_id();
-        let key = self
+        let parts = MlsKeyId::from_key_id(kid, frame_bits());
+        let entry = self
             .epochs
-            .values()
-            .find_map(|keys| keys.get(&kid))
-            .ok_or_else(|| SealError::Frame("no key for this frame".into()))?;
-        let replay = self
-            .replay
-            .entry(kid)
-            .or_insert_with(|| ReplayAttackProtection::new(kid, Tolerance::new(FRAME_REPLAY_TOLERANCE)));
-        let media = encrypted
-            .validated_decrypt(key, replay)
-            .map_err(|e| SealError::Frame(format!("{e:?}")))?;
-        Ok(media.payload().to_vec())
+            .get(&parts.epoch_lsb())
+            .ok_or_else(|| SealError::Frame("no key for this frame's epoch".into()))?;
+        let sender = u32::try_from(parts.member_index()).map_err(|e| bad(&e))?;
+        if !entry.senders.contains(&sender) {
+            return Err(SealError::Frame("not a frame of another member".into()));
+        }
+        let slot = (entry.epoch, kid);
+        if let (Some(key), Some(replay)) = (self.keys.get(&slot), self.replay.get_mut(&slot)) {
+            let media = encrypted.validated_decrypt(key, replay).map_err(|e| bad(&e))?;
+            return Ok(media.payload().to_vec());
+        }
+        let key = DecryptionKey::derive_from(FRAME_SUITE, kid, &entry.base_key).map_err(|e| bad(&e))?;
+        let mut replay = ReplayAttackProtection::new(kid, Tolerance::new(FRAME_REPLAY_TOLERANCE));
+        let media = encrypted.validated_decrypt(&key, &mut replay).map_err(|e| bad(&e))?;
+        let payload = media.payload().to_vec();
+        self.keys.insert(slot, key);
+        self.replay.insert(slot, replay);
+        Ok(payload)
     }
 }
 
