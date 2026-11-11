@@ -161,21 +161,37 @@ test("pairing refuses another device on either side", () => {
   const tablet = new s.Member(enc("tablet"));
   const relay = new s.Member(enc("tablet"));
   refusal(() => t.phone.add(relay.keyPackage(), tablet.signatureKey()), "WrongDevice");
-  const byRoom = t.room.add(tablet.keyPackage(), tablet.signatureKey());
-  refusal(() => tablet.join(byRoom.welcome, t.phone.signatureKey()), "WrongDevice");
+  // The phone's Welcome, but the device was told to expect the room's key.
+  const byPhone = t.phone.add(tablet.keyPackage(), tablet.signatureKey());
+  refusal(() => tablet.join(byPhone.welcome, t.room.signatureKey()), "WrongDevice");
   refusal(() => tablet.epoch());
 });
 
 test("a commit names who made it and which devices it added and removed", () => {
-  // Any member may add a device; the phone is told the room camera did.
   const t = trio();
   const stranger = new s.Member(enc("stranger"));
-  const byRoom = t.room.add(stranger.keyPackage(), stranger.signatureKey());
-  const seen = t.phone.handle(byRoom.commit);
-  assert.deepEqual([seen.kind, seen.by, seen.added, seen.removed], ["commit", t.room.signatureKey(), [stranger.signatureKey()], []]);
-  t.web.handle(byRoom.commit);
+  const byPhone = t.phone.add(stranger.keyPackage(), stranger.signatureKey());
+  const seen = t.room.handle(byPhone.commit);
+  assert.deepEqual([seen.kind, seen.by, seen.added, seen.removed], ["commit", t.phone.signatureKey(), [stranger.signatureKey()], []]);
+  t.web.handle(byPhone.commit);
   const removal = t.room.handle(t.phone.remove(leafOf(t.phone, "stranger")));
   assert.deepEqual([removal.by, removal.added, removal.removed], [t.phone.signatureKey(), [], [stranger.signatureKey()]]);
+});
+
+test("only the admin device adds or removes devices", () => {
+  const t = trio();
+  for (const m of [t.phone, t.room, t.web]) assert.deepEqual(m.admins(), [t.phone.signatureKey()]);
+  const tablet = new s.Member(enc("tablet"));
+  refusal(() => t.room.add(tablet.keyPackage(), tablet.signatureKey()), "NotAdmin");
+  refusal(() => t.room.remove(leafOf(t.room, "phone")), "NotAdmin");
+  refusal(() => t.room.remove(leafOf(t.room, "web")), "NotAdmin");
+  assert.equal(t.room.epoch(), 2);
+  refusal(() => t.room.makeAdmin(t.room.signatureKey()), "NotAdmin");
+  const promote = t.phone.makeAdmin(t.web.signatureKey());
+  assert.equal(t.room.handle(promote).kind, "commit");
+  t.web.handle(promote);
+  const hex = (keys) => keys.map((k) => Buffer.from(k).toString("hex")).sort();
+  assert.deepEqual(hex(t.room.admins()), hex([t.phone.signatureKey(), t.web.signatureKey()]));
 });
 
 test("pairing refuses an empty confirmed key on either side", () => {

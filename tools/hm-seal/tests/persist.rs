@@ -39,6 +39,7 @@ fn a_device_restarted_from_its_save_goes_on_in_the_group() {
     let mut room = restart(&p.room);
     assert_eq!(room.epoch().unwrap(), p.room.epoch().unwrap());
     assert_eq!(room.signature_key(), p.room.signature_key());
+    assert_eq!(room.admins().unwrap(), vec![p.phone.signature_key()], "the admin list did not survive the restart");
 
     let msg = p.phone.seal(b"video off").unwrap();
     assert!(matches!(room.handle(&msg).unwrap(), Incoming::Application { bytes, .. } if bytes == b"video off"));
