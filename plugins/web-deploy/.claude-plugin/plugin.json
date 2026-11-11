@@ -1,0 +1,11 @@
+{
+  "name": "web-deploy",
+  "version": "1.0.0",
+  "description": "Deploy a web app to Vercel or Render and manage its env vars through APIs and GitHub Actions instead of clicking a dashboard: one-token Vercel + Actions setup, Vercel REST env/deploy state, Render GHCR-image services with commit-tagged releases, Supabase migration-ledger repair, and proving the live site is the commit you pushed.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["deploy", "vercel", "render", "supabase", "github-actions"],
+  "skills": "./skills/"
+}

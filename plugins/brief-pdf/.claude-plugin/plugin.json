@@ -1,0 +1,11 @@
+{
+  "name": "brief-pdf",
+  "version": "1.0.0",
+  "description": "Build a polished A4 brief PDF from an HTML source via headless Chrome: per-page overflow measurement, cache-proof rendering, preview PNGs. Brand name, palette and footer are config tokens at the top of the template.",
+  "author": {
+    "name": "SunflowersLwtech"
+  },
+  "repository": "https://github.com/SunflowersLwtech/sunkit",
+  "keywords": ["pdf", "brief", "one-pager", "proposal", "chrome"],
+  "skills": "./skills/"
+}

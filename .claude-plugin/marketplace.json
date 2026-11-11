@@ -125,6 +125,20 @@
       "description": "Subagents that hand a task to Antigravity (two accounts), OpenCode Zen's free models, ZCode, or any model on the magpie gateway, each in its own official client.",
       "category": "agents",
       "keywords": ["subagents", "antigravity", "opencode", "zcode", "magpie"]
+    },
+    {
+      "name": "brief-pdf",
+      "source": "./plugins/brief-pdf",
+      "description": "Polished A4 brief PDFs from an HTML source via headless Chrome, with the two proofs hand-built PDFs skip: per-page overflow measurement (refuses to write when a footer would clip) and cache-proof rendering through never-fetched URLs. Brand, palette and footer are template config tokens.",
+      "category": "documents",
+      "keywords": ["pdf", "brief", "one-pager", "proposal", "chrome"]
+    },
+    {
+      "name": "web-deploy",
+      "source": "./plugins/web-deploy",
+      "description": "Deploy a web app to Vercel or Render and manage its env vars through APIs and GitHub Actions instead of clicking a dashboard: one-token Vercel + Actions setup, Vercel REST env/deploy state, Render GHCR-image services with commit-tagged releases, Supabase migration-ledger repair, and proving the live site is the commit you pushed.",
+      "category": "devops",
+      "keywords": ["deploy", "vercel", "render", "supabase", "github-actions"]
     }
   ]
 }
