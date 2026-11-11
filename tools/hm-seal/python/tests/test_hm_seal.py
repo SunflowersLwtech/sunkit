@@ -89,6 +89,8 @@ def test_stored_data_opens_only_with_its_key_and_purpose_and_recovers():
         hm_seal.DataKey.unwrap_from_recovery(bytes(32), wrapped)
     with pytest.raises((ValueError, TypeError)):
         key.wrap_for_recovery(b"too short")
+    with pytest.raises((ValueError, TypeError)):
+        key.wrap_for_recovery(bytes(range(33)))
 
 
 def test_a_member_can_be_used_from_another_thread():
@@ -123,3 +125,17 @@ def test_a_damaged_save_raises_seal_error_not_a_panic():
     body = saved[:-32]
     with pytest.raises(hm_seal.SealError):
         hm_seal.Member.load(bytes(body) + hashlib.sha256(body).digest())
+
+
+def test_members_name_each_device_by_its_leaf_after_one_leaves_from_the_middle():
+    phone, room, laptop = trio()
+    commit = phone.remove(leaf_of(phone, b"room"))
+    laptop.handle(commit)
+    assert {name: leaf for leaf, name in phone.members()} == {
+        b"phone": phone.leaf_index(),
+        b"laptop": laptop.leaf_index(),
+    }
+    second = phone.remove(leaf_of(phone, b"laptop"))
+    with pytest.raises(hm_seal.Removed):
+        laptop.handle(second)
+    assert [name for _, name in phone.members()] == [b"phone"]

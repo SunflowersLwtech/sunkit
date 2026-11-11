@@ -99,7 +99,45 @@ test("stored data opens only with its key and purpose; the recovery secret unwra
   assert.deepEqual(s.DataKey.unwrapFromRecovery(secret, wrapped).toBytes(), key.toBytes());
   refusal(() => s.DataKey.unwrapFromRecovery(new Uint8Array(32).fill(8), wrapped));
   refusal(() => key.wrapForRecovery(new Uint8Array(31)));
+  // Not cut to 32: the first 32 bytes here are the real secret.
+  refusal(() => key.wrapForRecovery(new Uint8Array(33).fill(7)));
+  refusal(() => s.DataKey.unwrapFromRecovery(new Uint8Array(33).fill(7), wrapped));
   assert.deepEqual(s.DataKey.fromBytes(key.toBytes()).toBytes(), key.toBytes());
+});
+
+test("members name each device by its leaf, also after one leaves from the middle", () => {
+  // MLS keeps a removed device's leaf empty: after the room (leaf 1) leaves,
+  // the web is still leaf 2, the second member listed.
+  const t = trio();
+  const commit = t.phone.remove(leafOf(t.phone, "room"));
+  t.web.handle(commit);
+  const leaves = Object.fromEntries(t.phone.members().map((m) => [dec(m.name), m.leaf]));
+  assert.deepEqual(leaves, { phone: t.phone.leafIndex(), web: t.web.leafIndex() });
+  const second = t.phone.remove(leafOf(t.phone, "web"));
+  refusal(() => t.web.handle(second), "Removed");
+  assert.deepEqual(t.phone.members().map((m) => dec(m.name)), ["phone"]);
+});
+
+test("bytes are taken only from a Uint8Array, never from a string or an array", () => {
+  // wasm-bindgen's glue would copy a string character by character (most to 0),
+  // so a frame sealed with the metadata "camera-a" opened with "camera-b".
+  const t = trio();
+  const opener = new s.FrameOpener();
+  t.phone.updateOpener(opener);
+  const frame = t.room.frameSealer().seal(enc("jpeg"), enc("camera-a"));
+  for (const bad of ["camera-b", [99, 97], 42, {}]) {
+    refusal(() => t.room.frameSealer().seal(enc("jpeg"), bad));
+    refusal(() => opener.open(frame, bad));
+  }
+  refusal(() => t.room.frameSealer().seal("jpeg"));
+  refusal(() => t.phone.seal("video off"));
+  refusal(() => new s.Member("phone"));
+  const key = s.DataKey.generate();
+  refusal(() => key.seal("room-event", enc("x")));
+  refusal(() => key.wrapForRecovery("7".repeat(32)));
+  assert.throws(() => t.phone.seal("x"), /must be a Uint8Array/);
+  // A Node Buffer is a Uint8Array.
+  assert.equal(dec(opener.open(frame, Buffer.from("camera-a"))), "jpeg");
 });
 
 test("a device saved and loaded goes on in the group; a damaged save is refused", () => {

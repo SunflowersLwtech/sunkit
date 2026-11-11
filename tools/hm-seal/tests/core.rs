@@ -420,3 +420,20 @@ fn a_remove_and_an_add_in_one_commit_still_drop_the_previous_epoch() {
         got.map(|p| String::from_utf8_lossy(&p).into_owned())
     );
 }
+
+#[test]
+fn members_name_each_device_by_its_leaf_after_one_leaves_from_the_middle() {
+    // MLS keeps a removed device's leaf empty: after the room (leaf 1) leaves,
+    // the laptop is still leaf 2, the second member listed.
+    let mut t = trio();
+    let commit = t.phone.remove(leaf_of(&t.phone, b"room")).unwrap();
+    t.laptop.handle(&commit).unwrap();
+    let listed: Vec<(Vec<u8>, u32)> = t.phone.members().unwrap().into_iter().map(|(leaf, name)| (name, leaf)).collect();
+    let own = vec![
+        (b"phone".to_vec(), t.phone.leaf_index().unwrap()),
+        (b"laptop".to_vec(), t.laptop.leaf_index().unwrap()),
+    ];
+    assert_eq!(listed, own);
+    let second = t.phone.remove(leaf_of(&t.phone, b"laptop")).unwrap();
+    assert!(matches!(t.laptop.handle(&second), Err(SealError::Removed)));
+}
