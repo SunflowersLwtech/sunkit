@@ -23,11 +23,11 @@ function trio() {
   const room = new s.Member(enc("room"));
   const web = new s.Member(enc("web"));
   phone.createGroup(enc("account-1"));
-  let added = phone.add(room.keyPackage());
-  room.join(added.welcome);
-  added = phone.add(web.keyPackage());
+  let added = phone.add(room.keyPackage(), room.signatureKey());
+  room.join(added.welcome, phone.signatureKey());
+  added = phone.add(web.keyPackage(), web.signatureKey());
   assert.deepEqual(room.handle(added.commit), { kind: "commit", epoch: 2 });
-  web.join(added.welcome);
+  web.join(added.welcome, phone.signatureKey());
   return { phone, room, web };
 }
 
@@ -44,12 +44,14 @@ test("every device reads the others and knows who sent", () => {
     const got = other.handle(msg);
     assert.equal(got.kind, "application");
     assert.equal(got.sender, t.phone.leafIndex());
+    assert.deepEqual(got.senderKey, t.phone.signatureKey());
     assert.equal(dec(got.bytes), "video off");
   }
   // The phone is leaf 0: a sender from another leaf tells a real sender from a constant.
   const fromRoom = t.web.handle(t.room.seal(enc("motion")));
   assert.notEqual(t.room.leafIndex(), 0);
   assert.equal(fromRoom.sender, t.room.leafIndex());
+  assert.deepEqual(fromRoom.senderKey, t.room.signatureKey());
   assert.equal(typeof t.web.epoch(), "number");
   assert.deepEqual(t.web.members().map((m) => dec(m.name)).sort(), ["phone", "room", "web"]);
 });
@@ -110,6 +112,16 @@ test("a device saved and loaded goes on in the group; a damaged save is refused"
   refusal(() => s.Member.load(cut));
 });
 
+test("pairing refuses another device on either side", () => {
+  const t = trio();
+  const tablet = new s.Member(enc("tablet"));
+  const relay = new s.Member(enc("tablet"));
+  refusal(() => t.phone.add(relay.keyPackage(), tablet.signatureKey()), "WrongDevice");
+  const byRoom = t.room.add(tablet.keyPackage(), tablet.signatureKey());
+  refusal(() => tablet.join(byRoom.welcome, t.phone.signatureKey()), "WrongDevice");
+  refusal(() => tablet.epoch());
+});
+
 test("a Python device and a browser talk to each other", () => {
   const py = process.env.HM_SEAL_PYTHON;
   assert.ok(py, "set HM_SEAL_PYTHON to a Python that has the hm_seal binding");
@@ -118,18 +130,23 @@ test("a Python device and a browser talk to each other", () => {
     const peer = (step) => execFileSync(py, ["-I", join(here, "py_peer.py"), step, d], { encoding: "utf8" });
     const web = new s.Member(enc("web"));
     writeFileSync(join(d, "web.kp"), web.keyPackage());
+    writeFileSync(join(d, "web.sigkey"), web.signatureKey());
     peer("start");
-    web.join(readFileSync(join(d, "py.welcome")));
+    web.join(readFileSync(join(d, "py.welcome")), readFileSync(join(d, "py.sigkey")));
     const got = web.handle(readFileSync(join(d, "py.msg")));
     assert.equal(dec(got.bytes), "from python");
     assert.equal(got.sender, leafOf(web, "phone"));
+    assert.ok(Buffer.from(got.senderKey).equals(readFileSync(join(d, "py.sigkey"))), "the sender key is not the phone's");
     const opener = new s.FrameOpener();
     web.updateOpener(opener);
     assert.equal(dec(opener.open(readFileSync(join(d, "py.frame")), enc("meta"))), "frame from python");
 
     writeFileSync(join(d, "web.msg"), web.seal(enc("from the browser")));
     writeFileSync(join(d, "web.frame"), web.frameSealer().seal(enc("frame from the browser"), enc("meta")));
-    assert.equal(peer("reply").trim(), `application ${web.leafIndex()} from the browser | frame from the browser`);
+    assert.equal(
+      peer("reply").trim(),
+      `application ${web.leafIndex()} ${Buffer.from(web.signatureKey()).toString("hex")} from the browser | frame from the browser`,
+    );
   } finally {
     rmSync(d, { recursive: true, force: true });
   }

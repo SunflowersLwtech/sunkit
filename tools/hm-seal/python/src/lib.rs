@@ -11,10 +11,12 @@ use seal_core as core_;
 
 create_exception!(hm_seal, SealError, PyValueError, "hm-seal refused: the message, frame, blob or save did not check out.");
 create_exception!(hm_seal, Removed, SealError, "This device was removed from its group.");
+create_exception!(hm_seal, WrongDevice, SealError, "Not the device the owner confirmed while pairing.");
 
 fn err(e: core_::SealError) -> PyErr {
     match e {
         core_::SealError::Removed => Removed::new_err(e.to_string()),
+        core_::SealError::WrongDevice => WrongDevice::new_err(e.to_string()),
         other => SealError::new_err(other.to_string()),
     }
 }
@@ -62,13 +64,16 @@ impl Member {
         lock(&self.0)?.create_group(group_id).map_err(err)
     }
 
-    fn join(&self, welcome: &[u8]) -> PyResult<()> {
-        lock(&self.0)?.join(welcome).map_err(err)
+    /// Join the group a Welcome adds this device to. `adder_signature_key` is the
+    /// key of the device that should be adding this one, as confirmed while pairing.
+    fn join(&self, welcome: &[u8], adder_signature_key: &[u8]) -> PyResult<()> {
+        lock(&self.0)?.join(welcome, adder_signature_key).map_err(err)
     }
 
-    /// Add the device whose key package this is: (commit for the others, Welcome for it).
-    fn add(&self, py: Python<'_>, key_package: &[u8]) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-        let added = lock(&self.0)?.add(key_package).map_err(err)?;
+    /// Add the device whose key package this is and whose signature key the owner
+    /// confirmed: (commit for the others, Welcome for it).
+    fn add(&self, py: Python<'_>, key_package: &[u8], signature_key: &[u8]) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+        let added = lock(&self.0)?.add(key_package, signature_key).map_err(err)?;
         Ok((bytes(py, &added.commit), bytes(py, &added.welcome)))
     }
 
@@ -81,11 +86,15 @@ impl Member {
         Ok(bytes(py, &lock(&self.0)?.seal(plaintext).map_err(err)?))
     }
 
-    /// ("application", sender leaf, bytes) or ("commit", epoch, b"").
-    fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<(&'static str, u64, Py<PyBytes>)> {
+    /// ("application", sender leaf, bytes, sender's signature key) or
+    /// ("commit", epoch, b"", b""). Leaf indices are reused after a removal:
+    /// decide by the signature key.
+    fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<(&'static str, u64, Py<PyBytes>, Py<PyBytes>)> {
         match lock(&self.0)?.handle(message).map_err(err)? {
-            core_::Incoming::Application { sender, bytes: b } => Ok(("application", u64::from(sender), bytes(py, &b))),
-            core_::Incoming::Commit { epoch } => Ok(("commit", epoch, bytes(py, b""))),
+            core_::Incoming::Application { sender, sender_key, bytes: b } => {
+                Ok(("application", u64::from(sender), bytes(py, &b), bytes(py, &sender_key)))
+            }
+            core_::Incoming::Commit { epoch } => Ok(("commit", epoch, bytes(py, b""), bytes(py, b""))),
         }
     }
 
@@ -189,5 +198,6 @@ fn hm_seal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DataKey>()?;
     m.add("SealError", m.py().get_type::<SealError>())?;
     m.add("Removed", m.py().get_type::<Removed>())?;
+    m.add("WrongDevice", m.py().get_type::<WrongDevice>())?;
     Ok(())
 }
