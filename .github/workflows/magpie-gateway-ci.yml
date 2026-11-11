@@ -1,6 +1,9 @@
-# Tests for the magpie gateway's middleware under tools/magpie-gateway/plugins.
-# The gateway runs these modules in magpie's own JavaScript engine (moejs); node is only the
-# test runner here. Until this job existed nothing in CI ran them (mesh-ci.yml runs under mesh/).
+# Tests for the magpie gateway under tools/magpie-gateway.
+# middleware: the modules under plugins/. The gateway runs them in magpie's own JavaScript
+# engine (moejs); node is only the test runner here. Until this job existed nothing in CI ran
+# them (mesh-ci.yml runs under mesh/).
+# server: the scripts under server/ (fleet-watch, glm-guard, seat-refresh, …), on Python 3.9,
+# the gateway host's own /usr/bin/python3 (Amazon Linux 2023, 3.9.25).
 name: magpie-gateway CI
 on:
   push:
@@ -39,3 +42,30 @@ jobs:
           if [ ! -e "${files[0]}" ]; then echo "no middleware tests under plugins/*/"; exit 1; fi
           echo "${#files[@]} test files: ${files[*]}"
           node --test "${files[@]}"
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/magpie-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      # Each file runs on its own with -I, as systemd runs the scripts. unittest on 3.9 exits 0
+      # when a file holds no tests, so a file whose output has no "Ran <n> tests" with n > 0
+      # fails the job, and so does an empty list.
+      - run: |
+          python3 --version
+          files=(server/*.test.py)
+          if [ ! -e "${files[0]}" ]; then echo "no server tests under server/"; exit 1; fi
+          echo "${#files[@]} test files: ${files[*]}"
+          rc=0
+          for f in "${files[@]}"; do
+            echo "== $f"
+            if ! out=$(python3 -I "$f" 2>&1); then rc=1; fi
+            printf '%s\n' "$out"
+            if ! printf '%s\n' "$out" | grep -qE '^Ran [1-9][0-9]* tests? in '; then echo "no tests ran in $f"; rc=1; fi
+          done
+          exit $rc
