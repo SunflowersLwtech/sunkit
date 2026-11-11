@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>phone-use probe</title></head>
+<body style="font:20px sans-serif;margin:16px">
+<h1 id="s">scale=1.00</h1>
+<button id="b" onclick="this.textContent='clicked'">Tap me</button>
+<p><input id="i" placeholder="type here" oninput="document.getElementById('o').textContent='echo='+this.value"></p>
+<p id="o">echo=</p>
+<div style="height:1500px;background:linear-gradient(#fff,#09f)"></div>
+<script>function u(){var t='scale='+visualViewport.scale.toFixed(2);document.getElementById('s').textContent=t;document.title=t;new Image().src='/beacon?'+t+'&ts='+Date.now()}visualViewport.addEventListener('resize',u);u()</script>
+</body></html>

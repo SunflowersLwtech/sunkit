@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Acme — Topic Brief (template)</title>
+<!-- ================= REBRAND HERE (once) =================
+     1. Colors: edit the :root tokens below. Do not restyle individual rules —
+        the layout math in references/blocks.md assumes these type sizes.
+     2. Brand name: replace every <b>Acme</b> / <b>Acme Technology</b> below.
+     3. Logo: `.ring` is a CSS circle. For a real logo swap the
+        <span class="ring"></span> instances for a small <img> (~3.4 mm tall).
+     4. Footer entity line + registration/contact: replace the
+        "Reg. No. 2019-0123456 (TM-0000088)" placeholder lines in the footers
+        and the cover band at the end of page 3.                       -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    /* ---- brand tokens ---- */
+    --brand-text: #123c5e;    /* company wordmark */
+    --brand-rule: #0d3f77;    /* h1, ruled-row top border */
+    --brand-primary: #1265ae; /* gradient start: dark panel, band, cover footer */
+    --brand-deep: #0c3f74;    /* gradient end */
+    --brand-accent: #1666b0;  /* ring logo, eyebrow, small labels */
+    --page-ground: #edf2f8;   /* page background */
+    --note-accent: #e8925a;   /* caveat note left edge */
+    --arrow-accent: #f0a06a;  /* band arrow */
+  }
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #3d4b5c;
+    background: #ffffff;
+  }
+  @page { size: A4; margin: 0; }
+  .page {
+    width: 210mm; height: 297mm;
+    background: var(--page-ground);
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    display: flex; flex-direction: column;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- header ---------- */
+  .hd {
+    background: #ffffff;
+    border-bottom: 1px solid #d7e0ea;
+    padding: 9mm 12mm 6mm 12mm;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .hd .brand { display: flex; align-items: baseline; gap: 2.2mm; }
+  .hd .ring {
+    width: 3.4mm; height: 3.4mm; border: 0.9mm solid var(--brand-accent);
+    border-radius: 50%; display: inline-block; position: relative; top: 0.4mm;
+  }
+  .hd .brand b { font-size: 12.5pt; color: var(--brand-text); font-weight: 700; letter-spacing: -0.2pt; }
+  .hd .brand span { font-size: 9pt; color: #6b7d90; }
+  .hd .sect {
+    font-size: 7pt; letter-spacing: 2.2pt; color: #7d8fa3; text-transform: uppercase;
+  }
+  .hd .sect b { color: #4d6a85; }
+
+  /* ---------- body ---------- */
+  .bd { padding: 11mm 12mm 0 12mm; flex: 1; }
+  .eyebrow {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 7.5pt; letter-spacing: 2.4pt; text-transform: uppercase;
+    color: var(--brand-accent); font-weight: 600; margin-bottom: 7mm;
+  }
+  .eyebrow .num { color: #9db2c6; letter-spacing: 0.5pt; font-weight: 400; }
+  h1 {
+    font-size: 27pt; line-height: 1.16; color: var(--brand-rule); font-weight: 500;
+    letter-spacing: -0.3pt; margin-bottom: 6mm; max-width: 170mm;
+  }
+  .lede { font-size: 10pt; line-height: 1.55; color: #55677a; max-width: 162mm; margin-bottom: 8mm; }
+  .lede b { color: #2e4257; font-weight: 600; }
+
+  /* ruled fact rows */
+  .rows { border-top: 1.5px solid var(--brand-rule); }
+  .row {
+    display: flex; border-bottom: 1px solid #c4d2e0; padding: 4.6mm 0;
+  }
+  .row .k { flex: 0 0 52mm; font-size: 12.5pt; color: #0d4f8b; font-weight: 500; padding-right: 6mm; }
+  .row .k small { display: block; font-size: 7pt; letter-spacing: 1.6pt; color: #8aa0b5; text-transform: uppercase; margin-top: 1.6mm; font-weight: 600; }
+  .row .v { flex: 1; font-size: 9pt; line-height: 1.5; color: #5b6d80; align-self: center; }
+  .row .v b { color: #2e4257; font-weight: 600; }
+  .row .idx { flex: 0 0 10mm; font-size: 7.5pt; color: #a5b8ca; align-self: center; text-align: right; }
+
+  /* compact variant for the product-list page */
+  .rows.compact .row { padding: 3.1mm 0; }
+  .rows.compact .k { flex: 0 0 46mm; font-size: 10.5pt; }
+  .rows.compact .k small { margin-top: 1mm; font-size: 6.5pt; }
+  .rows.compact .v { font-size: 8.4pt; line-height: 1.45; }
+
+  /* two-panel contrast block */
+  .duo { display: flex; margin-top: 7mm; }
+  .duo .panel { padding: 7mm 7mm 7.5mm 7mm; flex: 1; }
+  .duo .panel.light { background: #ffffff; border: 1px solid #c9d6e4; }
+  .duo .panel.dark {
+    background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-deep) 100%);
+    color: #dce9f6;
+  }
+  .panel .ptag { font-size: 6.8pt; letter-spacing: 2pt; text-transform: uppercase; font-weight: 700; margin-bottom: 3.4mm; }
+  .panel.light .ptag { color: var(--brand-accent); }
+  .panel.dark .ptag { color: #9cc4e8; }
+  .panel h3 { font-size: 13.5pt; font-weight: 500; line-height: 1.25; margin-bottom: 4mm; }
+  .panel.light h3 { color: #0d4f8b; }
+  .panel.dark h3 { color: #ffffff; }
+  .panel ul { list-style: none; }
+  .panel li {
+    font-size: 8.6pt; line-height: 1.45; padding: 2.4mm 0 2.4mm 6mm; position: relative;
+    border-bottom: 1px solid rgba(140,165,190,0.25);
+  }
+  .panel li:last-child { border-bottom: none; }
+  .panel li::before { content: "\2192"; position: absolute; left: 0; color: #6da3d4; }
+  .panel.light li { color: #5b6d80; }
+  .panel.light li b { color: #2e4257; }
+  .panel.dark li { color: #d3e3f2; border-color: rgba(255,255,255,0.18); }
+  .panel.dark li b { color: #ffffff; }
+
+  /* callout band */
+  .band {
+    margin-top: 7mm;
+    background: linear-gradient(120deg, var(--brand-primary) 0%, var(--brand-deep) 100%);
+    color: #eaf2fa; padding: 6mm 8mm;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 9.5pt; line-height: 1.5;
+  }
+  .band b { color: #ffffff; }
+  .band .arr { font-size: 14pt; color: var(--arrow-accent); margin-left: 8mm; }
+  .band.plain {
+    background: #ffffff; color: #55677a; border: 1px solid #c9d6e4;
+  }
+  .band.plain b { color: #0d4f8b; }
+
+  .note {
+    margin-top: 6mm; background: #ffffff; border-left: 2.5mm solid var(--note-accent);
+    padding: 4mm 6mm; font-size: 8.4pt; line-height: 1.5; color: #5b6d80;
+  }
+  .note b { color: #2e4257; }
+
+  /* small stat strip */
+  .stats { display: flex; border: 1px solid #c9d6e4; background: #ffffff; margin-top: 7mm; }
+  .stats .st { flex: 1; padding: 5mm 6mm; border-right: 1px solid #dbe4ee; }
+  .stats .st:last-child { border-right: none; }
+  .stats .st .t { font-size: 7pt; letter-spacing: 1.8pt; text-transform: uppercase; color: var(--brand-accent); font-weight: 700; margin-bottom: 2mm; }
+  .stats .st .d { font-size: 8.8pt; line-height: 1.45; color: #5b6d80; }
+  .stats .st .d b { color: #2e4257; }
+
+  /* ---------- footer ---------- */
+  .ft {
+    border-top: 1px solid #c9d6e4;
+    padding: 5mm 12mm 7mm 12mm;
+    display: flex; justify-content: space-between;
+    font-size: 7pt; letter-spacing: 1.6pt; text-transform: uppercase; color: #8aa0b5;
+  }
+  .ft b { color: #57728c; font-weight: 600; }
+  .ft.coverft {
+    background: linear-gradient(120deg, var(--brand-primary) 0%, var(--brand-deep) 100%);
+    border-top: none; color: #bcd4ea; padding-top: 6mm; padding-bottom: 8mm;
+  }
+  .ft.coverft b { color: #ffffff; }
+</style>
+</head>
+<body>
+
+<!-- ============================ PAGE 1 · COVER (4 rows + coverft) ============================ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand"><span class="ring"></span><b>Acme</b><span>/ Company</span></div>
+    <div class="sect">Topic Brief&nbsp;&nbsp;&nbsp;/01</div>
+  </div>
+  <div class="bd">
+    <div class="eyebrow"><span>Eyebrow Label &middot; Context</span><span class="num">/01</span></div>
+    <h1>HEADLINE</h1>
+    <p class="lede">One paragraph that says what this brief is, who it is for and the single
+    idea the reader should leave with. <b>Bold the one clause that matters.</b></p>
+
+    <div class="rows">
+      <div class="row">
+        <div class="k">Fact<small>Label</small></div>
+        <div class="v"><b>Lead phrase</b> &mdash; supporting sentence with a checkable value.</div>
+        <div class="idx">/0.1</div>
+      </div>
+      <div class="row">
+        <div class="k">Fact<small>Label</small></div>
+        <div class="v"><b>Lead phrase</b> &mdash; supporting sentence.</div>
+        <div class="idx">/0.2</div>
+      </div>
+      <div class="row">
+        <div class="k">Fact<small>Label</small></div>
+        <div class="v"><b>Lead phrase</b> &mdash; supporting sentence.</div>
+        <div class="idx">/0.3</div>
+      </div>
+      <div class="row">
+        <div class="k">Fact<small>Label</small></div>
+        <div class="v"><b>Lead phrase</b> &mdash; supporting sentence.</div>
+        <div class="idx">/0.4</div>
+      </div>
+    </div>
+  </div>
+  <!-- edit: real entity name + registration/legal identifier -->
+  <div class="ft coverft">
+    <span style="white-space:nowrap"><b>Acme Technology</b> &middot; Reg. No. 2019-0123456 (TM-0000088)</span>
+    <span style="white-space:nowrap">Month 2026 &nbsp;&middot;&nbsp; Prepared for Recipient</span>
+  </div>
+</div>
+
+<!-- ============================ PAGE 2 · CONTRAST (3 rows + duo + band) ============================ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand"><span class="ring"></span><b>Acme</b><span>/ Company</span></div>
+    <div class="sect">Section Name&nbsp;&nbsp;&nbsp;/02</div>
+  </div>
+  <div class="bd">
+    <div class="eyebrow"><span>Eyebrow Label</span><span class="num">/02</span></div>
+    <h1>Two-line headline that states<br>the page's claim.</h1>
+    <p class="lede">Two sentences of context. Keep it to two lines.</p>
+
+    <div class="rows">
+      <div class="row">
+        <div class="k">Item<small>domain &middot; date</small></div>
+        <div class="v">What it is and the one fact that makes it <b>verifiable</b>.</div>
+        <div class="idx">/0.1</div>
+      </div>
+      <div class="row">
+        <div class="k">Item<small>domain &middot; date</small></div>
+        <div class="v">What it is and the one fact that makes it verifiable.</div>
+        <div class="idx">/0.2</div>
+      </div>
+      <div class="row">
+        <div class="k">Item<small>identifier</small></div>
+        <div class="v">What it is and the one fact that makes it verifiable.</div>
+        <div class="idx">/0.3</div>
+      </div>
+    </div>
+
+    <div class="duo">
+      <div class="panel light">
+        <div class="ptag">Where we are now</div>
+        <h3>Short claim</h3>
+        <ul>
+          <li>Running fact, with <b>the mechanism</b>.</li>
+          <li>Running fact.</li>
+          <li>Running fact.</li>
+        </ul>
+      </div>
+      <div class="panel dark">
+        <div class="ptag">What changes</div>
+        <h3>Short claim</h3>
+        <ul>
+          <li><b>Planned item</b> &mdash; why it fits.</li>
+          <li><b>Planned item</b> &mdash; why it fits.</li>
+          <li><b>Planned item</b> &mdash; why it fits.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="band plain">
+      <span><b>Honest scope.</b> One sentence separating what runs from what is planned.</span>
+      <span class="arr">&rarr;</span>
+    </div>
+  </div>
+  <div class="ft">
+    <span><b>Acme</b> &mdash; Topic brief</span>
+    <span>Month 2026</span>
+    <span><b>02 / 03</b></span>
+  </div>
+</div>
+
+<!-- ============================ PAGE 3 · PROJECTION (stats + 4 rows + note + band) ============================ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand"><span class="ring"></span><b>Acme</b><span>/ Company</span></div>
+    <div class="sect">Section Name&nbsp;&nbsp;&nbsp;/03</div>
+  </div>
+  <div class="bd">
+    <div class="eyebrow"><span>Eyebrow Label</span><span class="num">/03</span></div>
+    <h1>Two-line headline,<br>never three.</h1>
+    <p class="lede">Two sentences of context.</p>
+
+    <div class="stats" style="margin-top:0">
+      <div class="st"><div class="t">Today</div><div class="d"><b>Running fact</b>, two lines at most.</div></div>
+      <div class="st"><div class="t">Months 1&ndash;3</div><div class="d"><b>Planned</b>, two lines at most.</div></div>
+      <div class="st"><div class="t">Months 4&ndash;12</div><div class="d"><b>Planned</b>, two lines at most.</div></div>
+    </div>
+
+    <div class="rows" style="margin-top:7mm">
+      <div class="row">
+        <div class="k">Mar 2026<small>Registered</small></div>
+        <div class="v">Timeline entry with a date a reviewer can check.</div>
+        <div class="idx">/0.1</div>
+      </div>
+      <div class="row">
+        <div class="k">Aug 2026<small>Shipped</small></div>
+        <div class="v">Timeline entry.</div>
+        <div class="idx">/0.2</div>
+      </div>
+      <div class="row">
+        <div class="k">Sep 2026<small>Now</small></div>
+        <div class="v">Timeline entry.</div>
+        <div class="idx">/0.3</div>
+      </div>
+      <div class="row">
+        <div class="k">Q4 2026<small>Planned</small></div>
+        <div class="v">Timeline entry.</div>
+        <div class="idx">/0.4</div>
+      </div>
+    </div>
+
+    <div class="note"><b>Caveat or evidence note.</b> Prices and quotas carry a month; say
+    where the numbers come from.</div>
+
+    <!-- edit: real contact line -->
+    <div class="band" style="margin-top:6mm">
+      <span><b>Contact.</b> Name, Role &middot; you@example.com &middot; example.com</span>
+      <span class="arr">&rarr;</span>
+    </div>
+  </div>
+  <div class="ft">
+    <span><b>Acme Technology</b> &middot; Reg. No. 2019-0123456 (TM-0000088)</span>
+    <span>Month 2026</span>
+    <span><b>03 / 03</b></span>
+  </div>
+</div>
+
+</body>
+</html>

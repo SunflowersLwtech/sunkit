@@ -1,0 +1,16 @@
+{
+  "_doc": "Render service registry read by scripts/render.sh as ./services.json. Keep it next to the skill's scripts/ dir. CI (a workflow like backend-image.yml that builds the image and triggers the deploy) is the primary deploy path; this script and its entries are the fallback for when CI is unavailable. After `render.sh create <service>`, fill the returned id back into serviceId.",
+  "my-api": {
+    "repoDir": "/absolute/path/to/my-app",
+    "context": "backend",
+    "dockerfile": "backend/Dockerfile",
+    "image": "ghcr.io/YOUR_GH_ORG/my-app-api",
+    "plan": "starter",
+    "_planNote": "free tier exists but cold-starts and can be suspended; plan for paid in production",
+    "healthCheckPath": "/healthz/",
+    "envFile": "/absolute/path/to/my-api-env-vars.json",
+    "_envNote": "envFile is a JSON array of {key, value, type} entries (type: plain|encrypted); values must not sit in any committed file",
+    "customDomain": "api.example.com",
+    "serviceId": "srv-REPLACE_AFTER_CREATE"
+  }
+}
