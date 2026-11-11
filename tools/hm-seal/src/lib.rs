@@ -19,7 +19,8 @@
 //!   XChaCha20-Poly1305 with a random 24-byte nonce (RustCrypto), keys from
 //!   HKDF-SHA256 (RFC 5869).
 //!
-//! State lives in memory. Persisting a member between runs is the next step.
+//! A [`Member`] lives in memory; [`Member::save`] and [`Member::load`] carry it
+//! across a restart.
 
 use std::collections::{HashMap, HashSet};
 
@@ -54,6 +55,7 @@ pub const FRAME_INDEX_BITS: u8 = 8;
 pub const FRAME_REPLAY_TOLERANCE: usize = 128;
 
 const DATA_VERSION: u8 = 1;
+const SAVE_MAGIC: &[u8; 4] = b"HMS1";
 const RECOVERY_SALT: &[u8] = b"hm-seal recovery v1";
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +72,8 @@ pub enum SealError {
     Frame(String),
     #[error("sealed data could not be opened")]
     Open,
+    #[error("the saved state could not be read")]
+    BadSave,
 }
 
 pub type Result<T> = std::result::Result<T, SealError>;
@@ -267,6 +271,69 @@ impl Member {
             .collect())
     }
 
+    /// Everything this device needs to carry on after a restart, its private
+    /// keys included: keep it where only this device's user can read it (a file
+    /// of mode 600, the Keychain) or seal it under a key that is. Save again
+    /// after every call that changes the group or its keys (`key_package`,
+    /// `create_group`, `join`, `add`, `remove`, `seal`, `handle`), so a restart
+    /// never goes back to an older state.
+    pub fn save(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        out.extend_from_slice(SAVE_MAGIC);
+        put_field(&mut out, self.credential.credential.serialized_content());
+        put_field(&mut out, self.signer.public());
+        put_field(&mut out, self.group.as_ref().map(|g| g.group_id().as_slice()).unwrap_or(&[]));
+        let values = self.provider.storage().values.read().map_err(|_| SealError::BadSave)?;
+        let mut entries: Vec<_> = values.iter().collect();
+        entries.sort();
+        out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (k, v) in entries {
+            put_field(&mut out, k);
+            put_field(&mut out, v);
+        }
+        Ok(out)
+    }
+
+    /// A device from what [`Member::save`] wrote.
+    pub fn load(saved: &[u8]) -> Result<Self> {
+        let mut r = Reader(saved);
+        if r.take(4)? != SAVE_MAGIC {
+            return Err(SealError::BadSave);
+        }
+        let name = r.field()?.to_vec();
+        let public = r.field()?.to_vec();
+        let group_id = r.field()?.to_vec();
+        let count = u32::from_be_bytes(r.take(4)?.try_into().map_err(|_| SealError::BadSave)?);
+        let provider = OpenMlsRustCrypto::default();
+        {
+            let mut values = provider.storage().values.write().map_err(|_| SealError::BadSave)?;
+            for _ in 0..count {
+                let key = r.field()?.to_vec();
+                let value = r.field()?.to_vec();
+                values.insert(key, value);
+            }
+        }
+        if !r.0.is_empty() {
+            return Err(SealError::BadSave);
+        }
+        let signer = SignatureKeyPair::read(provider.storage(), &public, CIPHERSUITE.signature_algorithm())
+            .ok_or(SealError::BadSave)?;
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(name).into(),
+            signature_key: signer.public().into(),
+        };
+        let group = if group_id.is_empty() {
+            None
+        } else {
+            Some(
+                MlsGroup::load(provider.storage(), &GroupId::from_slice(&group_id))
+                    .map_err(mls)?
+                    .ok_or(SealError::BadSave)?,
+            )
+        };
+        Ok(Self { provider, signer, credential, group })
+    }
+
     fn frame_base_key(&self) -> Result<Vec<u8>> {
         self.group()?
             .export_secret(self.provider.crypto(), SFRAME_EXPORTER_LABEL, b"", FRAME_SUITE.key_len())
@@ -345,6 +412,29 @@ pub fn seal_frame_with_base_key(base_key: &[u8], kid: u64, counter: u64, payload
         .map_err(|e| SealError::Frame(format!("{e:?}")))?;
     let encrypted = frame.encrypt(&key).map_err(|e| SealError::Frame(format!("{e:?}")))?;
     Ok(encrypted.as_ref()[meta.len()..].to_vec())
+}
+
+fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if self.0.len() < n {
+            return Err(SealError::BadSave);
+        }
+        let (head, rest) = self.0.split_at(n);
+        self.0 = rest;
+        Ok(head)
+    }
+
+    fn field(&mut self) -> Result<&'a [u8]> {
+        let len = u32::from_be_bytes(self.take(4)?.try_into().map_err(|_| SealError::BadSave)?);
+        self.take(len as usize)
+    }
 }
 
 fn frame_bits() -> MlsKeyIdBitRange {
