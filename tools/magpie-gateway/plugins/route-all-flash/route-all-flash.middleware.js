@@ -4,34 +4,42 @@
 // uses what the body itself carries: cc-connect's append_system_prompt
 // ("刘维的个人助理…") for the Feishu assistant, and Claude Code's
 // metadata.user_id (a JSON string: device_id, account_uuid, session_id)
-// for the sessions kept on their own model.
+// for the sessions kept on their own model. Info does carry the agent
+// magpie reads from the User-Agent (ctx.agent), which names fleet-watch.
 //
-//   feishu assistant        -> group/flash-paid (DeepSeek official first,
-//                             dashscope behind it)
+//   feishu assistant        -> group/flash-paid
 //   deepseek/*, always-up,  -> untouched (real routes of their own)
 //   group/flash-paid        -> itself
 //   zcode/*                 -> untouched (the CLI's own plan)
+//   fleet-watch's health probes (ctx.agent "fleet-watch", no tools)
+//                           -> options.probe, else claude/claude-opus-5-5:
+//                             sent to group/flash-ds they landed on its
+//                             tier billed by the request (Copilot, 200 a
+//                             month) once the tiers before it were out,
+//                             one probe per group an hour, more while one
+//                             fails; a seat is billed by the token
 //   a session in options.sessions
 //                           -> its own Claude model as the claude
 //                             provider's (claude/claude-opus-5-5), so it
 //                             reaches the claude provider and, when every
 //                             seat is at its account cap, that provider's
-//                             fallback takes it (dashscope DeepSeek)
+//                             fallback takes it
 //   a session or device in options.secretary, while options.seatUntil is
 //   a moment still ahead (Date.now() < seatUntil)
 //                           -> claude/claude-opus-5-5 too: the secretary
 //                             gets a seat only while a timer renews that
 //                             lease from the seats' own 5-hour usage, so it
 //                             never eats a window on its own
-//   everything else         -> group/flash-ds (dashscope only)
+//   everything else         -> group/flash-ds
 //
 //   {"free": "group/flash-ds", "paid": "group/flash-paid",
 //    "sessions": ["<session id>", …], "secretary": ["<device or session>", …],
-//    "seatUntil": <epoch ms>, "off": false}
+//    "seatUntil": <epoch ms>, "probe": "<provider/model>", "off": false}
 
 const FREE = "group/flash-ds"
 const PAID = "group/flash-paid"
 const SEAT = "claude/claude-opus-5-5"
+const PROBE = "fleet-watch"
 const PASSTHROUGH = /^(deepseek\/|always-up|devin\/|group\/flash-paid|zcode\/|workbuddy\/|litellm-claude-api\/)/  // 11-09: cc-compactor 的压缩请求发 litellm-claude-api/*，不放行就被改写到 flash-ds（现为 WorkBuddy），专用 Haiku 通道一个都走不到
 const FEISHU = "刘维的个人助理"
 
@@ -77,12 +85,23 @@ function listed(v, x) {
   return x !== "" && Array.isArray(v) && v.indexOf(x) >= 0
 }
 
+// isProbe: one of fleet-watch's health probes (User-Agent fleet-watch/1,
+// a one-word question with no tools). A request under that name that
+// brings tools is an agent's, not a probe, and is split like any other.
+function isProbe(body, ctx) {
+  return !!ctx && ctx.agent === PROBE && !(Array.isArray(body.tools) && body.tools.length > 0)
+}
+
 export function onRequest(body, ctx) {
   const o = (ctx && ctx.options) || {}
   if (o.off) return
   if (!body || typeof body.model !== "string" || !body.model) return
   const m = body.model
   if (m === PAID || PASSTHROUGH.test(m)) return body
+  if (isProbe(body, ctx)) {
+    body.model = typeof o.probe === "string" && o.probe ? o.probe : SEAT
+    return body
+  }
   const who = whoIs(body)
   if (listed(o.sessions, who.session)) {
     const seat = seatModel(m)
