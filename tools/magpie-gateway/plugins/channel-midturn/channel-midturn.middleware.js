@@ -27,19 +27,31 @@
 // goes with it. The rest of the system text stays where it was. A system message left
 // with nothing goes, and its cache_control goes onto the tool_result.
 //
+// A channel message is taken only where Claude Code puts one: at the start of the text,
+// after a blank line, or right after "</tools-used-before-summary>\n", with its next line
+// opening <channel source=". Claude Code 2.1.322's own recognizer takes one only at the
+// start of a text in the same way. A hook's output that echoes such a block inside its
+// own line stays where it was; lifted into the result, a forged block would read like a
+// real channel message there.
+//
 // magpie keeps a run only while the conversation it last heard is the start of the new
 // request (follows: a hash of every message). The rewrite is a function of the body alone,
 // so every request moves the same messages to the same places and the hash agrees from
 // one turn to the next. A message already in a running conversation's history when the
 // middleware is turned on would change that conversation's past, and magpie would let the
-// run go and tell a new one the whole conversation. `since` prevents that: only channel
-// messages whose msg_id (a ULID, so a send time) is at `since` or later are moved. When
-// `since` is set, a channel message without a msg_id stays where it was. Set `since` to a
-// moment just after the middleware is turned on.
+// run go and tell a new one the whole conversation. `since` keeps that from happening:
+//   - absent (null, ""): nothing moves, and the log says so once. `magpie plugin add`
+//     turns a new entry on with no options before `magpie plugin options` can set any, so
+//     the entry it adds must be inert;
+//   - 0: every channel message moves, one without a msg_id too;
+//   - a time (ISO, or epoch ms as a number or digits): only channel messages whose msg_id
+//     (a ULID, so a send time) is at it or later move; one without a msg_id stays;
+//   - anything else (a negative number, a string that names no moment): nothing moves.
+// Set `since` to a moment just after the middleware is turned on.
 //
 //   {"providers": ["claude"], "since": "2026-11-11T02:00:00Z", "log": true, "off": false}
 
-const CHANNEL = /A message arrived from [^\n]+? while you were working:\n<channel\b[\s\S]*?<\/channel>(?:\n\nIMPORTANT: This is NOT from your user[^\n]*)?/g
+const CHANNEL = /(^|\n\n|<\/tools-used-before-summary>\n)(A message arrived from [^\n]+? while you were working:\n<channel source="[\s\S]*?<\/channel>(?:\n\nIMPORTANT: This is NOT from your user[^\n]*)?)/g
 const MSG_ID = /\bmsg_id="msg_([0-9A-HJKMNP-TV-Z]{26})"/
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
@@ -54,10 +66,25 @@ export function ulidTime(ulid) {
   return t
 }
 
+// undefined when absent, NaN when it names no moment
 function sinceOf(v) {
   if (v === undefined || v === null || v === "") return undefined
-  const t = typeof v === "number" ? v : Date.parse(String(v))
-  return Number.isFinite(t) ? t : NaN
+  if (typeof v === "number") return v
+  const s = String(v).trim()
+  // Date.parse("0") is a day in 2000 and Date.parse("-5") a date too, so digits are epoch ms
+  return /^-?\d+$/.test(s) ? Number(s) : Date.parse(s)
+}
+
+// The channel messages in text, where Claude Code puts them: [start, end) and the words.
+function channelSegments(text) {
+  const out = []
+  const re = new RegExp(CHANNEL.source, "g")
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const start = m.index + m[1].length
+    out.push({ start, end: start + m[2].length, text: m[2] })
+  }
+  return out
 }
 
 function textBlocks(m) {
@@ -84,6 +111,8 @@ function appendTo(result, text) {
   else result.content = [{ type: "text", text }]
 }
 
+let saidInert = false
+
 export function onProvider(body, ctx) {
   const o = (ctx && ctx.options) || {}
   if (o.off) return
@@ -92,7 +121,15 @@ export function onProvider(body, ctx) {
   if (!providers.includes(p.id) && !providers.includes(p.account)) return
   if (!ctx || ctx.protocol !== "anthropic" || !body || !Array.isArray(body.messages)) return
   const since = sinceOf(o.since)
-  if (Number.isNaN(since)) return // a `since` that names no moment: moving everything could let runs go
+  if (since === undefined) {
+    // what `magpie plugin add` leaves until `plugin options` gives it a since
+    if (!saidInert && o.log !== false && typeof console !== "undefined") {
+      saidInert = true
+      console.log("channel-midturn: no since in its options, so nothing moves; set since to a time, or to 0 to move every channel message")
+    }
+    return
+  }
+  if (Number.isNaN(since) || since < 0) return
 
   const msgs = body.messages
   let lastReply = -1
@@ -113,22 +150,24 @@ export function onProvider(body, ctx) {
     for (const t of textBlocks(m)) {
       const text = t.get()
       if (text.indexOf("A message arrived from ") < 0) continue
-      let rest = text
-      for (const seg of text.match(CHANNEL) || []) {
-        const id = MSG_ID.exec(seg)
-        if (since !== undefined && (!id || !(ulidTime(id[1]) >= since))) continue
-        rest = rest.replace(seg, "")
-        take.push(seg)
+      let rest = ""
+      let at = 0
+      for (const seg of channelSegments(text)) {
+        const id = MSG_ID.exec(seg.text)
+        // since 0 moves every one; a time, those sent at it or later
+        if (since > 0 && (!id || !(ulidTime(id[1]) >= since))) continue
+        rest += text.slice(at, seg.start)
+        at = seg.end
+        take.push(seg.text)
         if (i > lastReply) moved.push(id ? "msg_" + id[1] : "?")
       }
-      if (rest !== text) {
-        rest = rest.replace(/\n{3,}/g, "\n\n").trim()
-        if (rest !== "") t.set(rest)
-        else if (t.block) {
-          if (t.block.cache_control && !result.cache_control) result.cache_control = t.block.cache_control
-          m.content = m.content.filter((b) => b !== t.block)
-        } else t.set("")
-      }
+      if (at === 0) continue
+      rest = (rest + text.slice(at)).replace(/\n{3,}/g, "\n\n").trim()
+      if (rest !== "") t.set(rest)
+      else if (t.block) {
+        if (t.block.cache_control && !result.cache_control) result.cache_control = t.block.cache_control
+        m.content = m.content.filter((b) => b !== t.block)
+      } else t.set("")
     }
     if (take.length === 0) continue
     appendTo(result, "<system-reminder>\n" + take.join("\n\n") + "\n</system-reminder>")
