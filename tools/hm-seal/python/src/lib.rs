@@ -87,15 +87,20 @@ impl Member {
     }
 
     /// ("application", sender leaf, bytes, sender's signature key) or
-    /// ("commit", epoch, b"", b""). Leaf indices are reused after a removal:
-    /// decide by the signature key.
-    fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<(&'static str, u64, Py<PyBytes>, Py<PyBytes>)> {
-        match lock(&self.0)?.handle(message).map_err(err)? {
+    /// ("commit", epoch, committer's signature key, [keys added], [keys removed]).
+    /// Leaf indices are reused after a removal: decide by the signature key.
+    fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<Py<PyAny>> {
+        let incoming = lock(&self.0)?.handle(message).map_err(err)?;
+        let out = match incoming {
             core_::Incoming::Application { sender, sender_key, bytes: b } => {
-                Ok(("application", u64::from(sender), bytes(py, &b), bytes(py, &sender_key)))
+                ("application", u64::from(sender), bytes(py, &b), bytes(py, &sender_key)).into_pyobject(py)?
             }
-            core_::Incoming::Commit { epoch } => Ok(("commit", epoch, bytes(py, b""), bytes(py, b""))),
-        }
+            core_::Incoming::Commit { epoch, by, added, removed } => {
+                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
+                ("commit", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
+            }
+        };
+        Ok(out.into_any().unbind())
     }
 
     fn epoch(&self) -> PyResult<u64> {

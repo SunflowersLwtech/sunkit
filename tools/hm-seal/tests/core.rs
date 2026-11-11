@@ -19,7 +19,10 @@ fn trio() -> Trio {
     room.join(&added.welcome, &phone.signature_key()).unwrap();
 
     let added = phone.add(&laptop.key_package().unwrap(), &laptop.signature_key()).unwrap();
-    assert_eq!(room.handle(&added.commit).unwrap(), Incoming::Commit { epoch: 2 });
+    assert_eq!(
+        room.handle(&added.commit).unwrap(),
+        Incoming::Commit { epoch: 2, by: phone.signature_key(), added: vec![laptop.signature_key()], removed: vec![] }
+    );
     laptop.join(&added.welcome, &phone.signature_key()).unwrap();
     Trio { phone, room, laptop }
 }
@@ -436,4 +439,47 @@ fn members_name_each_device_by_its_leaf_after_one_leaves_from_the_middle() {
     assert_eq!(listed, own);
     let second = t.phone.remove(leaf_of(&t.phone, b"laptop")).unwrap();
     assert!(matches!(t.laptop.handle(&second), Err(SealError::Removed)));
+}
+
+#[test]
+fn pairing_refuses_an_empty_confirmed_key_on_either_side() {
+    // A pairing screen that failed to read the scanned key and passed no bytes.
+    let mut t = trio();
+    let tablet = Member::new(b"tablet").unwrap();
+    let got = t.phone.add(&tablet.key_package().unwrap(), &[]);
+    assert!(matches!(got, Err(SealError::WrongDevice)), "add with an empty key: {:?}", got.map(|_| ()));
+    assert_eq!(t.phone.members().unwrap().len(), 3);
+
+    let mut tablet = Member::new(b"tablet").unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    let got = tablet.join(&added.welcome, &[]);
+    assert!(matches!(got, Err(SealError::WrongDevice)), "join with an empty key: {got:?}");
+    assert!(matches!(tablet.epoch(), Err(SealError::NoGroup)));
+}
+
+#[test]
+fn a_commit_names_who_made_it_and_which_devices_it_added_and_removed() {
+    // Any member may add a device: the room camera adds one nobody confirmed on
+    // the phone. The phone cannot stop that commit, but it is told who did what.
+    let mut t = trio();
+    let stranger = Member::new(b"stranger").unwrap();
+    let by_room = t.room.add(&stranger.key_package().unwrap(), &stranger.signature_key()).unwrap();
+    let Incoming::Commit { by, added, removed, .. } = t.phone.handle(&by_room.commit).unwrap() else { panic!() };
+    assert_eq!(by, t.room.signature_key(), "the phone was not told the room made the commit");
+    assert_eq!(added, vec![stranger.signature_key()]);
+    assert!(removed.is_empty());
+
+    t.laptop.handle(&by_room.commit).unwrap();
+    let commit = t.phone.remove(leaf_of(&t.phone, b"stranger")).unwrap();
+    let Incoming::Commit { by, added, removed, .. } = t.room.handle(&commit).unwrap() else { panic!() };
+    assert_eq!((by, added), (t.phone.signature_key(), vec![]));
+    assert_eq!(removed, vec![stranger.signature_key()], "the room was not told which device was removed");
+
+    // One commit that removes the laptop and adds a tablet in its leaf names both.
+    t.laptop.handle(&commit).unwrap();
+    let tablet = Member::new(b"tablet").unwrap();
+    let laptop_key = t.laptop.signature_key();
+    let swap = t.phone.remove_and_add_in_one_commit_for_test(leaf_of(&t.phone, b"laptop"), &tablet.key_package().unwrap()).unwrap();
+    let Incoming::Commit { added, removed, .. } = t.room.handle(&swap).unwrap() else { panic!() };
+    assert_eq!((added, removed), (vec![tablet.signature_key()], vec![laptop_key]));
 }

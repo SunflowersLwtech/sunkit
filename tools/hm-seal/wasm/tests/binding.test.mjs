@@ -26,7 +26,13 @@ function trio() {
   let added = phone.add(room.keyPackage(), room.signatureKey());
   room.join(added.welcome, phone.signatureKey());
   added = phone.add(web.keyPackage(), web.signatureKey());
-  assert.deepEqual(room.handle(added.commit), { kind: "commit", epoch: 2 });
+  assert.deepEqual(room.handle(added.commit), {
+    kind: "commit",
+    epoch: 2,
+    by: phone.signatureKey(),
+    added: [web.signatureKey()],
+    removed: [],
+  });
   web.join(added.welcome, phone.signatureKey());
   return { phone, room, web };
 }
@@ -158,6 +164,26 @@ test("pairing refuses another device on either side", () => {
   const byRoom = t.room.add(tablet.keyPackage(), tablet.signatureKey());
   refusal(() => tablet.join(byRoom.welcome, t.phone.signatureKey()), "WrongDevice");
   refusal(() => tablet.epoch());
+});
+
+test("a commit names who made it and which devices it added and removed", () => {
+  // Any member may add a device; the phone is told the room camera did.
+  const t = trio();
+  const stranger = new s.Member(enc("stranger"));
+  const byRoom = t.room.add(stranger.keyPackage(), stranger.signatureKey());
+  const seen = t.phone.handle(byRoom.commit);
+  assert.deepEqual([seen.kind, seen.by, seen.added, seen.removed], ["commit", t.room.signatureKey(), [stranger.signatureKey()], []]);
+  t.web.handle(byRoom.commit);
+  const removal = t.room.handle(t.phone.remove(leafOf(t.phone, "stranger")));
+  assert.deepEqual([removal.by, removal.added, removal.removed], [t.phone.signatureKey(), [], [stranger.signatureKey()]]);
+});
+
+test("pairing refuses an empty confirmed key on either side", () => {
+  const t = trio();
+  const tablet = new s.Member(enc("tablet"));
+  refusal(() => t.phone.add(tablet.keyPackage(), new Uint8Array(0)), "WrongDevice");
+  const added = t.phone.add(tablet.keyPackage(), tablet.signatureKey());
+  refusal(() => tablet.join(added.welcome, new Uint8Array(0)), "WrongDevice");
 });
 
 test("a Python device and a browser talk to each other", () => {

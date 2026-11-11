@@ -139,8 +139,10 @@ impl Member {
         self.0.seal(&input(&plaintext, "a message")?).map_err(err)
     }
 
-    /// `{kind: "application", sender, senderKey, bytes}` or `{kind: "commit", epoch}`.
-    /// Leaf indices are reused after a removal: decide by `senderKey`.
+    /// `{kind: "application", sender, senderKey, bytes}` or
+    /// `{kind: "commit", epoch, by, added, removed}`: the committer's signature
+    /// key and those of the devices added and removed. Leaf indices are reused
+    /// after a removal: decide by `senderKey`.
     pub fn handle(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
         match self.0.handle(&input(&message, "a message")?).map_err(err)? {
             core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
@@ -149,8 +151,15 @@ impl Member {
                 ("senderKey", bytes(&sender_key)),
                 ("bytes", bytes(&b)),
             ]),
-            core_::Incoming::Commit { epoch } => {
-                object(&[("kind", JsValue::from_str("commit")), ("epoch", number(epoch))])
+            core_::Incoming::Commit { epoch, by, added, removed } => {
+                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(k)).collect::<Array>().into();
+                object(&[
+                    ("kind", JsValue::from_str("commit")),
+                    ("epoch", number(epoch)),
+                    ("by", bytes(&by)),
+                    ("added", keys(added)),
+                    ("removed", keys(removed)),
+                ])
             }
         }
     }

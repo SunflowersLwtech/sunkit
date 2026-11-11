@@ -98,11 +98,22 @@ pub enum Incoming {
     /// the next device added, so anything that decides by sender (a command,
     /// say) has to go by `sender_key`.
     Application { sender: u32, sender_key: Vec<u8>, bytes: Vec<u8> },
-    /// A commit was applied; the group is now at this epoch.
-    Commit { epoch: u64 },
+    /// A commit was applied; the group is now at this epoch. `by` is the
+    /// signature key of the device that made it, `added` and `removed` those
+    /// of the devices it added and removed. Any member may add a device, so
+    /// this is how the owner's other devices learn that, say, the room camera
+    /// added one nobody confirmed on the phone.
+    Commit { epoch: u64, by: Vec<u8>, added: Vec<Vec<u8>>, removed: Vec<Vec<u8>> },
 }
 
-/// Prints the length of an application message, never its bytes: they are plaintext.
+/// A signature key in a Debug line: public, so its first bytes are shown.
+fn key_prefix(key: &[u8]) -> String {
+    let hex: String = key.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    format!("{hex}..({} bytes)", key.len())
+}
+
+/// Prints the length of an application message, never its bytes: they are
+/// plaintext. Signature keys are public and printed by their first bytes.
 impl std::fmt::Debug for Incoming {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -112,7 +123,13 @@ impl std::fmt::Debug for Incoming {
                 sender_key.len(),
                 bytes.len()
             ),
-            Incoming::Commit { epoch } => write!(f, "Commit {{ epoch: {epoch} }}"),
+            Incoming::Commit { epoch, by, added, removed } => write!(
+                f,
+                "Commit {{ epoch: {epoch}, by: {}, added: {:?}, removed: {:?} }}",
+                key_prefix(by),
+                added.iter().map(|k| key_prefix(k)).collect::<Vec<_>>(),
+                removed.iter().map(|k| key_prefix(k)).collect::<Vec<_>>()
+            ),
         }
     }
 }
@@ -329,11 +346,27 @@ impl Member {
                 Ok(Incoming::Application { sender: leaf.u32(), sender_key, bytes: app.into_bytes() })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                // Read before merging, while the removed devices are still in the tree.
+                let key_at = |leaf: LeafNodeIndex| {
+                    group
+                        .member_at(leaf)
+                        .map(|m| m.signature_key)
+                        .ok_or_else(|| SealError::BadMessage("a commit names a device not in the group".into()))
+                };
+                let by = key_at(leaf)?;
+                let removed = staged
+                    .remove_proposals()
+                    .map(|p| key_at(p.remove_proposal().removed()))
+                    .collect::<Result<Vec<_>>>()?;
+                let added = staged
+                    .add_proposals()
+                    .map(|p| p.add_proposal().key_package().leaf_node().signature_key().as_slice().to_vec())
+                    .collect();
                 group.merge_staged_commit(provider, *staged).map_err(mls)?;
                 if !group.is_active() {
                     return Err(SealError::Removed);
                 }
-                Ok(Incoming::Commit { epoch: group.epoch().as_u64() })
+                Ok(Incoming::Commit { epoch: group.epoch().as_u64(), by, added, removed })
             }
             _ => Err(SealError::BadMessage("proposals are not used".into())),
         }
