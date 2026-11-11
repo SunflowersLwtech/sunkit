@@ -1,0 +1,24 @@
+# CI for tools/hm-seal: the encryption core's promises run as tests, offline
+# (cargo test --locked after a fetch, then with the network cut), plus clippy.
+name: hm-seal CI
+on:
+  push:
+    branches: [main]
+    paths: ['tools/hm-seal/**', '.github/workflows/hm-seal-ci.yml']
+  pull_request:
+    paths: ['tools/hm-seal/**', '.github/workflows/hm-seal-ci.yml']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/hm-seal
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      - run: cargo fetch --locked
+      - name: Tests with the network cut
+        run: sudo unshare --net -- sudo -u "$USER" env PATH="$PATH" HOME="$HOME" cargo test --locked --offline
+      - run: cargo clippy --locked --offline --all-targets -- -D warnings
