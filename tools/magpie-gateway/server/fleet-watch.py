@@ -8,6 +8,7 @@
 # 探测用专门的网关 key fleet-watch（日上限 $1 / 2M token，key 归 key-rotate 管），user-agent fleet-watch/1，
 # 在 routing 日志里 agent=fleet-watch，每天的探测次数、token、落到哪些 provider 写进 daily.jsonl。
 # 告警走 /etc/llm-gateway/ops.env 的 ntfy 中继（和 budget_alert.py 同一条）。
+# FW_DRILL=1：演练，告警标题和正文前加「[演练]」（配合 FW_ROUTING/FW_VAR 指到临时目录、FW_KEY 指到不存在的文件用）。
 import gzip, json, os, sys, time, urllib.error, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 
@@ -17,9 +18,15 @@ OPS_ENV = os.environ.get("FW_OPS_ENV", "/etc/llm-gateway/ops.env")
 KEY_FILE = os.environ.get("FW_KEY", "/etc/llm-gateway/fleet-watch.key")
 BASE = os.environ.get("FW_BASE", "http://127.0.0.1:3425")
 STATE, DAILY, LOG = VAR + "/state.json", VAR + "/daily.jsonl", VAR + "/log"
+DRILL = os.environ.get("FW_DRILL") == "1"
 TZ = timezone(timedelta(hours=8))  # routing 日志按北京时间分天
+# 11-05 起 route-all-flash 把客户端请求改写到 flash-ds（白名单外）、flash-paid（秘书）和座位（claude/…，日志里没有组），
+# 客户端已经不点前面这几个组了；long-* 10-28 删掉。
 GROUPS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1",
-          "long-opus", "long-sonnet", "long-haiku", "frontier", "always-up"]
+          "frontier", "always-up", "flash-ds", "flash-paid"]
+# 只看客户端、闲着不探的组：flash-ds 的成员里有按次计费的 Copilot（每月 200 次），闲着的探测在 Devin、Grok 都用完时
+# 正落在它上面（按 11-05..11-11 的日志算，一天最多 22 次）。这些组客户端多，坏了被动统计就报；坏了之后照样每轮探，靠探测判恢复。
+PASSIVE = {"flash-ds", "flash-paid"}
 WINDOW = 15 * 60       # 被动统计看最近多久
 BAD_N = 3              # 窗口里至少这么多次失败
 BAD_RATIO = 0.5        # 且失败占比至少这么多，才算坏
@@ -46,6 +53,8 @@ def env(path):
 
 
 def push(title, message, priority):
+    if DRILL:
+        title, message = "[演练] " + title, "[演练] " + message
     ops = env(OPS_ENV)
     body = json.dumps({"title": title, "message": message, "tags": ["magpie"], "priority": priority}).encode()
     req = urllib.request.Request(ops["NTFY_RELAY_URL"], data=body, headers={
@@ -58,8 +67,13 @@ def push(title, message, priority):
 
 
 def parse_time(s):
-    # 2026-10-27T17:13:58.866754539+08:00：纳秒截到微秒，3.9 的 fromisoformat 才认
-    return datetime.fromisoformat(s[:26] + s[-6:]).timestamp()
+    # 2026-10-27T17:13:58.866754539+08:00：纳秒截到微秒，3.9 的 fromisoformat 才认。
+    # magpie 去掉小数末尾的 0（…54.06276+08:00，约十条里一条），按固定位置截会把这种记录整条丢掉
+    base, tz = s[:-6], s[-6:]
+    if "." in base:
+        head, frac = base.split(".", 1)
+        base = head + "." + (frac + "000000")[:6]
+    return datetime.fromisoformat(base + tz).timestamp()
 
 
 def open_day(day):
@@ -194,7 +208,7 @@ def main():
             s["probe_fails"] = 0  # 探测之后客户端已经成功过，旧的探测失败不算数了
         if s["down"] and view[g]["last_ok"] > s.get("down_since", 0):
             continue  # 坏了之后客户端已经成功过，等被动统计判恢复，不用探
-        idle = now - view[g]["last_ok"] >= IDLE
+        idle = now - view[g]["last_ok"] >= IDLE and g not in PASSIVE
         if key and (idle or s["down"]) and (s["probe_fails"] or s["down"] or now - s["last_probe"] >= IDLE):
             todo.append(g)
     for g in todo:
