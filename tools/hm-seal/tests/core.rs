@@ -195,3 +195,135 @@ fn two_sealers_in_one_epoch_never_share_a_key() {
     assert_eq!(opener.open(&a, b"").unwrap(), b"jpeg");
     assert_eq!(opener.open(&b, b"").unwrap(), b"jpeg");
 }
+
+/// RFC 9605 §5.2, copied from the RFC text: the frame key's exporter call.
+const RFC_9605_EXPORTER_LINE: &str = r#"base_key = MLS-Exporter("SFrame 1.0 Base Key", "", AEAD.Nk)"#;
+/// RFC 9605 Table 1: Nk of AES_128_GCM_SHA256_128.
+const RFC_9605_NK: usize = 16;
+
+fn rfc_exporter_label() -> &'static str {
+    RFC_9605_EXPORTER_LINE.split('"').nth(1).unwrap()
+}
+
+fn kid_and_counter(frame: &[u8], meta: &[u8]) -> (u64, u64) {
+    let enc = sframe::frame::EncryptedFrame::try_with_meta_data(frame, meta).unwrap();
+    (enc.header().key_id(), enc.header().counter())
+}
+
+#[test]
+fn a_removed_device_cannot_inject_frames_after_its_removal() {
+    // The removed laptop knows the old epoch's base key. Its own stream goes on
+    // sealing under it, and it can seal under any member's KID (RFC 9605 §7.2).
+    let mut t = trio();
+    let mut laptop_stream = t.laptop.frame_sealer().unwrap();
+    let old_base = t.laptop.export_secret_for_test(rfc_exporter_label(), b"", RFC_9605_NK).unwrap();
+    let old_epoch = t.laptop.epoch().unwrap();
+    let room_leaf = u64::from(leaf_of(&t.phone, b"room"));
+    let as_room = |context: u64| (context << 12) | (room_leaf << 4) | (old_epoch % 16);
+    let mut phone_opener = FrameOpener::default();
+    t.phone.update_opener(&mut phone_opener).unwrap();
+    // While the laptop is a member this works: frames prove the group, not the sender.
+    let before = seal_frame_with_base_key(&old_base, as_room(1), 0, b"under the room's KID", b"").unwrap();
+    assert_eq!(phone_opener.open(&before, b"").unwrap(), b"under the room's KID");
+
+    let laptop = leaf_of(&t.phone, b"laptop");
+    let commit = t.phone.remove(laptop).unwrap();
+    t.room.handle(&commit).unwrap();
+    let _ = t.laptop.handle(&commit);
+    t.phone.update_opener(&mut phone_opener).unwrap();
+
+    let real = t.room.frame_sealer().unwrap().seal(b"real picture", b"").unwrap();
+    assert_eq!(phone_opener.open(&real, b"").unwrap(), b"real picture");
+    for i in 0..3 {
+        let forged = laptop_stream.seal(format!("forged picture {i}").as_bytes(), b"").unwrap();
+        let got = phone_opener.open(&forged, b"");
+        assert!(
+            got.is_err(),
+            "the owner's opener accepted frame {i} sealed by the removed laptop after its removal: {:?}",
+            got.map(|p| String::from_utf8_lossy(&p).into_owned())
+        );
+    }
+    let forged = seal_frame_with_base_key(&old_base, as_room(2), 0, b"forged as the room", b"").unwrap();
+    let got = phone_opener.open(&forged, b"");
+    assert!(
+        got.is_err(),
+        "the owner's opener accepted a frame the removed laptop sealed under the room's KID: {:?}",
+        got.map(|p| String::from_utf8_lossy(&p).into_owned())
+    );
+}
+
+#[test]
+fn a_frame_sealed_before_an_add_still_opens_after_it() {
+    // Adding a device keeps everyone who knew the old epoch's key in the group,
+    // so frames in flight across the commit are still read.
+    let mut t = trio();
+    let mut phone_opener = FrameOpener::default();
+    t.phone.update_opener(&mut phone_opener).unwrap();
+    let mut room_stream = t.room.frame_sealer().unwrap();
+    let first = room_stream.seal(b"before the add", b"").unwrap();
+    let in_flight = room_stream.seal(b"in flight across the add", b"").unwrap();
+    assert_eq!(phone_opener.open(&first, b"").unwrap(), b"before the add");
+
+    let mut tablet = Member::new(b"tablet").unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap()).unwrap();
+    t.room.handle(&added.commit).unwrap();
+    t.laptop.handle(&added.commit).unwrap();
+    tablet.join(&added.welcome).unwrap();
+    t.phone.update_opener(&mut phone_opener).unwrap();
+
+    assert_eq!(
+        phone_opener.open(&in_flight, b"").unwrap(),
+        b"in flight across the add",
+        "a frame of the previous epoch was refused after an add"
+    );
+    assert!(phone_opener.open(&first, b"").is_err(), "a frame opened twice across the add");
+    let after = t.room.frame_sealer().unwrap().seal(b"after the add", b"").unwrap();
+    assert_eq!(phone_opener.open(&after, b"").unwrap(), b"after the add");
+}
+
+#[test]
+fn a_frame_kid_carries_4_epoch_bits_then_an_8_bit_leaf() {
+    // RFC 9605 §5.2 (Figure 9): KID = context || member index (S bits) || epoch (E bits); here E = 4, S = 8.
+    let t = trio();
+    for m in [&t.phone, &t.room, &t.laptop] {
+        let frame = m.frame_sealer().unwrap().seal(b"x", b"").unwrap();
+        let (kid, ctr) = kid_and_counter(&frame, b"");
+        assert_eq!(kid & 0xf, m.epoch().unwrap() % 16, "kid {kid:#x}: epoch bits");
+        assert_eq!((kid >> 4) & 0xff, u64::from(m.leaf_index().unwrap()), "kid {kid:#x}: leaf bits");
+        assert_eq!(ctr, 0);
+    }
+}
+
+#[test]
+fn an_opener_refuses_its_own_devices_frames() {
+    // A relay reflecting a device's own frames back to it.
+    let t = trio();
+    let mut opener = FrameOpener::default();
+    t.phone.update_opener(&mut opener).unwrap();
+    let own = t.phone.frame_sealer().unwrap().seal(b"mine", b"").unwrap();
+    assert!(opener.open(&own, b"").is_err(), "the phone's opener accepted the phone's own frame");
+}
+
+#[test]
+fn the_frame_key_is_the_mls_exporter_with_the_rfc_9605_label_empty_context_and_nk() {
+    // Both ends deriving with the same wrong label, context or length would still
+    // round-trip; compare with the exporter called as the RFC text says instead.
+    let t = trio();
+    let base = t.room.export_secret_for_test(rfc_exporter_label(), b"", RFC_9605_NK).unwrap();
+    let frame = t.room.frame_sealer().unwrap().seal(b"payload", b"meta").unwrap();
+    let (kid, ctr) = kid_and_counter(&frame, b"meta");
+    let want = seal_frame_with_base_key(&base, kid, ctr, b"payload", b"meta").unwrap();
+    assert_eq!(frame, want, "the frame was not sealed under MLS-Exporter(RFC label, \"\", 16)");
+}
+
+#[test]
+fn a_received_message_prints_its_length_not_its_bytes() {
+    let secret = b"canary-5f3a".to_vec();
+    let text = format!("{:?}", Incoming::Application { sender: 1, bytes: secret.clone() });
+    let as_list = format!("{secret:?}");
+    assert!(
+        !text.contains("canary") && !text.contains(&as_list[1..as_list.len() - 1]),
+        "the plaintext is in the Debug text: {text}"
+    );
+    assert!(text.contains("11 bytes"), "{text}");
+}

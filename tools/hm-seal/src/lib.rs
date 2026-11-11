@@ -79,12 +79,24 @@ fn mls<E: std::fmt::Debug>(e: E) -> SealError {
 }
 
 /// What a device received through its group.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub enum Incoming {
     /// An application message and the leaf index of the device that sent it.
     Application { sender: u32, bytes: Vec<u8> },
     /// A commit was applied; the group is now at this epoch.
     Commit { epoch: u64 },
+}
+
+/// Prints the length of an application message, never its bytes: they are plaintext.
+impl std::fmt::Debug for Incoming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Incoming::Application { sender, bytes } => {
+                write!(f, "Application {{ sender: {sender}, {} bytes }}", bytes.len())
+            }
+            Incoming::Commit { epoch } => write!(f, "Commit {{ epoch: {epoch} }}"),
+        }
+    }
 }
 
 /// A commit adding a device, and the Welcome that device joins with.
@@ -274,20 +286,47 @@ impl Member {
         Ok(FrameSealer { key: frame_encryption_key(&base, kid)?, counter: MonotonicCounter::default() })
     }
 
-    /// Let `opener` read the other members' frames of the current epoch. The
-    /// previous epoch stays readable (frames in flight across a commit); older
-    /// ones are dropped, with their keys and replay windows.
+    /// Let `opener` read the other members' frames of the current epoch.
+    ///
+    /// The previous epoch stays readable (frames in flight across a commit) only
+    /// while every device that was in it is still in the group. A device that
+    /// left knows that epoch's base key and could seal frames under any member's
+    /// KID in it (RFC 9605 §7.2), so after a removal the previous epoch is
+    /// dropped at once. Devices are compared by signature key, because MLS gives
+    /// a removed device's leaf index to the next device added. Older epochs are
+    /// always dropped, with their keys and replay windows.
     pub fn update_opener(&self, opener: &mut FrameOpener) -> Result<()> {
-        let epoch = self.epoch()?;
-        let me = self.leaf_index()?;
-        let senders = self.members()?.into_iter().map(|(leaf, _)| leaf).filter(|leaf| *leaf != me).collect();
+        let group = self.group()?;
+        let epoch = group.epoch().as_u64();
+        let me = group.own_leaf_index();
+        let mut senders = HashSet::new();
+        let mut signers = HashSet::new();
+        for m in group.members() {
+            if m.index != me {
+                senders.insert(m.index.u32());
+            }
+            signers.insert(m.signature_key);
+        }
         let base_key = self.frame_base_key()?;
-        opener.epochs.retain(|_, e| e.epoch + 1 >= epoch);
-        opener.keys.retain(|(e, _), _| *e + 1 >= epoch);
-        opener.replay.retain(|(e, _), _| *e + 1 >= epoch);
+        opener
+            .epochs
+            .retain(|_, e| e.epoch == epoch || (e.epoch + 1 == epoch && e.signers.is_subset(&signers)));
+        let kept: HashSet<u64> = opener.epochs.values().map(|e| e.epoch).collect();
+        opener.keys.retain(|(e, _), _| kept.contains(e));
+        opener.replay.retain(|(e, _), _| kept.contains(e));
         // RFC 9605 §5.2: an epoch with the same low bits replaces the old one.
-        opener.epochs.insert(epoch % (1 << FRAME_EPOCH_BITS), OpenerEpoch { epoch, base_key, senders });
+        opener
+            .epochs
+            .insert(epoch % (1 << FRAME_EPOCH_BITS), OpenerEpoch { epoch, base_key, senders, signers });
         Ok(())
+    }
+
+    /// The group's MLS exporter with any label, context and length, so a test can
+    /// check the frame key against RFC 9605 §5.2 independently of this crate's constants.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn export_secret_for_test(&self, label: &str, context: &[u8], len: usize) -> Result<Vec<u8>> {
+        self.group()?.export_secret(self.provider.crypto(), label, context, len).map_err(mls)
     }
 }
 
@@ -295,7 +334,9 @@ fn frame_encryption_key<K: Into<sframe::header::KeyId>>(base: &[u8], kid: K) -> 
     EncryptionKey::derive_from(FRAME_SUITE, kid, base).map_err(|e| SealError::Frame(format!("{e:?}")))
 }
 
-/// RFC 9605 Appendix C known-answer check: one frame from a raw base key, KID and counter.
+/// RFC 9605 Appendix C known-answer check: one frame from a raw base key, KID and
+/// counter. Test builds only: a caller choosing the counter can repeat a nonce.
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub fn seal_frame_with_base_key(base_key: &[u8], kid: u64, counter: u64, payload: &[u8], meta: &[u8]) -> Result<Vec<u8>> {
     let key = frame_encryption_key(base_key, kid)?;
@@ -340,7 +381,10 @@ impl FrameSealer {
 struct OpenerEpoch {
     epoch: u64,
     base_key: Vec<u8>,
+    /// Leaf indices whose frames this opener accepts: every member but itself.
     senders: HashSet<u32>,
+    /// Signature keys of every member in this epoch, itself included.
+    signers: HashSet<Vec<u8>>,
 }
 
 /// Decrypts the other members' frames, refusing a frame seen before.

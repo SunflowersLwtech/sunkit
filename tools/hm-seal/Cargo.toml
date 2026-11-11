@@ -9,8 +9,8 @@ publish = false
 [dependencies]
 openmls = "=0.9.2"
 openmls_rust_crypto = "=0.6.0"
-openmls_basic_credential = "*"
-openmls_traits = "*"
+openmls_basic_credential = "=0.6.0"
+openmls_traits = "=0.6.0"
 sframe = { version = "=2.1.0", default-features = false, features = ["rust-crypto"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
@@ -19,7 +19,12 @@ rand = "0.8"
 thiserror = "2"
 tls_codec = "0.5"
 
+[features]
+# Raw-key and raw-exporter entry points for the known-answer tests; never in a shipped build.
+test-support = []
+
 [dev-dependencies]
+hm-seal = { path = ".", features = ["test-support"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"

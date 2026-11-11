@@ -1,0 +1,36 @@
+# cargo deny check: advisories, licenses, sources and bans of what hm-seal
+# ships (normal dependencies; the test-only ones are left out).
+
+[graph]
+exclude-dev = true
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues reach us only through elliptic-curve 0.13 (p256, p384, k256), pulled in by hpke-rs-rust-crypto, openmls_rust_crypto and openmls_basic_credential; elliptic-curve 0.13 pins crypto-bigint 0.5, so the fixed 0.7.6 cannot be reached. Not on this crate's path: the MLS suite is fixed to X25519 + Ed25519, frames use AES-GCM and stored data XChaCha20-Poly1305; NIST curves would only verify public signatures. Drop this once openmls_rust_crypto moves to elliptic-curve 0.14." },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained, not vulnerable; it runs at build time only (hax-lib in libcrux-sha3, pulled in by hpke-rs) and is not in the shipped code." },
+]
+
+[licenses]
+# MPL-2.0: hpke-rs, hpke-rs-crypto and hpke-rs-rust-crypto. File-level copyleft,
+# compatible with Apache-2.0 and with closed apps; shipping them means pointing to
+# their source (README, "Licenses").
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
