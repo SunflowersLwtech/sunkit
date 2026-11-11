@@ -89,19 +89,19 @@ class FleetWatch(unittest.TestCase):
 
     def test_passive_down_then_up(self):
         for _ in range(4):
-            self.rec("long-opus", 400, error="tool name invalid")
-        self.rec("long-opus", 200, ago=30)
+            self.rec("flash-ds", 400, error="tool name invalid")
+        self.rec("flash-ds", 200, ago=30)
         self.run_at()
-        self.assertEqual(self.titles(), ["magpie 分组 long-opus 坏了"])
+        self.assertEqual(self.titles(), ["magpie 分组 flash-ds 坏了"])
         self.assertIn("4 次失败、2 次成功", Fake.pushes[0]["message"])
         self.assertIn("tool name invalid", Fake.pushes[0]["message"])
         self.assertEqual(Fake.pushes[0]["priority"], 4)
         self.run_at(60)  # 还坏着：不重复告警
         self.assertEqual(len(Fake.pushes), 1)
         # 20 分钟后：失败都出了窗口，down 之后又有成功
-        self.rec("long-opus", 200, ago=-1200)
+        self.rec("flash-ds", 200, ago=-1200)
         self.run_at(1260)
-        self.assertEqual(self.titles()[1:], ["magpie 分组 long-opus 恢复"])
+        self.assertEqual(self.titles()[1:], ["magpie 分组 flash-ds 恢复"])
 
     def test_cancelled_and_streaming_are_not_failures(self):
         for _ in range(5):
@@ -127,12 +127,13 @@ class FleetWatch(unittest.TestCase):
         self.key()
         self.run_at(10)
         probed = sorted(m for m, _, _ in Fake.seen)
-        self.assertEqual(probed, sorted("group/" + g for g in fw.GROUPS if g != "frontier"))
+        active = [g for g in fw.GROUPS if g != "flash-ds"]
+        self.assertEqual(probed, sorted("group/" + g for g in active if g != "frontier"))
         self.assertTrue(all(k == "k-test" and ua == "fleet-watch/1" for _, k, ua in Fake.seen))
         self.run_at(600)  # 一小时内不再探
-        self.assertEqual(len(Fake.seen), len(fw.GROUPS) - 1)
+        self.assertEqual(len(Fake.seen), len(active) - 1)
         self.run_at(10 + 3600)
-        self.assertEqual(len(Fake.seen), 2 * (len(fw.GROUPS) - 1) + 1)  # 一小时后 frontier 也闲了
+        self.assertEqual(len(Fake.seen), 2 * (len(active) - 1) + 1)  # 一小时后 frontier 也闲了
         self.assertEqual(Fake.pushes, [])
 
     def test_probe_failures_alert_and_recover(self):
@@ -181,32 +182,105 @@ class FleetWatch(unittest.TestCase):
         shutil.rmtree(fw.ROUTING)
         os.makedirs(fw.ROUTING)
         for g in fw.GROUPS:
-            if g != "long-haiku":
+            if g != "claude-haiku-5-5":
                 self.rec(g, 200, ago=-5000)  # 整个测试期间别的组都不闲
         self.key()
-        Fake.fail = {"group/long-haiku"}
+        Fake.fail = {"group/claude-haiku-5-5"}
         self.run_at()
-        self.rec("long-haiku", 200, ago=-60)  # 探测之后一分钟，客户端成功
+        self.rec("claude-haiku-5-5", 200, ago=-60)  # 探测之后一分钟，客户端成功
         self.run_at(120)
         self.run_at(60 + 3600 + 10)
-        self.assertEqual([m for m, _, _ in Fake.seen], ["group/long-haiku"] * 2)
+        self.assertEqual([m for m, _, _ in Fake.seen], ["group/claude-haiku-5-5"] * 2)
         self.assertEqual(Fake.pushes, [])
 
     def test_down_group_with_recent_success_still_probed(self):
         # 坏了以后客户端不再来：即使一小时内有过成功，也要每轮探，靠探测判恢复
         for _ in range(4):
-            self.rec("long-sonnet", 500)
+            self.rec("flash-paid", 500)
         self.key()
         self.run_at()
-        self.assertEqual(self.titles(), ["magpie 分组 long-sonnet 坏了"])
+        self.assertEqual(self.titles(), ["magpie 分组 flash-paid 坏了"])
         self.assertEqual(Fake.seen, [])
-        Fake.fail = {"group/long-sonnet"}
+        Fake.fail = {"group/flash-paid"}
         self.run_at(1200)  # 失败已出窗口，但探测仍失败
-        self.assertEqual([m for m, _, _ in Fake.seen], ["group/long-sonnet"])
+        self.assertEqual([m for m, _, _ in Fake.seen], ["group/flash-paid"])
         self.assertEqual(len(Fake.pushes), 1)
         Fake.fail = set()
         self.run_at(1500)
-        self.assertEqual(self.titles()[1:], ["magpie 分组 long-sonnet 恢复"])
+        self.assertEqual(self.titles()[1:], ["magpie 分组 flash-paid 恢复"])
+
+    def test_groups_are_the_routes_clients_take(self):
+        # route-all-flash 之后客户端落在 flash-ds、flash-paid；long-* 10-28 删了
+        self.assertIn("flash-ds", fw.GROUPS)
+        self.assertIn("flash-paid", fw.GROUPS)
+        self.assertEqual([g for g in fw.GROUPS if g.startswith("long-")], [])
+
+    def test_idle_flash_ds_is_not_probed_but_flash_paid_is(self):
+        # flash-ds 闲着时的探测会落在按次计费的 Copilot 上：闲着只看日志，不探。
+        # flash-paid 一小时常只有几个请求，被动统计报不出来，闲着照常探（成员按 token 计费或预付）
+        shutil.rmtree(fw.ROUTING)
+        os.makedirs(fw.ROUTING)
+        self.key()
+        self.run_at()
+        self.run_at(3700)
+        probed = [m for m, _, _ in Fake.seen]
+        self.assertNotIn("group/flash-ds", probed)
+        self.assertEqual(probed.count("group/flash-paid"), 2)
+        self.assertIn("group/claude-opus-5-5", probed)  # 别的组照常探，这条测试不是因为没 key 才空
+        self.assertEqual(Fake.pushes, [])
+
+    def test_sparse_failing_flash_paid_alerts_by_probe(self):
+        # 11-11：flash-paid 一小时 6 个请求全失败，15 分钟里凑不够 3 次，被动统计不报；探测连续 2 次失败就报
+        shutil.rmtree(fw.ROUTING)
+        os.makedirs(fw.ROUTING)
+        for g in fw.GROUPS:
+            if g != "flash-paid":
+                self.rec(g, 200, ago=-5000)
+        self.rec("flash-paid", 402, ago=1500)
+        self.rec("flash-paid", 402, ago=1000)
+        self.key()
+        Fake.fail = {"group/flash-paid"}
+        self.run_at()
+        self.assertEqual(Fake.pushes, [])
+        self.run_at(300)
+        self.assertEqual(self.titles(), ["magpie 分组 flash-paid 坏了"])
+        self.assertIn("连续 2 次探测失败", Fake.pushes[0]["message"])
+
+    def test_down_flash_ds_is_probed_every_run_and_recovers(self):
+        for _ in range(4):
+            self.rec("flash-ds", 429, error="Devin: usage limit reached")
+        self.key()
+        self.run_at()
+        self.assertEqual(self.titles(), ["magpie 分组 flash-ds 坏了"])
+        Fake.fail = {"group/flash-ds"}
+        self.run_at(1200)
+        self.run_at(1500)
+        self.assertEqual([m for m, _, _ in Fake.seen if m == "group/flash-ds"], ["group/flash-ds"] * 2)
+        Fake.fail = set()
+        self.run_at(1800)
+        self.assertEqual(self.titles()[1:], ["magpie 分组 flash-ds 恢复"])
+
+    def test_times_without_trailing_zeros_count(self):
+        # magpie 写 …54.06276+08:00（小数末尾的 0 去掉了）：这种记录也要算
+        t = datetime.fromtimestamp(self.now - 60, fw.TZ)
+        with open("%s/%s.jsonl" % (fw.ROUTING, t.strftime("%Y-%m-%d")), "a") as f:
+            for frac in ("06276", "5", "1234567", ""):
+                stamp = t.strftime("%Y-%m-%dT%H:%M:%S") + ("." + frac if frac else "") + "+08:00"
+                f.write(json.dumps({"time": stamp, "group": {"id": "flash-ds"}, "status": 429, "done": True}) + "\n")
+        self.run_at()
+        self.assertEqual(self.titles(), ["magpie 分组 flash-ds 坏了"])
+        self.assertIn("4 次失败", Fake.pushes[0]["message"])
+
+    def test_drill_marks_title_and_message(self):
+        for _ in range(4):
+            self.rec("flash-ds", 429)
+        fw.DRILL = True
+        try:
+            self.run_at()
+        finally:
+            fw.DRILL = False
+        self.assertEqual(self.titles(), ["[演练] magpie 分组 flash-ds 坏了"])
+        self.assertTrue(Fake.pushes[0]["message"].startswith("[演练] "))
 
     def test_daily_record_once_for_yesterday(self):
         u = [{"provider": "bedrock-glm5", "in": 900, "out": 5, "cache_read": 0, "cache_write": 0}]
