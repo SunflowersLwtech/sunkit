@@ -17,7 +17,7 @@ const cc = () => ({
 test("context_management is dropped and string content becomes a text block", () => {
   const b = onProvider(cc(), zed)
   assert.ok(b)
-  assert.equal("context_management" in b, true) // deliberately red: the CI job must fail
+  assert.equal("context_management" in b, false)
   assert.deepEqual(b.messages[0].content, [{ type: "text", text: "Use a subagent to read b.txt" }])
   assert.deepEqual(b.messages[1].content, [{ type: "text", text: "ok" }])
 })
