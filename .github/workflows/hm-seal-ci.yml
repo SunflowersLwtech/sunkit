@@ -58,3 +58,31 @@ jobs:
           echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $RUNNER_TEMP/cargo-deny.tgz" | sha256sum -c
           tar xzf "$RUNNER_TEMP/cargo-deny.tgz" -C "$RUNNER_TEMP" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
       - run: '"$RUNNER_TEMP/cargo-deny" --locked --workspace check'
+
+  wasm:
+    # The WebAssembly binding in Node, and a Python device and a browser
+    # exchanging a message and a frame, with the network cut.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/hm-seal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: rustup toolchain install stable --profile minimal --component clippy --target wasm32-unknown-unknown && rustup default stable
+      - run: cargo fetch --locked
+      - name: wasm-bindgen 0.2.130 (pinned in wasm/Cargo.toml), release binary checked against its published sha256
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/wasm-bindgen.tgz" https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl.tar.gz
+          echo "9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f  $RUNNER_TEMP/wasm-bindgen.tgz" | sha256sum -c
+          tar xzf "$RUNNER_TEMP/wasm-bindgen.tgz" -C "$RUNNER_TEMP" --strip-components=1 wasm-bindgen-0.2.130-x86_64-unknown-linux-musl/wasm-bindgen
+      - run: cargo clippy -p hm-seal-wasm --target wasm32-unknown-unknown --locked --offline -- -D warnings
+      - run: cargo build -p hm-seal-wasm --target wasm32-unknown-unknown --profile wasm --locked --offline
+      - run: '"$RUNNER_TEMP/wasm-bindgen" --target nodejs --out-dir wasm/pkg-node target/wasm32-unknown-unknown/wasm/hm_seal.wasm'
+      - run: python -m venv .venv && .venv/bin/pip install 'maturin==1.16.0'
+      - run: VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" maturin develop -m python/Cargo.toml --locked --offline
+      - name: Binding tests with the network cut
+        run: sudo unshare --net -- sudo -u "$USER" env PATH="$PATH" HM_SEAL_PYTHON="$PWD/.venv/bin/python" node --test wasm/tests/binding.test.mjs
