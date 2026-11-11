@@ -25,8 +25,10 @@ TZ = timezone(timedelta(hours=8))  # routing 日志按北京时间分天
 GROUPS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1",
           "frontier", "always-up", "flash-ds", "flash-paid"]
 # 只看客户端、闲着不探的组：flash-ds 的成员里有按次计费的 Copilot（每月 200 次），闲着的探测在 Devin、Grok 都用完时
-# 正落在它上面（按 11-05..11-11 的日志算，一天最多 22 次）。这些组客户端多，坏了被动统计就报；坏了之后照样每轮探，靠探测判恢复。
-PASSIVE = {"flash-ds", "flash-paid"}
+# 正落在它上面（按 11-05..11-11 的日志算，一天最多 22 次）。它客户端多，坏了被动统计就报；坏了之后照样每轮探，靠探测判恢复。
+# flash-paid 不在这里：成员是 DeepSeek 官方（按 token）和 ZCode（预付），探一次几十个 token；它一小时常只有几个请求，
+# 被动统计凑不够 15 分钟 3 次失败（11-11 11:2x 一小时 6 个全失败，一声没报）
+PASSIVE = {"flash-ds"}
 WINDOW = 15 * 60       # 被动统计看最近多久
 BAD_N = 3              # 窗口里至少这么多次失败
 BAD_RATIO = 0.5        # 且失败占比至少这么多，才算坏

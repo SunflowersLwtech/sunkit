@@ -127,7 +127,7 @@ class FleetWatch(unittest.TestCase):
         self.key()
         self.run_at(10)
         probed = sorted(m for m, _, _ in Fake.seen)
-        active = [g for g in fw.GROUPS if g not in ("flash-ds", "flash-paid")]
+        active = [g for g in fw.GROUPS if g != "flash-ds"]
         self.assertEqual(probed, sorted("group/" + g for g in active if g != "frontier"))
         self.assertTrue(all(k == "k-test" and ua == "fleet-watch/1" for _, k, ua in Fake.seen))
         self.run_at(600)  # 一小时内不再探
@@ -215,18 +215,36 @@ class FleetWatch(unittest.TestCase):
         self.assertIn("flash-paid", fw.GROUPS)
         self.assertEqual([g for g in fw.GROUPS if g.startswith("long-")], [])
 
-    def test_idle_flash_groups_are_not_probed(self):
-        # flash-ds 闲着时的探测会落在按次计费的 Copilot 上：闲着只看日志，不探
+    def test_idle_flash_ds_is_not_probed_but_flash_paid_is(self):
+        # flash-ds 闲着时的探测会落在按次计费的 Copilot 上：闲着只看日志，不探。
+        # flash-paid 一小时常只有几个请求，被动统计报不出来，闲着照常探（成员按 token 计费或预付）
         shutil.rmtree(fw.ROUTING)
         os.makedirs(fw.ROUTING)
         self.key()
         self.run_at()
         self.run_at(3700)
-        probed = {m for m, _, _ in Fake.seen}
+        probed = [m for m, _, _ in Fake.seen]
         self.assertNotIn("group/flash-ds", probed)
-        self.assertNotIn("group/flash-paid", probed)
+        self.assertEqual(probed.count("group/flash-paid"), 2)
         self.assertIn("group/claude-opus-5-5", probed)  # 别的组照常探，这条测试不是因为没 key 才空
         self.assertEqual(Fake.pushes, [])
+
+    def test_sparse_failing_flash_paid_alerts_by_probe(self):
+        # 11-11：flash-paid 一小时 6 个请求全失败，15 分钟里凑不够 3 次，被动统计不报；探测连续 2 次失败就报
+        shutil.rmtree(fw.ROUTING)
+        os.makedirs(fw.ROUTING)
+        for g in fw.GROUPS:
+            if g != "flash-paid":
+                self.rec(g, 200, ago=-5000)
+        self.rec("flash-paid", 402, ago=1500)
+        self.rec("flash-paid", 402, ago=1000)
+        self.key()
+        Fake.fail = {"group/flash-paid"}
+        self.run_at()
+        self.assertEqual(Fake.pushes, [])
+        self.run_at(300)
+        self.assertEqual(self.titles(), ["magpie 分组 flash-paid 坏了"])
+        self.assertIn("连续 2 次探测失败", Fake.pushes[0]["message"])
 
     def test_down_flash_ds_is_probed_every_run_and_recovers(self):
         for _ in range(4):
