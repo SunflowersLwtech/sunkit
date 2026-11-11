@@ -44,7 +44,8 @@ jobs:
           node --test "${files[@]}"
 
   server:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is 26.04, for which setup-python has no 3.9 build; 3.9.25 is built for 22.04 and 24.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: tools/magpie-gateway
@@ -52,7 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.9.25"
       # Each file runs on its own with -I, as systemd runs the scripts. unittest on 3.9 exits 0
       # when a file holds no tests, so a file whose output has no "Ran <n> tests" with n > 0
       # fails the job, and so does an empty list.
