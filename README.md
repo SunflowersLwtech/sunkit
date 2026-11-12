@@ -20,6 +20,7 @@ packaged as a plugin marketplace.
 | [searchpo](plugins/searchpo) | Skills + Command | OSS Radar search pipeline — data prep, agent harness, research/impl agents, `searchpo-full-flow` |
 | [mcp-creator-growth](https://github.com/SunflowersLwtech/mcp_creator_growth) | MCP server | Context-aware learning sidebar for AI coding assistants (Python, runs via `uvx`; independent repo) |
 | [search-harness](plugins/search-harness) | Knowledge skill | Domain knowledge and roadmap for building a search harness for coding agents |
+| [skill-forge](plugins/skill-forge) | Skill | Session-closeout audit and skill-forging rules — reconcile user asks, sweep credential residue, seven hard obligations before retiring a skill |
 | [search](plugins/search) | Skills | One search router with its member skills alongside: structured vertical search (anysearch), Exa MCP search/fetch and the vendored exa research/agent skills, and verbatim page retrieval |
 | [obsidian-wiki](plugins/obsidian-wiki) | Skill | Use an Obsidian vault as the agent's long-term memory — recall before answering, indexed writes, self-correcting wiki, multi-device sync lessons |
 | [mesh](mesh) | Channel plugin + relay | `list_agents` / `send_message` between Claude Code sessions on different accounts and machines, through a self-hosted relay |
