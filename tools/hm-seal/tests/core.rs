@@ -633,3 +633,29 @@ fn a_removed_admin_paired_again_with_its_old_keys_is_an_ordinary_device() {
         assert_eq!(got, both, "an add dropped an admin that is still in the group");
     }
 }
+
+#[test]
+fn a_removed_device_cannot_commit_an_add() {
+    // The public add stops a removed admin at the admin rule; the test-only add,
+    // which skips that rule, reaches commit_add, whose own check is then all that
+    // stands between it and OpenMLS (which panics on a removed member's commit).
+    let mut phone = Member::new(b"phone").unwrap();
+    let mut laptop = Member::new(b"laptop").unwrap();
+    phone.create_group(b"account-1").unwrap();
+    let added = phone.add(&laptop.key_package().unwrap(), &laptop.signature_key()).unwrap();
+    laptop.join(&added.welcome, &phone.signature_key()).unwrap();
+    let promote = phone.make_admin(&laptop.signature_key()).unwrap();
+    laptop.handle(&promote).unwrap();
+    let out = laptop.remove(leaf_of(&laptop, b"phone")).unwrap();
+    assert!(matches!(phone.handle(&out), Err(SealError::Removed)), "control: the phone was removed");
+
+    let tablet = Member::new(b"tablet").unwrap();
+    let got = phone.add(&tablet.key_package().unwrap(), &tablet.signature_key());
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the removed admin's add: {:?}", got.map(|_| ()));
+    let kp = tablet.key_package().unwrap();
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| phone.add_ignoring_admins_for_test(&kp).map(|_| ())));
+    assert!(
+        matches!(&got, Ok(Err(SealError::Mls(m))) if m == "the group cannot take a commit now"),
+        "a removed device's add reached OpenMLS: {got:?}"
+    );
+}
