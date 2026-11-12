@@ -118,6 +118,21 @@ its leaf index, which MLS gives to the next device added). A command from any
 other member is refused. So a second room device can't operate this one, and a
 second browser has to be made an admin first.
 
+The device answers a sealed command with a sealed message too:
+
+```json
+{"t": "reply", "msg": {"type": "ack", "req": "…", "ok": true, "state": {…}}}
+```
+
+`msg` is exactly what the device would otherwise have sent in plaintext: the
+`ack` of §2 (with the whole state), or the `announce_result` of §4c. A command
+from a device that is not an admin, or one that does not open, gets no answer.
+
+A page may seal a command for an epoch the device hasn't reached yet (the commit
+is in the log, but the device hasn't read it). OpenMLS refuses such a message
+before decrypting it, so the device keeps it for up to 60 seconds (16 at most),
+reads the log on, and tries it again after each commit it applies.
+
 ## Sealed with the data key: events and the last state
 
 A sealed event's `body` (§9.3), and the state the device sends with `keep`
@@ -146,6 +161,53 @@ A live frame (§9.1) is `0x01` ‖ the output of hm-seal's `FrameSealer.seal(jpe
 meta)`, with `meta` = `"hm-room frame v1"` ‖ 0x00 ‖ device id. `meta` is
 authenticated, not sent: a page opens the frame with the same `meta` and a
 `FrameOpener` it updates after every commit.
+
+## On the device: the connector with encryption on
+
+In room-companion's config, under `hipimind`:
+
+```json
+"e2ee": {"enabled": true, "dir": "~/.config/room-companion/e2ee"}
+```
+
+`dir` holds the device's keys, the account's data keys and where it is in the
+group log, readable only by this user. With it on:
+
+- The connector needs hm-seal's Python binding (`hm_seal`). Without it, it does
+  not connect: it never falls back to plaintext.
+- `hello` declares `e2ee`. The plaintext `state` (in `hello`, in `state`, and in
+  a plaintext `ack`) is only the three switches.
+- Every plaintext command except `live` is refused with `sealed_only`. The
+  settings in HipiMind's `welcome` are not applied: they could point a model at a
+  server of HipiMind's choosing. HipiMind's cloud models are not used, because a
+  request carries the frame or the audio in plaintext.
+- Events go out as `sealed_event` (a reminder with `remind: true`). Until a data
+  key arrives they wait, and go out as soon as one does. The whole state goes out
+  sealed with `keep` whenever it changes.
+- Live frames go out sealed. While the device is not in a group, none go out.
+
+**Pairing.** On the device:
+
+```
+python -m room_companion e2ee-pair --code 'hmroom1.…'
+room-companion-hipimind e2ee-pair --config ~/.config/room-companion/hipimind.json --code 'hmroom1.…'   # sidecar
+```
+
+This checks the code and leaves it in `<dir>/pairing-code` (mode 600). The
+running connector takes it the next time it is connected, deletes it at once,
+and appends the `join` request. If the connection drops before HipiMind has
+numbered the request, the same request is sent again on the next connection.
+
+**When the device leaves the group.** Its keys are deleted, and it sends nothing
+sealed until it is paired again, when:
+
+- an admin removes it;
+- HipiMind gives it a new device id (it was paired to HipiMind again);
+- HipiMind refuses its token;
+- the log no longer has the next message it needs (it was away longer than the
+  log's 30 days).
+
+It reads the group log at most 20 times a minute (HipiMind allows 30).
 
 ## What this does not protect against
 
