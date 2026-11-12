@@ -14,7 +14,7 @@ def trio():
     commit, welcome = phone.add(room.key_package(), room.signature_key())
     room.join(welcome, phone.signature_key())
     commit, welcome = phone.add(laptop.key_package(), laptop.signature_key())
-    assert room.handle(commit) == ("commit", 2, b"", b"")
+    assert room.handle(commit) == ("commit", 2, phone.signature_key(), [laptop.signature_key()], [])
     laptop.join(welcome, phone.signature_key())
     return phone, room, laptop
 
@@ -89,6 +89,8 @@ def test_stored_data_opens_only_with_its_key_and_purpose_and_recovers():
         hm_seal.DataKey.unwrap_from_recovery(bytes(32), wrapped)
     with pytest.raises((ValueError, TypeError)):
         key.wrap_for_recovery(b"too short")
+    with pytest.raises((ValueError, TypeError)):
+        key.wrap_for_recovery(bytes(range(33)))
 
 
 def test_a_member_can_be_used_from_another_thread():
@@ -123,3 +125,38 @@ def test_a_damaged_save_raises_seal_error_not_a_panic():
     body = saved[:-32]
     with pytest.raises(hm_seal.SealError):
         hm_seal.Member.load(bytes(body) + hashlib.sha256(body).digest())
+
+
+def test_members_name_each_device_by_its_leaf_after_one_leaves_from_the_middle():
+    phone, room, laptop = trio()
+    commit = phone.remove(leaf_of(phone, b"room"))
+    laptop.handle(commit)
+    assert {name: leaf for leaf, name in phone.members()} == {
+        b"phone": phone.leaf_index(),
+        b"laptop": laptop.leaf_index(),
+    }
+    second = phone.remove(leaf_of(phone, b"laptop"))
+    with pytest.raises(hm_seal.Removed):
+        laptop.handle(second)
+    assert [name for _, name in phone.members()] == [b"phone"]
+
+
+def test_pairing_refuses_an_empty_confirmed_key_on_either_side():
+    phone, _, _ = trio()
+    tablet = hm_seal.Member(b"tablet")
+    with pytest.raises(hm_seal.WrongDevice):
+        phone.add(tablet.key_package(), b"")
+    _, welcome = phone.add(tablet.key_package(), tablet.signature_key())
+    with pytest.raises(hm_seal.WrongDevice):
+        tablet.join(welcome, b"")
+
+
+def test_a_commit_names_who_made_it_and_which_devices_it_added_and_removed():
+    # Any member may add a device; the phone is told the room camera did.
+    phone, room, laptop = trio()
+    stranger = hm_seal.Member(b"stranger")
+    commit, _ = room.add(stranger.key_package(), stranger.signature_key())
+    assert phone.handle(commit) == ("commit", 3, room.signature_key(), [stranger.signature_key()], [])
+    laptop.handle(commit)
+    removal = phone.remove(leaf_of(phone, b"stranger"))
+    assert room.handle(removal) == ("commit", 4, phone.signature_key(), [], [stranger.signature_key()])

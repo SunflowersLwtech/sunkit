@@ -1,5 +1,5 @@
 //! WebAssembly binding of hm-seal, for the browser. Bytes go in and come out
-//! as `Uint8Array`. A refusal throws an `Error` whose `name` is "SealError",
+//! as `Uint8Array`, and only a `Uint8Array` is taken as bytes. A refusal throws an `Error` whose `name` is "SealError",
 //! "Removed" when this device was removed from its group, or "WrongDevice"
 //! when pairing met a device other than the one the owner confirmed.
 
@@ -42,8 +42,44 @@ fn number(epoch: u64) -> JsValue {
     JsValue::from_f64(epoch as f64)
 }
 
-fn secret(raw: &[u8]) -> Result<[u8; 32]> {
-    raw.try_into().map_err(|_| refused("a recovery secret is 32 bytes"))
+/// The bytes in `value`, which must be a `Uint8Array` (a Node `Buffer` is one).
+/// wasm-bindgen's own glue would copy anything array-like with
+/// `Uint8Array.prototype.set`, so a string arrived as other bytes, each
+/// character its numeric value and most of them 0: a frame sealed with the
+/// metadata "camera-a" opened with "camera-b".
+fn input(value: &JsValue, what: &str) -> Result<Vec<u8>> {
+    value
+        .dyn_ref::<Uint8Array>()
+        .map(Uint8Array::to_vec)
+        .ok_or_else(|| refused(&format!("{what} must be a Uint8Array")))
+}
+
+/// As `input`, with `undefined` or `null` meaning no bytes.
+fn optional(value: &JsValue, what: &str) -> Result<Vec<u8>> {
+    if value.is_undefined() || value.is_null() {
+        Ok(Vec::new())
+    } else {
+        input(value, what)
+    }
+}
+
+/// A leaf index, which must be a whole Number from 0 to 2^32 - 1. Taken as a
+/// `u32`, wasm-bindgen's glue converts with `>>> 0` and no check, so
+/// `undefined`, `null` and `NaN` became leaf 0 (the phone that started the
+/// group) and `1.5` became leaf 1.
+fn leaf_index(value: &JsValue) -> Result<u32> {
+    value
+        .as_f64()
+        // NaN and the infinities fail `fract() == 0.0`.
+        .filter(|n| n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(n))
+        .map(|n| n as u32)
+        .ok_or_else(|| refused("a leaf is a whole number from 0 to 4294967295"))
+}
+
+fn secret(value: &JsValue) -> Result<[u8; 32]> {
+    input(value, "a recovery secret")?
+        .try_into()
+        .map_err(|_| refused("a recovery secret is 32 bytes"))
 }
 
 /// One device's place in its owner's MLS group.
@@ -53,13 +89,13 @@ pub struct Member(core_::Member);
 #[wasm_bindgen]
 impl Member {
     #[wasm_bindgen(constructor)]
-    pub fn new(name: &[u8]) -> Result<Member> {
-        Ok(Self(core_::Member::new(name).map_err(err)?))
+    pub fn new(#[wasm_bindgen(unchecked_param_type = "Uint8Array")] name: JsValue) -> Result<Member> {
+        Ok(Self(core_::Member::new(&input(&name, "name")?).map_err(err)?))
     }
 
     /// A device from what `save()` wrote.
-    pub fn load(saved: &[u8]) -> Result<Member> {
-        Ok(Self(core_::Member::load(saved).map_err(err)?))
+    pub fn load(#[wasm_bindgen(unchecked_param_type = "Uint8Array")] saved: JsValue) -> Result<Member> {
+        Ok(Self(core_::Member::load(&input(&saved, "a save")?).map_err(err)?))
     }
 
     /// Everything this device needs after a reload, private keys included:
@@ -79,45 +115,64 @@ impl Member {
     }
 
     #[wasm_bindgen(js_name = createGroup)]
-    pub fn create_group(&mut self, group_id: &[u8]) -> Result<()> {
-        self.0.create_group(group_id).map_err(err)
+    pub fn create_group(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] group_id: JsValue) -> Result<()> {
+        self.0.create_group(&input(&group_id, "a group id")?).map_err(err)
     }
 
     /// Join the group a Welcome adds this device to. `adderSignatureKey` is the
     /// key of the device that should be adding this one, as confirmed while pairing.
-    pub fn join(&mut self, welcome: &[u8], adder_signature_key: &[u8]) -> Result<()> {
-        self.0.join(welcome, adder_signature_key).map_err(err)
+    pub fn join(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] welcome: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] adder_signature_key: JsValue,
+    ) -> Result<()> {
+        let (welcome, adder) = (input(&welcome, "a Welcome")?, input(&adder_signature_key, "a signature key")?);
+        self.0.join(&welcome, &adder).map_err(err)
     }
 
     /// Add the device whose key package this is and whose signature key the
     /// owner confirmed: `{commit, welcome}`, the commit for the others and the
     /// Welcome for it.
-    pub fn add(&mut self, key_package: &[u8], signature_key: &[u8]) -> Result<Object> {
-        let added = self.0.add(key_package, signature_key).map_err(err)?;
+    pub fn add(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] key_package: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] signature_key: JsValue,
+    ) -> Result<Object> {
+        let (key_package, key) = (input(&key_package, "a key package")?, input(&signature_key, "a signature key")?);
+        let added = self.0.add(&key_package, &key).map_err(err)?;
         object(&[("commit", bytes(&added.commit)), ("welcome", bytes(&added.welcome))])
     }
 
     /// Remove the device at this leaf index: the commit for the remaining members.
-    pub fn remove(&mut self, leaf: u32) -> Result<Vec<u8>> {
-        self.0.remove(leaf).map_err(err)
+    pub fn remove(&mut self, #[wasm_bindgen(unchecked_param_type = "number")] leaf: JsValue) -> Result<Vec<u8>> {
+        self.0.remove(leaf_index(&leaf)?).map_err(err)
     }
 
-    pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        self.0.seal(plaintext).map_err(err)
+    pub fn seal(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] plaintext: JsValue) -> Result<Vec<u8>> {
+        self.0.seal(&input(&plaintext, "a message")?).map_err(err)
     }
 
-    /// `{kind: "application", sender, senderKey, bytes}` or `{kind: "commit", epoch}`.
-    /// Leaf indices are reused after a removal: decide by `senderKey`.
-    pub fn handle(&mut self, message: &[u8]) -> Result<Object> {
-        match self.0.handle(message).map_err(err)? {
+    /// `{kind: "application", sender, senderKey, bytes}` or
+    /// `{kind: "commit", epoch, by, added, removed}`: the committer's signature
+    /// key and those of the devices added and removed. Leaf indices are reused
+    /// after a removal: decide by `senderKey`.
+    pub fn handle(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
+        match self.0.handle(&input(&message, "a message")?).map_err(err)? {
             core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
                 ("kind", JsValue::from_str("application")),
                 ("sender", JsValue::from(sender)),
                 ("senderKey", bytes(&sender_key)),
                 ("bytes", bytes(&b)),
             ]),
-            core_::Incoming::Commit { epoch } => {
-                object(&[("kind", JsValue::from_str("commit")), ("epoch", number(epoch))])
+            core_::Incoming::Commit { epoch, by, added, removed } => {
+                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(k)).collect::<Array>().into();
+                object(&[
+                    ("kind", JsValue::from_str("commit")),
+                    ("epoch", number(epoch)),
+                    ("by", bytes(&by)),
+                    ("added", keys(added)),
+                    ("removed", keys(removed)),
+                ])
             }
         }
     }
@@ -158,8 +213,8 @@ pub struct FrameSealer(core_::FrameSealer);
 
 #[wasm_bindgen]
 impl FrameSealer {
-    pub fn seal(&mut self, payload: &[u8], meta: Option<Vec<u8>>) -> Result<Vec<u8>> {
-        self.0.seal(payload, meta.as_deref().unwrap_or_default()).map_err(err)
+    pub fn seal(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] payload: JsValue, #[wasm_bindgen(unchecked_optional_param_type = "Uint8Array")] meta: JsValue) -> Result<Vec<u8>> {
+        self.0.seal(&input(&payload, "a frame")?, &optional(&meta, "metadata")?).map_err(err)
     }
 }
 
@@ -174,8 +229,8 @@ impl FrameOpener {
         Self(core_::FrameOpener::default())
     }
 
-    pub fn open(&mut self, frame: &[u8], meta: Option<Vec<u8>>) -> Result<Vec<u8>> {
-        self.0.open(frame, meta.as_deref().unwrap_or_default()).map_err(err)
+    pub fn open(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] frame: JsValue, #[wasm_bindgen(unchecked_optional_param_type = "Uint8Array")] meta: JsValue) -> Result<Vec<u8>> {
+        self.0.open(&input(&frame, "a frame")?, &optional(&meta, "metadata")?).map_err(err)
     }
 }
 
@@ -196,8 +251,8 @@ impl DataKey {
     }
 
     #[wasm_bindgen(js_name = fromBytes)]
-    pub fn from_bytes(raw: &[u8]) -> Result<DataKey> {
-        Ok(Self(core_::DataKey::from_bytes(raw).map_err(err)?))
+    pub fn from_bytes(#[wasm_bindgen(unchecked_param_type = "Uint8Array")] raw: JsValue) -> Result<DataKey> {
+        Ok(Self(core_::DataKey::from_bytes(&input(&raw, "a data key")?).map_err(err)?))
     }
 
     /// The raw key, to hand to another device of the same owner inside the group.
@@ -206,21 +261,25 @@ impl DataKey {
         self.0.to_bytes().to_vec()
     }
 
-    pub fn seal(&self, purpose: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
-        self.0.seal(purpose, plaintext).map_err(err)
+    pub fn seal(&self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] purpose: JsValue, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] plaintext: JsValue) -> Result<Vec<u8>> {
+        self.0.seal(&input(&purpose, "a purpose")?, &input(&plaintext, "data")?).map_err(err)
     }
 
-    pub fn open(&self, purpose: &[u8], blob: &[u8]) -> Result<Vec<u8>> {
-        self.0.open(purpose, blob).map_err(err)
+    pub fn open(&self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] purpose: JsValue, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] blob: JsValue) -> Result<Vec<u8>> {
+        self.0.open(&input(&purpose, "a purpose")?, &input(&blob, "sealed data")?).map_err(err)
     }
 
     #[wasm_bindgen(js_name = wrapForRecovery)]
-    pub fn wrap_for_recovery(&self, recovery_secret: &[u8]) -> Result<Vec<u8>> {
-        self.0.wrap_for_recovery(&secret(recovery_secret)?).map_err(err)
+    pub fn wrap_for_recovery(&self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] recovery_secret: JsValue) -> Result<Vec<u8>> {
+        self.0.wrap_for_recovery(&secret(&recovery_secret)?).map_err(err)
     }
 
     #[wasm_bindgen(js_name = unwrapFromRecovery)]
-    pub fn unwrap_from_recovery(recovery_secret: &[u8], wrapped: &[u8]) -> Result<DataKey> {
-        Ok(Self(core_::DataKey::unwrap_from_recovery(&secret(recovery_secret)?, wrapped).map_err(err)?))
+    pub fn unwrap_from_recovery(
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] recovery_secret: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")] wrapped: JsValue,
+    ) -> Result<DataKey> {
+        let wrapped = input(&wrapped, "a wrapped key")?;
+        Ok(Self(core_::DataKey::unwrap_from_recovery(&secret(&recovery_secret)?, &wrapped).map_err(err)?))
     }
 }

@@ -26,7 +26,13 @@ function trio() {
   let added = phone.add(room.keyPackage(), room.signatureKey());
   room.join(added.welcome, phone.signatureKey());
   added = phone.add(web.keyPackage(), web.signatureKey());
-  assert.deepEqual(room.handle(added.commit), { kind: "commit", epoch: 2 });
+  assert.deepEqual(room.handle(added.commit), {
+    kind: "commit",
+    epoch: 2,
+    by: phone.signatureKey(),
+    added: [web.signatureKey()],
+    removed: [],
+  });
   web.join(added.welcome, phone.signatureKey());
   return { phone, room, web };
 }
@@ -99,7 +105,71 @@ test("stored data opens only with its key and purpose; the recovery secret unwra
   assert.deepEqual(s.DataKey.unwrapFromRecovery(secret, wrapped).toBytes(), key.toBytes());
   refusal(() => s.DataKey.unwrapFromRecovery(new Uint8Array(32).fill(8), wrapped));
   refusal(() => key.wrapForRecovery(new Uint8Array(31)));
+  // Not cut to 32: the first 32 bytes here are the real secret.
+  refusal(() => key.wrapForRecovery(new Uint8Array(33).fill(7)));
+  refusal(() => s.DataKey.unwrapFromRecovery(new Uint8Array(33).fill(7), wrapped));
   assert.deepEqual(s.DataKey.fromBytes(key.toBytes()).toBytes(), key.toBytes());
+});
+
+test("members name each device by its leaf, also after one leaves from the middle", () => {
+  // MLS keeps a removed device's leaf empty: after the room (leaf 1) leaves,
+  // the web is still leaf 2, the second member listed.
+  const t = trio();
+  const commit = t.phone.remove(leafOf(t.phone, "room"));
+  t.web.handle(commit);
+  const leaves = Object.fromEntries(t.phone.members().map((m) => [dec(m.name), m.leaf]));
+  assert.deepEqual(leaves, { phone: t.phone.leafIndex(), web: t.web.leafIndex() });
+  const second = t.phone.remove(leafOf(t.phone, "web"));
+  refusal(() => t.web.handle(second), "Removed");
+  assert.deepEqual(t.phone.members().map((m) => dec(m.name)), ["phone"]);
+});
+
+test("bytes are taken only from a Uint8Array, never from a string or an array", () => {
+  // wasm-bindgen's glue would copy a string character by character (most to 0),
+  // so a frame sealed with the metadata "camera-a" opened with "camera-b".
+  const t = trio();
+  const opener = new s.FrameOpener();
+  t.phone.updateOpener(opener);
+  const frame = t.room.frameSealer().seal(enc("jpeg"), enc("camera-a"));
+  for (const bad of ["camera-b", [99, 97], 42, {}]) {
+    refusal(() => t.room.frameSealer().seal(enc("jpeg"), bad));
+    refusal(() => opener.open(frame, bad));
+  }
+  refusal(() => t.room.frameSealer().seal("jpeg"));
+  refusal(() => t.phone.seal("video off"));
+  refusal(() => new s.Member("phone"));
+  const key = s.DataKey.generate();
+  refusal(() => key.seal("room-event", enc("x")));
+  refusal(() => key.wrapForRecovery("7".repeat(32)));
+  assert.throws(() => t.phone.seal("x"), /must be a Uint8Array/);
+  // A Node Buffer is a Uint8Array.
+  assert.equal(dec(opener.open(frame, Buffer.from("camera-a"))), "jpeg");
+});
+
+test("remove() refuses a leaf that is not a whole number in range, and removes nobody", () => {
+  // wasm-bindgen's own glue turned undefined, null and NaN into leaf 0 (the phone) and 1.5 into leaf 1.
+  // undefined is what members().find(...)?.leaf gives for a device that has just left.
+  const removed = [];
+  for (const leaf of [undefined, null, NaN, 1.5, -1, 2 ** 32, Infinity, "2", 2n, [2], {}]) {
+    const t = trio();
+    const label = typeof leaf === "string" ? JSON.stringify(leaf) : typeof leaf === "bigint" ? `${leaf}n` : String(leaf);
+    let commit = null;
+    try {
+      commit = t.phone.remove(leaf);
+    } catch (e) {
+      // Refused by the leaf check itself, not by whatever leaf a conversion
+      // happened to land on (-1 saturated to 0 is the phone's own leaf).
+      assert.equal(e.name, "SealError", `remove(${label}) threw ${e.name}: ${e.message}`);
+      assert.match(e.message, /a leaf is a whole number/, `remove(${label}) was refused for another reason`);
+    }
+    if (commit) removed.push(`${label} -> a commit; the phone now lists ${JSON.stringify(t.phone.members().map((m) => dec(m.name)).sort())}`);
+    assert.deepEqual(t.phone.members().map((m) => dec(m.name)).sort(), ["phone", "room", "web"], `remove(${label})`);
+  }
+  assert.deepEqual(removed, [], "remove() took a leaf that is not a whole number in range");
+  // Control: a whole number still removes that device.
+  const t = trio();
+  t.room.handle(t.phone.remove(leafOf(t.phone, "web")));
+  assert.deepEqual(t.room.members().map((m) => dec(m.name)).sort(), ["phone", "room"]);
 });
 
 test("a device saved and loaded goes on in the group; a damaged save is refused", () => {
@@ -120,6 +190,26 @@ test("pairing refuses another device on either side", () => {
   const byRoom = t.room.add(tablet.keyPackage(), tablet.signatureKey());
   refusal(() => tablet.join(byRoom.welcome, t.phone.signatureKey()), "WrongDevice");
   refusal(() => tablet.epoch());
+});
+
+test("a commit names who made it and which devices it added and removed", () => {
+  // Any member may add a device; the phone is told the room camera did.
+  const t = trio();
+  const stranger = new s.Member(enc("stranger"));
+  const byRoom = t.room.add(stranger.keyPackage(), stranger.signatureKey());
+  const seen = t.phone.handle(byRoom.commit);
+  assert.deepEqual([seen.kind, seen.by, seen.added, seen.removed], ["commit", t.room.signatureKey(), [stranger.signatureKey()], []]);
+  t.web.handle(byRoom.commit);
+  const removal = t.room.handle(t.phone.remove(leafOf(t.phone, "stranger")));
+  assert.deepEqual([removal.by, removal.added, removal.removed], [t.phone.signatureKey(), [], [stranger.signatureKey()]]);
+});
+
+test("pairing refuses an empty confirmed key on either side", () => {
+  const t = trio();
+  const tablet = new s.Member(enc("tablet"));
+  refusal(() => t.phone.add(tablet.keyPackage(), new Uint8Array(0)), "WrongDevice");
+  const added = t.phone.add(tablet.keyPackage(), tablet.signatureKey());
+  refusal(() => tablet.join(added.welcome, new Uint8Array(0)), "WrongDevice");
 });
 
 test("a Python device and a browser talk to each other", () => {
