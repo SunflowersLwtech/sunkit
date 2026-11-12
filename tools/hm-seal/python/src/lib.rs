@@ -12,11 +12,13 @@ use seal_core as core_;
 create_exception!(hm_seal, SealError, PyValueError, "hm-seal refused: the message, frame, blob or save did not check out.");
 create_exception!(hm_seal, Removed, SealError, "This device was removed from its group.");
 create_exception!(hm_seal, WrongDevice, SealError, "Not the device the owner confirmed while pairing.");
+create_exception!(hm_seal, NotAdmin, SealError, "Only an admin device may add or remove devices or change who the admins are.");
 
 fn err(e: core_::SealError) -> PyErr {
     match e {
         core_::SealError::Removed => Removed::new_err(e.to_string()),
         core_::SealError::WrongDevice => WrongDevice::new_err(e.to_string()),
+        core_::SealError::NotAdmin => NotAdmin::new_err(e.to_string()),
         other => SealError::new_err(other.to_string()),
     }
 }
@@ -86,8 +88,11 @@ impl Member {
         Ok(bytes(py, &lock(&self.0)?.seal(plaintext).map_err(err)?))
     }
 
-    /// ("application", sender leaf, bytes, sender's signature key) or
-    /// ("commit", epoch, committer's signature key, [keys added], [keys removed]).
+    /// ("application", sender leaf, bytes, sender's signature key),
+    /// ("commit", epoch, committer's signature key, [keys added], [keys removed]),
+    /// or ("refused", epoch, ...the same) for a commit a device that is not an
+    /// admin made to add or remove a device or change the admin list:
+    /// not applied; an admin removes that device.
     /// Leaf indices are reused after a removal: decide by the signature key.
     fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<Py<PyAny>> {
         let incoming = lock(&self.0)?.handle(message).map_err(err)?;
@@ -99,12 +104,28 @@ impl Member {
                 let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
                 ("commit", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
             }
+            core_::Incoming::Refused { epoch, by, added, removed } => {
+                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
+                ("refused", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
+            }
         };
         Ok(out.into_any().unbind())
     }
 
     fn epoch(&self) -> PyResult<u64> {
         lock(&self.0)?.epoch().map_err(err)
+    }
+
+    /// Make the device with this signature key an admin too: the commit for the others.
+    fn make_admin(&self, py: Python<'_>, signature_key: &[u8]) -> PyResult<Py<PyBytes>> {
+        Ok(bytes(py, &lock(&self.0)?.make_admin(signature_key).map_err(err)?))
+    }
+
+    /// The admin devices' signature keys: the only ones that may add or remove
+    /// devices. A device paired again with a removed admin's keys is not one
+    /// until an admin makes it one again.
+    fn admins(&self, py: Python<'_>) -> PyResult<Vec<Py<PyBytes>>> {
+        Ok(lock(&self.0)?.admins().map_err(err)?.iter().map(|k| bytes(py, k)).collect())
     }
 
     fn leaf_index(&self) -> PyResult<u32> {
@@ -204,5 +225,6 @@ fn hm_seal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SealError", m.py().get_type::<SealError>())?;
     m.add("Removed", m.py().get_type::<Removed>())?;
     m.add("WrongDevice", m.py().get_type::<WrongDevice>())?;
+    m.add("NotAdmin", m.py().get_type::<NotAdmin>())?;
     Ok(())
 }

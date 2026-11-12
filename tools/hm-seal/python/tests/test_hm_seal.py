@@ -1,6 +1,8 @@
 """The Python binding hands each promise of hm-seal through unchanged."""
 
 import hashlib
+import os
+import pathlib
 import threading
 
 import pytest
@@ -108,9 +110,10 @@ def test_pairing_refuses_another_device_on_either_side():
     with pytest.raises(hm_seal.WrongDevice):
         phone.add(relay.key_package(), tablet.signature_key())
     assert issubclass(hm_seal.WrongDevice, hm_seal.SealError)
-    _, welcome = room.add(tablet.key_package(), tablet.signature_key())
+    # The phone's Welcome, but the device was told to expect the room's key.
+    _, welcome = phone.add(tablet.key_package(), tablet.signature_key())
     with pytest.raises(hm_seal.WrongDevice):
-        tablet.join(welcome, phone.signature_key())
+        tablet.join(welcome, room.signature_key())
     with pytest.raises(hm_seal.SealError):
         tablet.epoch()
 
@@ -152,11 +155,47 @@ def test_pairing_refuses_an_empty_confirmed_key_on_either_side():
 
 
 def test_a_commit_names_who_made_it_and_which_devices_it_added_and_removed():
-    # Any member may add a device; the phone is told the room camera did.
     phone, room, laptop = trio()
     stranger = hm_seal.Member(b"stranger")
-    commit, _ = room.add(stranger.key_package(), stranger.signature_key())
-    assert phone.handle(commit) == ("commit", 3, room.signature_key(), [stranger.signature_key()], [])
+    commit, _ = phone.add(stranger.key_package(), stranger.signature_key())
+    assert room.handle(commit) == ("commit", 3, phone.signature_key(), [stranger.signature_key()], [])
     laptop.handle(commit)
     removal = phone.remove(leaf_of(phone, b"stranger"))
     assert room.handle(removal) == ("commit", 4, phone.signature_key(), [], [stranger.signature_key()])
+
+
+def test_only_the_admin_device_adds_or_removes_devices():
+    phone, room, laptop = trio()
+    for m in (phone, room, laptop):
+        assert m.admins() == [phone.signature_key()]
+    tablet = hm_seal.Member(b"tablet")
+    with pytest.raises(hm_seal.NotAdmin):
+        room.add(tablet.key_package(), tablet.signature_key())
+    assert issubclass(hm_seal.NotAdmin, hm_seal.SealError)
+    with pytest.raises(hm_seal.NotAdmin):
+        room.remove(leaf_of(room, b"phone"))
+    with pytest.raises(hm_seal.NotAdmin):
+        room.remove(leaf_of(room, b"laptop"))
+    assert room.epoch() == 2
+    with pytest.raises(hm_seal.NotAdmin):
+        room.make_admin(room.signature_key())
+    promote = phone.make_admin(laptop.signature_key())
+    assert room.handle(promote)[0] == "commit"
+    laptop.handle(promote)
+    assert sorted(room.admins()) == sorted([phone.signature_key(), laptop.signature_key()])
+
+
+def test_a_commit_that_breaks_the_admin_rule_is_reported_as_refused():
+    # The room's own add and removal. The binding cannot make either, so they
+    # are made in Rust: cargo run --example refused_fixture --features test-support -- <dir>
+    d = os.environ.get("HM_SEAL_REFUSED_FIXTURE")
+    assert d, "set HM_SEAL_REFUSED_FIXTURE to a directory the refused_fixture example wrote"
+
+    def read(name):
+        return (pathlib.Path(d) / name).read_bytes()
+
+    room = read("room.key")
+    for commit, added, removed in (("add.commit", [read("listener.key")], []), ("remove.commit", [], [read("laptop.key")])):
+        phone = hm_seal.Member.load(read("phone.save"))
+        assert phone.handle(read(commit)) == ("refused", 2, room, added, removed), f"the room's {commit} was not reported as refused"
+        assert phone.epoch() == 2

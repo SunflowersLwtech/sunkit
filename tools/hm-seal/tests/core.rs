@@ -365,10 +365,11 @@ fn joining_refuses_a_welcome_from_any_device_but_the_expected_one() {
     assert!(matches!(got, Err(SealError::WrongDevice)), "the device joined the relay's group: {got:?}");
     assert!(matches!(tablet.epoch(), Err(SealError::NoGroup)));
 
-    // A member that is not the device the owner paired with does not count either.
-    let by_room = t.room.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
-    let got = tablet.join(&by_room.welcome, &phone_key);
-    assert!(matches!(got, Err(SealError::WrongDevice)), "a Welcome from the room device passed as the phone's: {got:?}");
+    // A member that is not the device the owner paired with does not count either:
+    // the Welcome is the phone's, and the device was told to expect the room's key.
+    let by_phone = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    let got = tablet.join(&by_phone.welcome, &t.room.signature_key());
+    assert!(matches!(got, Err(SealError::WrongDevice)), "a Welcome from the phone passed as the room's: {got:?}");
 
     // After the refusals the device pairs with a new key package.
     let mut other = trio();
@@ -459,17 +460,15 @@ fn pairing_refuses_an_empty_confirmed_key_on_either_side() {
 
 #[test]
 fn a_commit_names_who_made_it_and_which_devices_it_added_and_removed() {
-    // Any member may add a device: the room camera adds one nobody confirmed on
-    // the phone. The phone cannot stop that commit, but it is told who did what.
     let mut t = trio();
     let stranger = Member::new(b"stranger").unwrap();
-    let by_room = t.room.add(&stranger.key_package().unwrap(), &stranger.signature_key()).unwrap();
-    let Incoming::Commit { by, added, removed, .. } = t.phone.handle(&by_room.commit).unwrap() else { panic!() };
-    assert_eq!(by, t.room.signature_key(), "the phone was not told the room made the commit");
+    let by_phone = t.phone.add(&stranger.key_package().unwrap(), &stranger.signature_key()).unwrap();
+    let Incoming::Commit { by, added, removed, .. } = t.room.handle(&by_phone.commit).unwrap() else { panic!() };
+    assert_eq!(by, t.phone.signature_key(), "the room was not told the phone made the commit");
     assert_eq!(added, vec![stranger.signature_key()]);
     assert!(removed.is_empty());
 
-    t.laptop.handle(&by_room.commit).unwrap();
+    t.laptop.handle(&by_phone.commit).unwrap();
     let commit = t.phone.remove(leaf_of(&t.phone, b"stranger")).unwrap();
     let Incoming::Commit { by, added, removed, .. } = t.room.handle(&commit).unwrap() else { panic!() };
     assert_eq!((by, added), (t.phone.signature_key(), vec![]));
@@ -482,4 +481,155 @@ fn a_commit_names_who_made_it_and_which_devices_it_added_and_removed() {
     let swap = t.phone.remove_and_add_in_one_commit_for_test(leaf_of(&t.phone, b"laptop"), &tablet.key_package().unwrap()).unwrap();
     let Incoming::Commit { added, removed, .. } = t.room.handle(&swap).unwrap() else { panic!() };
     assert_eq!((added, removed), (vec![tablet.signature_key()], vec![laptop_key]));
+}
+
+#[test]
+fn the_device_that_starts_the_group_is_its_admin_and_every_device_knows_it() {
+    let mut t = trio();
+    let phone = vec![t.phone.signature_key()];
+    for m in [&t.phone, &t.room, &t.laptop] {
+        assert_eq!(m.admins().unwrap(), phone);
+    }
+    // Only an admin adds: the room is refused before anything is made.
+    let tablet = Member::new(b"tablet").unwrap();
+    let got = t.room.add(&tablet.key_package().unwrap(), &tablet.signature_key());
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the room added a device: {:?}", got.map(|_| ()));
+    assert_eq!(t.room.epoch().unwrap(), 2);
+    // ...nor removes an admin.
+    let got = t.room.remove(leaf_of(&t.room, b"phone"));
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the room removed the phone: {got:?}");
+}
+
+#[test]
+fn a_compromised_device_adding_a_listener_is_refused_by_every_other_device() {
+    // A room camera running someone else's code commits an add anyway.
+    let mut t = trio();
+    let room_key = t.room.signature_key();
+    let mut listener = Member::new(b"listener").unwrap();
+    let added = t.room.add_ignoring_admins_for_test(&listener.key_package().unwrap()).unwrap();
+    for m in [&mut t.phone, &mut t.laptop] {
+        assert_eq!(
+            m.handle(&added.commit).unwrap(),
+            Incoming::Refused { epoch: 2, by: room_key.clone(), added: vec![listener.signature_key()], removed: vec![] },
+            "a device applied an add the room made"
+        );
+        assert_eq!(m.epoch().unwrap(), 2);
+    }
+    listener.join(&added.welcome, &room_key).unwrap();
+
+    // The phone removes the room; the laptop follows; the listener reads nothing.
+    let commit = t.phone.remove(leaf_of(&t.phone, b"room")).unwrap();
+    assert!(matches!(t.laptop.handle(&commit).unwrap(), Incoming::Commit { .. }));
+    let msg = t.phone.seal(b"for my devices").unwrap();
+    let Incoming::Application { bytes, .. } = t.laptop.handle(&msg).unwrap() else { panic!() };
+    assert_eq!(bytes, b"for my devices");
+    let got = listener.handle(&msg);
+    assert!(got.is_err(), "the listener read the phone's message: {got:?}");
+}
+
+#[test]
+fn a_device_that_is_not_an_admin_cannot_remove_a_device_or_rewrite_the_list() {
+    let mut t = trio();
+    let (phone_key, room_key) = (t.phone.signature_key(), t.room.signature_key());
+    let rewrite = t.room.set_admins_ignoring_rules_for_test(std::slice::from_ref(&room_key)).unwrap();
+    let got = t.laptop.handle(&rewrite).unwrap();
+    assert!(matches!(&got, Incoming::Refused { by, .. } if *by == room_key), "the laptop took a new admin list from the room: {got:?}");
+    assert_eq!(t.laptop.admins().unwrap(), vec![phone_key]);
+
+    let mut t = trio();
+    let kick = t.room.remove_ignoring_admins_for_test(leaf_of(&t.room, b"phone")).unwrap();
+    let got = t.laptop.handle(&kick).unwrap();
+    assert_eq!(
+        got,
+        Incoming::Refused { epoch: 2, by: t.room.signature_key(), added: vec![], removed: vec![t.phone.signature_key()] }
+    );
+
+    // Nor any other device: only an admin removes devices.
+    let mut t = trio();
+    let got = t.room.remove(leaf_of(&t.room, b"laptop"));
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the room removed the laptop: {:?}", got.map(|_| ()));
+    let kick = t.room.remove_ignoring_admins_for_test(leaf_of(&t.room, b"laptop")).unwrap();
+    let got = t.phone.handle(&kick).unwrap();
+    assert!(matches!(&got, Incoming::Refused { removed, .. } if *removed == vec![t.laptop.signature_key()]), "{got:?}");
+    assert_eq!(t.phone.members().unwrap().len(), 3);
+}
+
+#[test]
+fn an_admin_hands_over_to_a_new_phone() {
+    // The new phone joins, is made an admin, removes the old one and adds a device.
+    let mut t = trio();
+    let mut new_phone = Member::new(b"new phone").unwrap();
+    let added = t.phone.add(&new_phone.key_package().unwrap(), &new_phone.signature_key()).unwrap();
+    for m in [&mut t.room, &mut t.laptop] {
+        m.handle(&added.commit).unwrap();
+    }
+    new_phone.join(&added.welcome, &t.phone.signature_key()).unwrap();
+
+    assert!(matches!(t.room.make_admin(&t.room.signature_key()), Err(SealError::NotAdmin)));
+    assert!(matches!(t.phone.make_admin(&Member::new(b"x").unwrap().signature_key()), Err(SealError::WrongDevice)));
+    let promote = t.phone.make_admin(&new_phone.signature_key()).unwrap();
+    for m in [&mut t.room, &mut t.laptop, &mut new_phone] {
+        assert!(matches!(m.handle(&promote).unwrap(), Incoming::Commit { .. }));
+    }
+
+    let commit = new_phone.remove(leaf_of(&new_phone, b"phone")).unwrap();
+    for m in [&mut t.room, &mut t.laptop] {
+        assert!(matches!(m.handle(&commit).unwrap(), Incoming::Commit { .. }), "the new phone could not remove the old one");
+    }
+    let tablet = Member::new(b"tablet").unwrap();
+    let added = new_phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    assert!(matches!(t.room.handle(&added.commit).unwrap(), Incoming::Commit { .. }), "the new phone could not add a device");
+    for m in [&t.room, &new_phone] {
+        assert_eq!(m.admins().unwrap(), vec![new_phone.signature_key()], "a removed admin still counted");
+    }
+}
+
+#[test]
+fn a_removed_admin_paired_again_with_its_old_keys_is_an_ordinary_device() {
+    // The phone's keys as they were before it started the group: a removed
+    // device cannot join the same group again, but a copy of its keys can.
+    let mut phone = Member::new(b"phone").unwrap();
+    let keys_only = phone.save().unwrap();
+    let mut room = Member::new(b"room").unwrap();
+    let mut laptop = Member::new(b"laptop").unwrap();
+    phone.create_group(b"account-1").unwrap();
+    let added = phone.add(&room.key_package().unwrap(), &room.signature_key()).unwrap();
+    room.join(&added.welcome, &phone.signature_key()).unwrap();
+    let added = phone.add(&laptop.key_package().unwrap(), &laptop.signature_key()).unwrap();
+    room.handle(&added.commit).unwrap();
+    laptop.join(&added.welcome, &phone.signature_key()).unwrap();
+    let promote = phone.make_admin(&laptop.signature_key()).unwrap();
+    room.handle(&promote).unwrap();
+    laptop.handle(&promote).unwrap();
+    let out = laptop.remove(leaf_of(&laptop, b"phone")).unwrap();
+    room.handle(&out).unwrap();
+
+    // The laptop pairs the phone's keys again.
+    let mut again = Member::load(&keys_only).unwrap();
+    assert_eq!(again.signature_key(), phone.signature_key(), "control: the same keys");
+    let back = laptop.add(&again.key_package().unwrap(), &again.signature_key()).unwrap();
+    assert!(matches!(room.handle(&back.commit).unwrap(), Incoming::Commit { .. }));
+    again.join(&back.welcome, &laptop.signature_key()).unwrap();
+    for m in [&laptop, &room, &again] {
+        assert_eq!(m.admins().unwrap(), vec![laptop.signature_key()], "a device paired again with its old keys came back as an admin");
+    }
+    let tablet = Member::new(b"tablet").unwrap();
+    let got = again.add(&tablet.key_package().unwrap(), &tablet.signature_key());
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the phone paired again added a device: {:?}", got.map(|_| ()));
+
+    // An admin makes it one again; its add then keeps both admins.
+    let promote = laptop.make_admin(&again.signature_key()).unwrap();
+    room.handle(&promote).unwrap();
+    again.handle(&promote).unwrap();
+    let added = again.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    for m in [&mut room, &mut laptop] {
+        assert!(matches!(m.handle(&added.commit).unwrap(), Incoming::Commit { .. }));
+    }
+    let mut both = vec![laptop.signature_key(), again.signature_key()];
+    both.sort();
+    for m in [&laptop, &room, &again] {
+        let mut got = m.admins().unwrap();
+        got.sort();
+        assert_eq!(got, both, "an add dropped an admin that is still in the group");
+    }
 }

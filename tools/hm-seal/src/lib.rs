@@ -58,6 +58,10 @@ pub const FRAME_REPLAY_TOLERANCE: usize = 128;
 
 const DATA_VERSION: u8 = 1;
 const SAVE_MAGIC: &[u8; 4] = b"HMS1";
+/// The group-context extension listing the admin devices' signature keys, a
+/// private-use type (RFC 9420 section 17.3). Every member signs the same group
+/// context, so they agree on the list, and a new device gets it in its Welcome.
+const ADMINS_EXTENSION: u16 = 0xf0a1;
 /// A save ends with the SHA-256 of everything before it.
 const SAVE_DIGEST_LEN: usize = 32;
 const RECOVERY_SALT: &[u8] = b"hm-seal recovery v1";
@@ -80,6 +84,8 @@ pub enum SealError {
     Damaged,
     #[error("not the device the owner confirmed")]
     WrongDevice,
+    #[error("only an admin device may do this")]
+    NotAdmin,
     #[error("the saved state could not be read")]
     BadSave,
 }
@@ -104,6 +110,11 @@ pub enum Incoming {
     /// this is how the owner's other devices learn that, say, the room camera
     /// added one nobody confirmed on the phone.
     Commit { epoch: u64, by: Vec<u8>, added: Vec<Vec<u8>>, removed: Vec<Vec<u8>> },
+    /// A commit that adds or removes a device or changes the admin list, made by
+    /// a device that is not an admin: not applied, so the
+    /// group stays at `epoch`. The device that made it has left the others'
+    /// group by doing so; an admin removes it.
+    Refused { epoch: u64, by: Vec<u8>, added: Vec<Vec<u8>>, removed: Vec<Vec<u8>> },
 }
 
 /// A signature key in a Debug line: public, so its first bytes are shown.
@@ -123,9 +134,10 @@ impl std::fmt::Debug for Incoming {
                 sender_key.len(),
                 bytes.len()
             ),
-            Incoming::Commit { epoch, by, added, removed } => write!(
+            Incoming::Commit { epoch, by, added, removed } | Incoming::Refused { epoch, by, added, removed } => write!(
                 f,
-                "Commit {{ epoch: {epoch}, by: {}, added: {:?}, removed: {:?} }}",
+                "{} {{ epoch: {epoch}, by: {}, added: {:?}, removed: {:?} }}",
+                if matches!(self, Incoming::Commit { .. }) { "Commit" } else { "Refused" },
                 key_prefix(by),
                 added.iter().map(|k| key_prefix(k)).collect::<Vec<_>>(),
                 removed.iter().map(|k| key_prefix(k)).collect::<Vec<_>>()
@@ -195,6 +207,7 @@ impl Member {
             return Err(SealError::Damaged);
         }
         let bundle = KeyPackage::builder()
+            .leaf_node_capabilities(capabilities())
             .build(CIPHERSUITE, &self.provider, &self.signer, self.credential.clone())
             .map_err(mls)?;
         MlsMessageOut::from(bundle.key_package().clone())
@@ -208,9 +221,12 @@ impl Member {
     }
 
     fn create_group_unguarded(&mut self, group_id: &[u8]) -> Result<()> {
+        // The device that starts the group is its first admin.
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
             .use_ratchet_tree_extension(true)
+            .capabilities(capabilities())
+            .with_group_context_extensions(admins_extension(&[self.signature_key()])?)
             .build();
         let group = MlsGroup::new_with_group_id(
             &self.provider,
@@ -276,9 +292,40 @@ impl Member {
         if kp.leaf_node().signature_key().as_slice() != signature_key {
             return Err(SealError::WrongDevice);
         }
+        let admins = self.admins()?;
+        if !admins.contains(&self.signature_key()) {
+            return Err(SealError::NotAdmin);
+        }
+        // A removed admin's key stays in the list, where it no longer counts.
+        // The add drops every listed key that is not in the group, so a device
+        // paired again with the keys it had comes back as an ordinary device.
+        let listed = admins_in(self.group()?.extensions());
+        let pruned = if listed == admins { None } else { Some(admins_extension(&admins)?) };
+        self.commit_add(kp, pruned)
+    }
+
+    /// One commit adding the device, and setting the admin list to `admins`
+    /// when given.
+    fn commit_add(&mut self, kp: KeyPackage, admins: Option<Extensions<GroupContext>>) -> Result<Added> {
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
-        let (commit, welcome, _) = group.add_members(provider, signer, &[kp]).map_err(mls)?;
+        // What add_members checks first, and the commit builder does not.
+        if group.pending_commit().is_some() || !group.is_active() {
+            return Err(SealError::Mls("the group cannot take a commit now".into()));
+        }
+        let mut commit = group.commit_builder().propose_adds([kp]).force_self_update(true);
+        if let Some(extensions) = admins {
+            commit = commit.propose_group_context_extensions(extensions).map_err(mls)?;
+        }
+        let bundle = commit
+            .load_psks(provider.storage())
+            .map_err(mls)?
+            .build(provider.rand(), provider.crypto(), signer, |_| true)
+            .map_err(mls)?
+            .stage_commit(provider)
+            .map_err(mls)?;
+        let welcome = bundle.to_welcome_msg().ok_or_else(|| SealError::Mls("an add made no Welcome".into()))?;
+        let commit = bundle.into_commit();
         group.merge_pending_commit(provider).map_err(mls)?;
         Ok(Added {
             commit: commit.tls_serialize_detached().map_err(mls)?,
@@ -292,6 +339,13 @@ impl Member {
     }
 
     fn remove_unguarded(&mut self, leaf: u32) -> Result<Vec<u8>> {
+        if !self.admins()?.contains(&self.signature_key()) {
+            return Err(SealError::NotAdmin);
+        }
+        self.commit_remove(leaf)
+    }
+
+    fn commit_remove(&mut self, leaf: u32) -> Result<Vec<u8>> {
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
         let (commit, _, _) = group
@@ -358,10 +412,16 @@ impl Member {
                     .remove_proposals()
                     .map(|p| key_at(p.remove_proposal().removed()))
                     .collect::<Result<Vec<_>>>()?;
-                let added = staged
+                let added: Vec<Vec<u8>> = staged
                     .add_proposals()
                     .map(|p| p.add_proposal().key_package().leaf_node().signature_key().as_slice().to_vec())
                     .collect();
+                // Only an admin adds or removes devices or changes the admin list.
+                let admins = admins_in(group.extensions());
+                let changes_admins = admins_in(staged.group_context().extensions()) != admins;
+                if !admins.contains(&by) && (!added.is_empty() || !removed.is_empty() || changes_admins) {
+                    return Ok(Incoming::Refused { epoch: group.epoch().as_u64(), by, added, removed });
+                }
                 group.merge_staged_commit(provider, *staged).map_err(mls)?;
                 if !group.is_active() {
                     return Err(SealError::Removed);
@@ -374,6 +434,41 @@ impl Member {
 
     pub fn epoch(&self) -> Result<u64> {
         Ok(self.group()?.epoch().as_u64())
+    }
+
+    /// The signature keys of the group's admin devices that are still in it:
+    /// the only devices whose commits may add or remove a device or change
+    /// this list. A removed admin's key stays listed but no longer counts, and
+    /// the next add drops it: a device paired again with the same keys is an
+    /// ordinary device until an admin makes it one again ([`Member::make_admin`]).
+    pub fn admins(&self) -> Result<Vec<Vec<u8>>> {
+        let group = self.group()?;
+        let members: Vec<Vec<u8>> = group.members().map(|m| m.signature_key).collect();
+        Ok(admins_in(group.extensions()).into_iter().filter(|k| members.contains(k)).collect())
+    }
+
+    /// Make the device with this signature key an admin too (a new phone,
+    /// before the old one is removed). Only an admin may; the device must be
+    /// in the group. The commit goes to every other member.
+    pub fn make_admin(&mut self, signature_key: &[u8]) -> Result<Vec<u8>> {
+        self.guarded(|m| m.make_admin_unguarded(signature_key))
+    }
+
+    fn make_admin_unguarded(&mut self, signature_key: &[u8]) -> Result<Vec<u8>> {
+        let mut admins = self.admins()?;
+        if !admins.contains(&self.signature_key()) {
+            return Err(SealError::NotAdmin);
+        }
+        if !self.group()?.members().any(|m| m.signature_key == signature_key) {
+            return Err(SealError::WrongDevice);
+        }
+        admins.push(signature_key.to_vec());
+        let extensions = admins_extension(&admins)?;
+        let (provider, signer) = (&self.provider, &self.signer);
+        let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
+        let (commit, _, _) = group.update_group_context_extensions(provider, extensions, signer).map_err(mls)?;
+        group.merge_pending_commit(provider).map_err(mls)?;
+        commit.tls_serialize_detached().map_err(mls)
     }
 
     pub fn leaf_index(&self) -> Result<u32> {
@@ -524,6 +619,37 @@ impl Member {
         Ok(())
     }
 
+    /// What a compromised device could send: an add, a removal or a new admin
+    /// list, committed without this crate's admin rule. Test builds only.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn add_ignoring_admins_for_test(&mut self, key_package: &[u8]) -> Result<Added> {
+        let message = MlsMessageIn::tls_deserialize_exact(key_package)
+            .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
+        let MlsMessageBodyIn::KeyPackage(kp) = message.extract() else {
+            return Err(SealError::BadMessage("not a key package".into()));
+        };
+        let kp = kp.validate(self.provider.crypto(), ProtocolVersion::Mls10).map_err(mls)?;
+        self.commit_add(kp, None)
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn remove_ignoring_admins_for_test(&mut self, leaf: u32) -> Result<Vec<u8>> {
+        self.commit_remove(leaf)
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn set_admins_ignoring_rules_for_test(&mut self, keys: &[Vec<u8>]) -> Result<Vec<u8>> {
+        let extensions = admins_extension(keys)?;
+        let (provider, signer) = (&self.provider, &self.signer);
+        let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
+        let (commit, _, _) = group.update_group_context_extensions(provider, extensions, signer).map_err(mls)?;
+        group.merge_pending_commit(provider).map_err(mls)?;
+        commit.tls_serialize_detached().map_err(mls)
+    }
+
     /// One commit that removes the device at `leaf` and adds the one whose key
     /// package this is, which then takes the freed leaf. This crate's own calls
     /// never make such a commit, but `handle` merges one from any member, so a
@@ -591,6 +717,51 @@ fn catching<T>(call: impl FnOnce() -> T) -> std::thread::Result<T> {
         CAUGHT_PANICS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     result
+}
+
+/// What every key package and the group's own leaf declare: support for the
+/// admin list, which a group context may only carry when every member does.
+fn capabilities() -> Capabilities {
+    Capabilities::new(None, None, Some(&[ExtensionType::Unknown(ADMINS_EXTENSION)]), None, None)
+}
+
+/// The group context's extensions: the admin list (a count, then each key with
+/// its length, both as big-endian u16, keys sorted), and the requirement that
+/// every member support it, so no device can be added that would ignore it.
+fn admins_extension(keys: &[Vec<u8>]) -> Result<Extensions<GroupContext>> {
+    let mut keys = keys.to_vec();
+    keys.sort();
+    keys.dedup();
+    let mut out = (keys.len() as u16).to_be_bytes().to_vec();
+    for key in &keys {
+        out.extend_from_slice(&(key.len() as u16).to_be_bytes());
+        out.extend_from_slice(key);
+    }
+    let required = RequiredCapabilitiesExtension::new(&[ExtensionType::Unknown(ADMINS_EXTENSION)], &[], &[]);
+    Extensions::from_vec(vec![
+        Extension::RequiredCapabilities(required),
+        Extension::Unknown(ADMINS_EXTENSION, UnknownExtension(out)),
+    ])
+    .map_err(mls)
+}
+
+/// The admin keys a group context lists; none when it lists none or the
+/// extension does not parse, so a group without one accepts no adds.
+fn admins_in(extensions: &Extensions<GroupContext>) -> Vec<Vec<u8>> {
+    let Some(UnknownExtension(raw)) = extensions.unknown(ADMINS_EXTENSION) else {
+        return Vec::new();
+    };
+    let take = |at: usize, n: usize| raw.get(at..at.checked_add(n)?);
+    let u16_at = |at: usize| take(at, 2).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])));
+    let Some(count) = u16_at(0) else { return Vec::new() };
+    let (mut at, mut keys) = (2, Vec::with_capacity(count.min(256)));
+    for _ in 0..count {
+        let Some(len) = u16_at(at) else { return Vec::new() };
+        let Some(key) = take(at + 2, len) else { return Vec::new() };
+        keys.push(key.to_vec());
+        at += 2 + len;
+    }
+    if at == raw.len() { keys } else { Vec::new() }
 }
 
 fn frame_encryption_key<K: Into<sframe::header::KeyId>>(base: &[u8], kid: K) -> Result<EncryptionKey> {

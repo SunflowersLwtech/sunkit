@@ -1,7 +1,9 @@
 //! WebAssembly binding of hm-seal, for the browser. Bytes go in and come out
 //! as `Uint8Array`, and only a `Uint8Array` is taken as bytes. A refusal throws an `Error` whose `name` is "SealError",
-//! "Removed" when this device was removed from its group, or "WrongDevice"
-//! when pairing met a device other than the one the owner confirmed.
+//! "Removed" when this device was removed from its group, "WrongDevice"
+//! when pairing met a device other than the one the owner confirmed, or
+//! "NotAdmin" when a device that is not an admin tried to add or remove a
+//! device or change who the admins are.
 
 use js_sys::{Array, Error, Object, Reflect, Uint8Array};
 use seal_core as core_;
@@ -14,6 +16,7 @@ fn err(e: core_::SealError) -> JsValue {
     error.set_name(match e {
         core_::SealError::Removed => "Removed",
         core_::SealError::WrongDevice => "WrongDevice",
+        core_::SealError::NotAdmin => "NotAdmin",
         _ => "SealError",
     });
     error.into()
@@ -80,6 +83,18 @@ fn secret(value: &JsValue) -> Result<[u8; 32]> {
     input(value, "a recovery secret")?
         .try_into()
         .map_err(|_| refused("a recovery secret is 32 bytes"))
+}
+
+/// A commit, applied or refused: `{kind, epoch, by, added, removed}`.
+fn change(kind: &str, epoch: u64, by: Vec<u8>, added: Vec<Vec<u8>>, removed: Vec<Vec<u8>>) -> Result<Object> {
+    let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(k)).collect::<Array>().into();
+    object(&[
+        ("kind", JsValue::from_str(kind)),
+        ("epoch", number(epoch)),
+        ("by", bytes(&by)),
+        ("added", keys(added)),
+        ("removed", keys(removed)),
+    ])
 }
 
 /// One device's place in its owner's MLS group.
@@ -154,8 +169,10 @@ impl Member {
 
     /// `{kind: "application", sender, senderKey, bytes}` or
     /// `{kind: "commit", epoch, by, added, removed}`: the committer's signature
-    /// key and those of the devices added and removed. Leaf indices are reused
-    /// after a removal: decide by `senderKey`.
+    /// key and those of the devices added and removed; or the same with
+    /// `kind: "refused"` for a commit a device that is not an admin made to add
+    /// or remove a device or change the admin list, which is not
+    /// applied. Leaf indices are reused after a removal: decide by `senderKey`.
     pub fn handle(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
         match self.0.handle(&input(&message, "a message")?).map_err(err)? {
             core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
@@ -164,17 +181,22 @@ impl Member {
                 ("senderKey", bytes(&sender_key)),
                 ("bytes", bytes(&b)),
             ]),
-            core_::Incoming::Commit { epoch, by, added, removed } => {
-                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(k)).collect::<Array>().into();
-                object(&[
-                    ("kind", JsValue::from_str("commit")),
-                    ("epoch", number(epoch)),
-                    ("by", bytes(&by)),
-                    ("added", keys(added)),
-                    ("removed", keys(removed)),
-                ])
-            }
+            core_::Incoming::Commit { epoch, by, added, removed } => change("commit", epoch, by, added, removed),
+            core_::Incoming::Refused { epoch, by, added, removed } => change("refused", epoch, by, added, removed),
         }
+    }
+
+    /// Make the device with this signature key an admin too: the commit for the others.
+    #[wasm_bindgen(js_name = makeAdmin)]
+    pub fn make_admin(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] signature_key: JsValue) -> Result<Vec<u8>> {
+        self.0.make_admin(&input(&signature_key, "a signature key")?).map_err(err)
+    }
+
+    /// The admin devices' signature keys: the only ones that may add or remove
+    /// devices. A device paired again with a removed admin's keys is not one
+    /// until an admin makes it one again.
+    pub fn admins(&self) -> Result<Array> {
+        Ok(self.0.admins().map_err(err)?.iter().map(|k| bytes(k)).collect())
     }
 
     pub fn epoch(&self) -> Result<f64> {

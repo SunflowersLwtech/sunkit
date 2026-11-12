@@ -40,8 +40,10 @@ jobs:
       - run: cargo fetch --locked
       - run: python -m venv .venv && .venv/bin/pip install 'maturin==1.16.0' 'pytest>=8'
       - run: VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" maturin develop -m python/Cargo.toml --locked --offline
+      - name: Commits that break the admin rule, for the refused test
+        run: cargo run --example refused_fixture --features test-support --locked --offline -- "$RUNNER_TEMP/refused"
       - name: Binding tests with the network cut
-        run: sudo unshare --net -- sudo -u "$USER" .venv/bin/python -m pytest -q -p no:cacheprovider python/tests
+        run: sudo unshare --net -- sudo -u "$USER" env HM_SEAL_REFUSED_FIXTURE="$RUNNER_TEMP/refused" .venv/bin/python -m pytest -q -p no:cacheprovider python/tests
 
   deny:
     # Advisories, licenses, sources and wildcard versions of the shipped tree
@@ -84,5 +86,7 @@ jobs:
       - run: '"$RUNNER_TEMP/wasm-bindgen" --target nodejs --out-dir wasm/pkg-node target/wasm32-unknown-unknown/wasm/hm_seal.wasm'
       - run: python -m venv .venv && .venv/bin/pip install 'maturin==1.16.0'
       - run: VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" maturin develop -m python/Cargo.toml --locked --offline
+      - name: Commits that break the admin rule, for the refused test
+        run: cargo run --example refused_fixture --features test-support --locked --offline -- "$RUNNER_TEMP/refused"
       - name: Binding tests with the network cut
-        run: sudo unshare --net -- sudo -u "$USER" env PATH="$PATH" HM_SEAL_PYTHON="$PWD/.venv/bin/python" node --test wasm/tests/binding.test.mjs
+        run: sudo unshare --net -- sudo -u "$USER" env PATH="$PATH" HM_SEAL_PYTHON="$PWD/.venv/bin/python" HM_SEAL_REFUSED_FIXTURE="$RUNNER_TEMP/refused" node --test wasm/tests/binding.test.mjs
