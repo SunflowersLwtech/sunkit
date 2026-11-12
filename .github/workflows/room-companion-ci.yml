@@ -1,0 +1,27 @@
+# CI for tools/room-companion: its tests with the network cut (loopback only),
+# with the HipiMind connector's packages and hm-seal's Python binding installed,
+# so the end-to-end encryption tests run rather than skip (HM_SEAL_REQUIRED=1).
+name: room-companion CI
+on:
+  push:
+    branches: [main]
+    paths: ['tools/room-companion/**', 'tools/hm-seal/**', '.github/workflows/room-companion-ci.yml']
+  pull_request:
+    paths: ['tools/room-companion/**', 'tools/hm-seal/**', '.github/workflows/room-companion-ci.yml']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - working-directory: tools/hm-seal
+        run: cargo fetch --locked
+      - run: python -m venv .venv && .venv/bin/pip install 'maturin==1.16.0' 'websockets>=13' pillow
+      - run: VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" maturin develop -m tools/hm-seal/python/Cargo.toml --locked --offline
+      - name: Tests with the network cut (loopback only)
+        working-directory: tools/room-companion
+        run: sudo unshare --net -- sh -c "ip link set lo up && exec sudo -u $USER env HM_SEAL_REQUIRED=1 $GITHUB_WORKSPACE/.venv/bin/python -m unittest discover -s tests -t . -v"
