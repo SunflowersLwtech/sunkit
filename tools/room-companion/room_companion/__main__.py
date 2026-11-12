@@ -14,6 +14,10 @@ def main():
         # python -m room_companion pair --code K7QM-2WXH [--name Bedroom]: uses the "hipimind" config section
         from .hipimind import pair_from_app_config
         sys.exit(pair_from_app_config(sys.argv[2:], load_config()))
+    if len(sys.argv) > 1 and sys.argv[1] == "e2ee-pair":
+        # python -m room_companion e2ee-pair --code hmroom1.…: join the owner's encrypted group (docs/e2ee.md)
+        from .hipimind import e2ee_pair_from_app_config
+        sys.exit(e2ee_pair_from_app_config(sys.argv[2:], load_config()))
     cfg = load_config()
     app = App(cfg)
     app.start()
