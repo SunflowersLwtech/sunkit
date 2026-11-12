@@ -426,6 +426,19 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(third.epoch(), page.m.epoch())
         self.assertEqual(third._member.handle(page.m.seal(b"after a restart"))[2], b"after a restart")
 
+    def test_a_device_paired_to_hipimind_again_leaves_the_old_group(self):
+        # A new device id (paired again, perhaps to another account): the old group's keys do not carry over.
+        log, page, group, _ = joined_device(self)
+        page.send_data_key(b"K" * 8, os.urandom(32))
+        drive(group, log)
+        again = e2ee.DeviceGroup(group.directory, "another-device-id")
+        self.assertEqual(again.status, "unpaired")
+        self.assertIn("paired to HipiMind again", again.reason)
+        for name in (e2ee.SAVE_FILE, e2ee.KEYS_FILE):
+            self.assertFalse(os.path.exists(os.path.join(group.directory, name)), f"{name} was kept for the new device id")
+        self.assertIsNone(again.seal_frame(b"jpeg"))
+        self.assertFalse(again.has_data_key())
+
     def test_a_damaged_save_turns_encryption_off_until_the_device_is_paired_again(self):
         log, page, group, _ = joined_device(self)
         path = os.path.join(group.directory, e2ee.SAVE_FILE)
