@@ -97,6 +97,19 @@ fn change(kind: &str, epoch: u64, by: Vec<u8>, added: Vec<Vec<u8>>, removed: Vec
     ])
 }
 
+fn incoming(i: core_::Incoming) -> Result<Object> {
+    match i {
+        core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
+            ("kind", JsValue::from_str("application")),
+            ("sender", JsValue::from(sender)),
+            ("senderKey", bytes(&sender_key)),
+            ("bytes", bytes(&b)),
+        ]),
+        core_::Incoming::Commit { epoch, by, added, removed } => change("commit", epoch, by, added, removed),
+        core_::Incoming::Refused { epoch, by, added, removed } => change("refused", epoch, by, added, removed),
+    }
+}
+
 /// One device's place in its owner's MLS group.
 #[wasm_bindgen]
 pub struct Member(core_::Member);
@@ -174,16 +187,16 @@ impl Member {
     /// or remove a device or change the admin list, which is not
     /// applied. Leaf indices are reused after a removal: decide by `senderKey`.
     pub fn handle(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
-        match self.0.handle(&input(&message, "a message")?).map_err(err)? {
-            core_::Incoming::Application { sender, sender_key, bytes: b } => object(&[
-                ("kind", JsValue::from_str("application")),
-                ("sender", JsValue::from(sender)),
-                ("senderKey", bytes(&sender_key)),
-                ("bytes", bytes(&b)),
-            ]),
-            core_::Incoming::Commit { epoch, by, added, removed } => change("commit", epoch, by, added, removed),
-            core_::Incoming::Refused { epoch, by, added, removed } => change("refused", epoch, by, added, removed),
-        }
+        incoming(self.0.handle(&input(&message, "a message")?).map_err(err)?)
+    }
+
+    /// One application message, as `handle` returns it; anything else (a
+    /// commit, say) throws a `SealError` before it is decrypted, so the group
+    /// is unchanged and the message still reads with `handle`. For messages
+    /// that arrive outside the group's ordered log, such as a device's answers.
+    #[wasm_bindgen(js_name = handleApplication)]
+    pub fn handle_application(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
+        incoming(self.0.handle_application(&input(&message, "a message")?).map_err(err)?)
     }
 
     /// Make the device with this signature key an admin too: the commit for the others.

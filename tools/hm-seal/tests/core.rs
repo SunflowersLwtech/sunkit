@@ -659,3 +659,31 @@ fn a_removed_device_cannot_commit_an_add() {
         "a removed device's add reached OpenMLS: {got:?}"
     );
 }
+
+#[test]
+fn a_commit_read_as_an_application_message_is_refused_and_still_applies_from_the_log() {
+    let mut t = trio();
+    let tablet = Member::new(b"tablet").unwrap();
+    let added = t.phone.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    // Outside the log (a command channel, say): refused before it is decrypted.
+    let got = t.room.handle_application(&added.commit);
+    assert!(
+        matches!(&got, Err(SealError::BadMessage(m)) if m == "not an application message"),
+        "a commit read as an application message: {:?}",
+        got.map(|i| format!("{i:?}"))
+    );
+    assert_eq!(t.room.epoch().unwrap(), 2, "a commit read as an application message was applied");
+    // From the log it still applies: nothing of it was used up.
+    let got = t.room.handle(&added.commit);
+    assert!(
+        matches!(&got, Ok(Incoming::Commit { epoch: 3, .. })),
+        "the commit no longer applied from the log: {:?}",
+        got.map(|i| format!("{i:?}"))
+    );
+    // An application message reads the same either way, its sender included.
+    let msg = t.phone.seal(b"video off").unwrap();
+    assert_eq!(
+        t.room.handle_application(&msg).unwrap(),
+        Incoming::Application { sender: t.phone.leaf_index().unwrap(), sender_key: t.phone.signature_key(), bytes: b"video off".to_vec() }
+    );
+}

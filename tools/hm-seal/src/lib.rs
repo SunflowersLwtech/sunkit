@@ -372,15 +372,31 @@ impl Member {
 
     /// Read one message from the group: an application message or a commit.
     pub fn handle(&mut self, message: &[u8]) -> Result<Incoming> {
-        self.guarded(|m| m.handle_unguarded(message))
+        self.guarded(|m| m.handle_unguarded(message, true))
     }
 
-    fn handle_unguarded(&mut self, message: &[u8]) -> Result<Incoming> {
+    /// Read one application message, refusing anything else (a commit, say)
+    /// with [`SealError::BadMessage`] before it is decrypted, so the group is
+    /// unchanged and the message can still be read with [`Member::handle`].
+    /// For messages that arrive outside the group's ordered log (commands from
+    /// another device, say): commits are applied in the log's order, and a
+    /// commit read here first would either move this device ahead of the log or,
+    /// once decrypted, no longer open when the log brings it. An MLS message
+    /// carries its content type in the clear (RFC 9420 section 6), which is
+    /// what is checked.
+    pub fn handle_application(&mut self, message: &[u8]) -> Result<Incoming> {
+        self.guarded(|m| m.handle_unguarded(message, false))
+    }
+
+    fn handle_unguarded(&mut self, message: &[u8], commits: bool) -> Result<Incoming> {
         let message = MlsMessageIn::tls_deserialize_exact(message)
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
         let protocol = message
             .try_into_protocol_message()
             .map_err(|e| SealError::BadMessage(format!("{e:?}")))?;
+        if !commits && protocol.content_type() != ContentType::Application {
+            return Err(SealError::BadMessage("not an application message".into()));
+        }
         let provider = &self.provider;
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
         if !group.is_active() {
