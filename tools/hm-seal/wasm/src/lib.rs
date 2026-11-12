@@ -63,6 +63,19 @@ fn optional(value: &JsValue, what: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// A leaf index, which must be a whole Number from 0 to 2^32 - 1. Taken as a
+/// `u32`, wasm-bindgen's glue converts with `>>> 0` and no check, so
+/// `undefined`, `null` and `NaN` became leaf 0 (the phone that started the
+/// group) and `1.5` became leaf 1.
+fn leaf_index(value: &JsValue) -> Result<u32> {
+    value
+        .as_f64()
+        // NaN and the infinities fail `fract() == 0.0`.
+        .filter(|n| n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(n))
+        .map(|n| n as u32)
+        .ok_or_else(|| refused("a leaf is a whole number from 0 to 4294967295"))
+}
+
 fn secret(value: &JsValue) -> Result<[u8; 32]> {
     input(value, "a recovery secret")?
         .try_into()
@@ -131,8 +144,8 @@ impl Member {
     }
 
     /// Remove the device at this leaf index: the commit for the remaining members.
-    pub fn remove(&mut self, leaf: u32) -> Result<Vec<u8>> {
-        self.0.remove(leaf).map_err(err)
+    pub fn remove(&mut self, #[wasm_bindgen(unchecked_param_type = "number")] leaf: JsValue) -> Result<Vec<u8>> {
+        self.0.remove(leaf_index(&leaf)?).map_err(err)
     }
 
     pub fn seal(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] plaintext: JsValue) -> Result<Vec<u8>> {
