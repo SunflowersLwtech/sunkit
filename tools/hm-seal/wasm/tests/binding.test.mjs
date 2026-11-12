@@ -146,6 +146,32 @@ test("bytes are taken only from a Uint8Array, never from a string or an array", 
   assert.equal(dec(opener.open(frame, Buffer.from("camera-a"))), "jpeg");
 });
 
+test("remove() refuses a leaf that is not a whole number in range, and removes nobody", () => {
+  // wasm-bindgen's own glue turned undefined, null and NaN into leaf 0 (the phone) and 1.5 into leaf 1.
+  // undefined is what members().find(...)?.leaf gives for a device that has just left.
+  const removed = [];
+  for (const leaf of [undefined, null, NaN, 1.5, -1, 2 ** 32, Infinity, "2", 2n, [2], {}]) {
+    const t = trio();
+    const label = typeof leaf === "string" ? JSON.stringify(leaf) : typeof leaf === "bigint" ? `${leaf}n` : String(leaf);
+    let commit = null;
+    try {
+      commit = t.phone.remove(leaf);
+    } catch (e) {
+      // Refused by the leaf check itself, not by whatever leaf a conversion
+      // happened to land on (-1 saturated to 0 is the phone's own leaf).
+      assert.equal(e.name, "SealError", `remove(${label}) threw ${e.name}: ${e.message}`);
+      assert.match(e.message, /a leaf is a whole number/, `remove(${label}) was refused for another reason`);
+    }
+    if (commit) removed.push(`${label} -> a commit; the phone now lists ${JSON.stringify(t.phone.members().map((m) => dec(m.name)).sort())}`);
+    assert.deepEqual(t.phone.members().map((m) => dec(m.name)).sort(), ["phone", "room", "web"], `remove(${label})`);
+  }
+  assert.deepEqual(removed, [], "remove() took a leaf that is not a whole number in range");
+  // Control: a whole number still removes that device.
+  const t = trio();
+  t.room.handle(t.phone.remove(leafOf(t.phone, "web")));
+  assert.deepEqual(t.room.members().map((m) => dec(m.name)).sort(), ["phone", "room"]);
+});
+
 test("a device saved and loaded goes on in the group; a damaged save is refused", () => {
   const t = trio();
   const saved = t.web.save();
