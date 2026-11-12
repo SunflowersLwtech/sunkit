@@ -32,6 +32,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 
+# Writes commits that break the admin rule for the bindings' tests, which cannot make one.
+[[example]]
+name = "refused_fixture"
+required-features = ["test-support"]
+
 # For the browser: smaller, slower to build (`--profile wasm`).
 [profile.wasm]
 inherits = "release"

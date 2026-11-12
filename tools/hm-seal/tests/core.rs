@@ -583,3 +583,53 @@ fn an_admin_hands_over_to_a_new_phone() {
         assert_eq!(m.admins().unwrap(), vec![new_phone.signature_key()], "a removed admin still counted");
     }
 }
+
+#[test]
+fn a_removed_admin_paired_again_with_its_old_keys_is_an_ordinary_device() {
+    // The phone's keys as they were before it started the group: a removed
+    // device cannot join the same group again, but a copy of its keys can.
+    let mut phone = Member::new(b"phone").unwrap();
+    let keys_only = phone.save().unwrap();
+    let mut room = Member::new(b"room").unwrap();
+    let mut laptop = Member::new(b"laptop").unwrap();
+    phone.create_group(b"account-1").unwrap();
+    let added = phone.add(&room.key_package().unwrap(), &room.signature_key()).unwrap();
+    room.join(&added.welcome, &phone.signature_key()).unwrap();
+    let added = phone.add(&laptop.key_package().unwrap(), &laptop.signature_key()).unwrap();
+    room.handle(&added.commit).unwrap();
+    laptop.join(&added.welcome, &phone.signature_key()).unwrap();
+    let promote = phone.make_admin(&laptop.signature_key()).unwrap();
+    room.handle(&promote).unwrap();
+    laptop.handle(&promote).unwrap();
+    let out = laptop.remove(leaf_of(&laptop, b"phone")).unwrap();
+    room.handle(&out).unwrap();
+
+    // The laptop pairs the phone's keys again.
+    let mut again = Member::load(&keys_only).unwrap();
+    assert_eq!(again.signature_key(), phone.signature_key(), "control: the same keys");
+    let back = laptop.add(&again.key_package().unwrap(), &again.signature_key()).unwrap();
+    assert!(matches!(room.handle(&back.commit).unwrap(), Incoming::Commit { .. }));
+    again.join(&back.welcome, &laptop.signature_key()).unwrap();
+    for m in [&laptop, &room, &again] {
+        assert_eq!(m.admins().unwrap(), vec![laptop.signature_key()], "a device paired again with its old keys came back as an admin");
+    }
+    let tablet = Member::new(b"tablet").unwrap();
+    let got = again.add(&tablet.key_package().unwrap(), &tablet.signature_key());
+    assert!(matches!(got, Err(SealError::NotAdmin)), "the phone paired again added a device: {:?}", got.map(|_| ()));
+
+    // An admin makes it one again; its add then keeps both admins.
+    let promote = laptop.make_admin(&again.signature_key()).unwrap();
+    room.handle(&promote).unwrap();
+    again.handle(&promote).unwrap();
+    let added = again.add(&tablet.key_package().unwrap(), &tablet.signature_key()).unwrap();
+    for m in [&mut room, &mut laptop] {
+        assert!(matches!(m.handle(&added.commit).unwrap(), Incoming::Commit { .. }));
+    }
+    let mut both = vec![laptop.signature_key(), again.signature_key()];
+    both.sort();
+    for m in [&laptop, &room, &again] {
+        let mut got = m.admins().unwrap();
+        got.sort();
+        assert_eq!(got, both, "an add dropped an admin that is still in the group");
+    }
+}

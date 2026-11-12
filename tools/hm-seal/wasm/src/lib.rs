@@ -2,7 +2,8 @@
 //! as `Uint8Array`, and only a `Uint8Array` is taken as bytes. A refusal throws an `Error` whose `name` is "SealError",
 //! "Removed" when this device was removed from its group, "WrongDevice"
 //! when pairing met a device other than the one the owner confirmed, or
-//! "NotAdmin" when a device that is not an admin tried to add one.
+//! "NotAdmin" when a device that is not an admin tried to add or remove a
+//! device or change who the admins are.
 
 use js_sys::{Array, Error, Object, Reflect, Uint8Array};
 use seal_core as core_;
@@ -170,7 +171,7 @@ impl Member {
     /// `{kind: "commit", epoch, by, added, removed}`: the committer's signature
     /// key and those of the devices added and removed; or the same with
     /// `kind: "refused"` for a commit a device that is not an admin made to add
-    /// a device, remove an admin or change the admin list, which is not
+    /// or remove a device or change the admin list, which is not
     /// applied. Leaf indices are reused after a removal: decide by `senderKey`.
     pub fn handle(&mut self, #[wasm_bindgen(unchecked_param_type = "Uint8Array")] message: JsValue) -> Result<Object> {
         match self.0.handle(&input(&message, "a message")?).map_err(err)? {
@@ -191,7 +192,9 @@ impl Member {
         self.0.make_admin(&input(&signature_key, "a signature key")?).map_err(err)
     }
 
-    /// The admin devices' signature keys: the only ones that may add or remove devices.
+    /// The admin devices' signature keys: the only ones that may add or remove
+    /// devices. A device paired again with a removed admin's keys is not one
+    /// until an admin makes it one again.
     pub fn admins(&self) -> Result<Array> {
         Ok(self.0.admins().map_err(err)?.iter().map(|k| bytes(k)).collect())
     }

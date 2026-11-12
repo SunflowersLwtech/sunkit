@@ -220,6 +220,23 @@ test("only the admin device adds or removes devices", () => {
   assert.deepEqual(hex(t.room.admins()), hex([t.phone.signatureKey(), t.web.signatureKey()]));
 });
 
+test("a commit that breaks the admin rule is reported as refused", () => {
+  // The room's own add and removal. The binding cannot make either, so they
+  // are made in Rust: cargo run --example refused_fixture --features test-support -- <dir>
+  const d = process.env.HM_SEAL_REFUSED_FIXTURE;
+  assert.ok(d, "set HM_SEAL_REFUSED_FIXTURE to a directory the refused_fixture example wrote");
+  const read = (name) => new Uint8Array(readFileSync(join(d, name)));
+  for (const [commit, added, removed] of [
+    ["add.commit", [read("listener.key")], []],
+    ["remove.commit", [], [read("laptop.key")]],
+  ]) {
+    const phone = s.Member.load(read("phone.save"));
+    const want = { kind: "refused", epoch: 2, by: read("room.key"), added, removed };
+    assert.deepEqual(phone.handle(read(commit)), want, `the room's ${commit} was not reported as refused`);
+    assert.equal(phone.epoch(), 2);
+  }
+});
+
 test("pairing refuses an empty confirmed key on either side", () => {
   const t = trio();
   const tablet = new s.Member(enc("tablet"));

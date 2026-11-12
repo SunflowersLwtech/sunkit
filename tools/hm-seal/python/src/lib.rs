@@ -12,7 +12,7 @@ use seal_core as core_;
 create_exception!(hm_seal, SealError, PyValueError, "hm-seal refused: the message, frame, blob or save did not check out.");
 create_exception!(hm_seal, Removed, SealError, "This device was removed from its group.");
 create_exception!(hm_seal, WrongDevice, SealError, "Not the device the owner confirmed while pairing.");
-create_exception!(hm_seal, NotAdmin, SealError, "Only an admin device may add devices or remove an admin.");
+create_exception!(hm_seal, NotAdmin, SealError, "Only an admin device may add or remove devices or change who the admins are.");
 
 fn err(e: core_::SealError) -> PyErr {
     match e {
@@ -91,7 +91,7 @@ impl Member {
     /// ("application", sender leaf, bytes, sender's signature key),
     /// ("commit", epoch, committer's signature key, [keys added], [keys removed]),
     /// or ("refused", epoch, ...the same) for a commit a device that is not an
-    /// admin made to add a device, remove an admin or change the admin list:
+    /// admin made to add or remove a device or change the admin list:
     /// not applied; an admin removes that device.
     /// Leaf indices are reused after a removal: decide by the signature key.
     fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<Py<PyAny>> {
@@ -121,7 +121,9 @@ impl Member {
         Ok(bytes(py, &lock(&self.0)?.make_admin(signature_key).map_err(err)?))
     }
 
-    /// The admin devices' signature keys: the only ones that may add or remove devices.
+    /// The admin devices' signature keys: the only ones that may add or remove
+    /// devices. A device paired again with a removed admin's keys is not one
+    /// until an admin makes it one again.
     fn admins(&self, py: Python<'_>) -> PyResult<Vec<Py<PyBytes>>> {
         Ok(lock(&self.0)?.admins().map_err(err)?.iter().map(|k| bytes(py, k)).collect())
     }

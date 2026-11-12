@@ -1,6 +1,8 @@
 """The Python binding hands each promise of hm-seal through unchanged."""
 
 import hashlib
+import os
+import pathlib
 import threading
 
 import pytest
@@ -181,3 +183,19 @@ def test_only_the_admin_device_adds_or_removes_devices():
     assert room.handle(promote)[0] == "commit"
     laptop.handle(promote)
     assert sorted(room.admins()) == sorted([phone.signature_key(), laptop.signature_key()])
+
+
+def test_a_commit_that_breaks_the_admin_rule_is_reported_as_refused():
+    # The room's own add and removal. The binding cannot make either, so they
+    # are made in Rust: cargo run --example refused_fixture --features test-support -- <dir>
+    d = os.environ.get("HM_SEAL_REFUSED_FIXTURE")
+    assert d, "set HM_SEAL_REFUSED_FIXTURE to a directory the refused_fixture example wrote"
+
+    def read(name):
+        return (pathlib.Path(d) / name).read_bytes()
+
+    room = read("room.key")
+    for commit, added, removed in (("add.commit", [read("listener.key")], []), ("remove.commit", [], [read("laptop.key")])):
+        phone = hm_seal.Member.load(read("phone.save"))
+        assert phone.handle(read(commit)) == ("refused", 2, room, added, removed), f"the room's {commit} was not reported as refused"
+        assert phone.epoch() == 2

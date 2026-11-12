@@ -22,7 +22,8 @@ Only an admin device adds or removes devices or changes who the admins are. The 
 - A commit from a device that is not an admin, that adds or removes a device or changes the list (a compromised room camera adding a listener, say), is not applied by any other device: `handle` returns `Incoming::Refused` naming who did it and what it added and removed, and the group stays where it was. The device that made it has left the others' group by doing so; the app shows it and offers to remove it, which an admin's commit does. Because the relay cannot see who sent a commit (handshake messages are encrypted), it must not keep only the first commit it gets for an epoch: the admin's commit that removes the offender comes second.
 - Every applied commit (`Incoming::Commit`) names the device that made it and the devices it added and removed, so every device can show who added which device.
 - A device leaves by being removed by an admin. A device cannot remove itself: an MLS commit never removes its own sender.
-- With every admin device lost, nothing can be added to the group again: the owner starts a new group on a new device, restores stored data with the recovery secret, and pairs the other devices again.
+- A removed admin's key stays in the list but no longer counts, and the next add drops it from the list in the same commit. So a device paired again with the keys it had (a copy of its save, say) is an ordinary device until an admin makes it one again.
+- With every admin device lost, nothing can be added to the group again: the owner starts a new group on a new device, restores stored data with the recovery secret, and pairs the other devices again. Start it promptly when a lost device was the only admin: nothing can remove it, so it keeps reading every message the others send until they move to the new group.
 
 ## Saving a device
 
@@ -45,6 +46,13 @@ VIRTUAL_ENV=$PWD/.venv PATH=$PWD/.venv/bin:$PATH maturin develop -m python/Cargo
 .venv/bin/python -m pytest python/tests
 ```
 
+One test needs commits that break the admin rule, which the binding cannot make. The `refused_fixture` example writes them, freshly each time (OpenMLS refuses an added device's key package once its lifetime is over), and `HM_SEAL_REFUSED_FIXTURE` names its directory; without it that test fails rather than skips:
+
+```
+cargo run --example refused_fixture --features test-support --locked -- /tmp/hm-seal-refused
+HM_SEAL_REFUSED_FIXTURE=/tmp/hm-seal-refused .venv/bin/python -m pytest python/tests
+```
+
 ## WebAssembly
 
 `wasm/` is the binding for the browser (wasm-bindgen 0.2.130): the same four classes, with `Uint8Array` in and out, `handle()` returning `{kind: "application", sender, senderKey, bytes}` or `{kind: "commit" | "refused", epoch, by, added, removed}`, and refusals thrown as an `Error` named `SealError`, `Removed`, `WrongDevice` or `NotAdmin`. Bytes are taken only from a `Uint8Array` (a Node `Buffer` is one); a string, an array or anything else is refused with `SealError`. Left to wasm-bindgen's own glue, a string would be copied character by character, most of them to 0, so a frame sealed with the metadata "camera-a" would have opened with "camera-b". Randomness comes from `crypto.getRandomValues`, and OpenMLS reads the clock through `web-time`. The `wasm` profile builds it for size: 1.76 MB, 517 KB gzipped (measured on the wasm-bindgen output).
@@ -53,10 +61,10 @@ VIRTUAL_ENV=$PWD/.venv PATH=$PWD/.venv/bin:$PATH maturin develop -m python/Cargo
 cargo build -p hm-seal-wasm --target wasm32-unknown-unknown --profile wasm --locked
 wasm-bindgen --target web --out-dir wasm/pkg-web target/wasm32-unknown-unknown/wasm/hm_seal.wasm    # for the page
 wasm-bindgen --target nodejs --out-dir wasm/pkg-node target/wasm32-unknown-unknown/wasm/hm_seal.wasm  # for the tests
-HM_SEAL_PYTHON=.venv/bin/python node --test wasm/tests/binding.test.mjs
+HM_SEAL_PYTHON=.venv/bin/python HM_SEAL_REFUSED_FIXTURE=/tmp/hm-seal-refused node --test wasm/tests/binding.test.mjs
 ```
 
-The tests include a Python device and a browser exchanging a message and a frame in both directions, so they need the Python binding installed in `HM_SEAL_PYTHON`; without it that test fails rather than skips. A page can only be as trustworthy as the server that sends its code: nothing in a browser today checks that the script and this `.wasm` are the published ones.
+The tests include a Python device and a browser exchanging a message and a frame in both directions, so they need the Python binding installed in `HM_SEAL_PYTHON`, and the refused commits in `HM_SEAL_REFUSED_FIXTURE` as for Python; without either, its test fails rather than skips. A page can only be as trustworthy as the server that sends its code: nothing in a browser today checks that the script and this `.wasm` are the published ones.
 
 The Swift and Kotlin bindings come next.
 

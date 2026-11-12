@@ -292,16 +292,40 @@ impl Member {
         if kp.leaf_node().signature_key().as_slice() != signature_key {
             return Err(SealError::WrongDevice);
         }
-        if !self.admins()?.contains(&self.signature_key()) {
+        let admins = self.admins()?;
+        if !admins.contains(&self.signature_key()) {
             return Err(SealError::NotAdmin);
         }
-        self.commit_add(kp)
+        // A removed admin's key stays in the list, where it no longer counts.
+        // The add drops every listed key that is not in the group, so a device
+        // paired again with the keys it had comes back as an ordinary device.
+        let listed = admins_in(self.group()?.extensions());
+        let pruned = if listed == admins { None } else { Some(admins_extension(&admins)?) };
+        self.commit_add(kp, pruned)
     }
 
-    fn commit_add(&mut self, kp: KeyPackage) -> Result<Added> {
+    /// One commit adding the device, and setting the admin list to `admins`
+    /// when given.
+    fn commit_add(&mut self, kp: KeyPackage, admins: Option<Extensions<GroupContext>>) -> Result<Added> {
         let (provider, signer) = (&self.provider, &self.signer);
         let group = self.group.as_mut().ok_or(SealError::NoGroup)?;
-        let (commit, welcome, _) = group.add_members(provider, signer, &[kp]).map_err(mls)?;
+        // What add_members checks first, and the commit builder does not.
+        if group.pending_commit().is_some() || !group.is_active() {
+            return Err(SealError::Mls("the group cannot take a commit now".into()));
+        }
+        let mut commit = group.commit_builder().propose_adds([kp]).force_self_update(true);
+        if let Some(extensions) = admins {
+            commit = commit.propose_group_context_extensions(extensions).map_err(mls)?;
+        }
+        let bundle = commit
+            .load_psks(provider.storage())
+            .map_err(mls)?
+            .build(provider.rand(), provider.crypto(), signer, |_| true)
+            .map_err(mls)?
+            .stage_commit(provider)
+            .map_err(mls)?;
+        let welcome = bundle.to_welcome_msg().ok_or_else(|| SealError::Mls("an add made no Welcome".into()))?;
+        let commit = bundle.into_commit();
         group.merge_pending_commit(provider).map_err(mls)?;
         Ok(Added {
             commit: commit.tls_serialize_detached().map_err(mls)?,
@@ -414,7 +438,9 @@ impl Member {
 
     /// The signature keys of the group's admin devices that are still in it:
     /// the only devices whose commits may add or remove a device or change
-    /// this list. A removed admin's key stays listed but no longer counts.
+    /// this list. A removed admin's key stays listed but no longer counts, and
+    /// the next add drops it: a device paired again with the same keys is an
+    /// ordinary device until an admin makes it one again ([`Member::make_admin`]).
     pub fn admins(&self) -> Result<Vec<Vec<u8>>> {
         let group = self.group()?;
         let members: Vec<Vec<u8>> = group.members().map(|m| m.signature_key).collect();
@@ -604,7 +630,7 @@ impl Member {
             return Err(SealError::BadMessage("not a key package".into()));
         };
         let kp = kp.validate(self.provider.crypto(), ProtocolVersion::Mls10).map_err(mls)?;
-        self.commit_add(kp)
+        self.commit_add(kp, None)
     }
 
     #[cfg(feature = "test-support")]
