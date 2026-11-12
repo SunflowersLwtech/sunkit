@@ -332,13 +332,19 @@ The sidecar config is the `hipimind` section above plus `"local_api": "http://12
 [`examples/hipimind-sidecar.json`](../examples/hipimind-sidecar.json). It forwards switches, state,
 events and live video; model choice and Test connection need the in-process connector.
 
-## 6b. End-to-end encryption (being built)
+## 6b. End-to-end encryption
 
 HipiMind's protocol v2 lets a device send everything sealed, so HipiMind relays and stores it without
-being able to read it. The formats room-companion and the owner's pages share for it (the pairing code,
-the group log, commands, sealed events, state and frames) are in [e2ee.md](e2ee.md), and the device's
-side is `room_companion/e2ee.py`, which needs hm-seal's Python binding (`tools/hm-seal/python`, not on
-PyPI). The connector does not use it yet: it still speaks protocol v1, as described above.
+being able to read it. Turn it on with `"e2ee": {"enabled": true}` in the `hipimind` section. It needs
+hm-seal's Python binding (`tools/hm-seal/python`, not on PyPI; without it the connector does not connect).
+Then pair with the code an admin page shows: `python -m room_companion e2ee-pair --code 'hmroom1.…'`.
+
+With it on, only the three switches leave the machine in plaintext. Commands are taken only sealed, from
+an admin device (`live` is the exception), the welcome's settings and HipiMind's cloud models are not
+used, and events, the state and live frames go out sealed. The formats the device and the owner's pages
+share, and what happens when the device leaves the group, are in [e2ee.md](e2ee.md).
+
+The HipiMind page's side is still being built. Until it is released, there is no page to pair with.
 
 ## 7. Troubleshooting
 
