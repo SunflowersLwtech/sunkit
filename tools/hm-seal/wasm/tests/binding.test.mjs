@@ -237,6 +237,27 @@ test("a commit that breaks the admin rule is reported as refused", () => {
   }
 });
 
+test("a commit read as an application message is refused and still applies from the log", () => {
+  const t = trio();
+  const tablet = new s.Member(enc("tablet"));
+  const added = t.phone.add(tablet.keyPackage(), tablet.signatureKey());
+  assert.throws(
+    () => t.web.handleApplication(added.commit),
+    (e) => e instanceof Error && e.name === "SealError" && /not an application message/.test(e.message),
+    "a commit read as an application message was not refused",
+  );
+  assert.equal(t.web.epoch(), 2, "a commit read as an application message was applied");
+  const seen = t.web.handle(added.commit);
+  assert.deepEqual([seen.kind, seen.epoch], ["commit", 3], "the commit no longer applied from the log");
+  const msg = t.phone.seal(enc("video off"));
+  assert.deepEqual(t.web.handleApplication(msg), {
+    kind: "application",
+    sender: t.phone.leafIndex(),
+    senderKey: t.phone.signatureKey(),
+    bytes: enc("video off"),
+  });
+});
+
 test("pairing refuses an empty confirmed key on either side", () => {
   const t = trio();
   const tablet = new s.Member(enc("tablet"));

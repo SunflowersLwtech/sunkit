@@ -199,3 +199,15 @@ def test_a_commit_that_breaks_the_admin_rule_is_reported_as_refused():
         phone = hm_seal.Member.load(read("phone.save"))
         assert phone.handle(read(commit)) == ("refused", 2, room, added, removed), f"the room's {commit} was not reported as refused"
         assert phone.epoch() == 2
+
+
+def test_a_commit_read_as_an_application_message_is_refused_and_still_applies_from_the_log():
+    phone, room, laptop = trio()
+    tablet = hm_seal.Member(b"tablet")
+    commit, _ = phone.add(tablet.key_package(), tablet.signature_key())
+    with pytest.raises(hm_seal.SealError, match="not an application message"):
+        room.handle_application(commit)
+    assert room.epoch() == 2, "a commit read as an application message was applied"
+    assert room.handle(commit) == ("commit", 3, phone.signature_key(), [tablet.signature_key()], []), "the commit no longer applied from the log"
+    msg = phone.seal(b"video off")
+    assert room.handle_application(msg) == ("application", phone.leaf_index(), b"video off", phone.signature_key())

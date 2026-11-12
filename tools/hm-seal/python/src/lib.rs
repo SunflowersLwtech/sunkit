@@ -23,6 +23,22 @@ fn err(e: core_::SealError) -> PyErr {
     }
 }
 
+fn incoming_to_py(py: Python<'_>, incoming: core_::Incoming) -> PyResult<Py<PyAny>> {
+    let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
+    let out = match incoming {
+        core_::Incoming::Application { sender, sender_key, bytes: b } => {
+            ("application", u64::from(sender), bytes(py, &b), bytes(py, &sender_key)).into_pyobject(py)?
+        }
+        core_::Incoming::Commit { epoch, by, added, removed } => {
+            ("commit", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
+        }
+        core_::Incoming::Refused { epoch, by, added, removed } => {
+            ("refused", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
+        }
+    };
+    Ok(out.into_any().unbind())
+}
+
 fn bytes(py: Python<'_>, v: &[u8]) -> Py<PyBytes> {
     PyBytes::new(py, v).unbind()
 }
@@ -96,20 +112,16 @@ impl Member {
     /// Leaf indices are reused after a removal: decide by the signature key.
     fn handle(&self, py: Python<'_>, message: &[u8]) -> PyResult<Py<PyAny>> {
         let incoming = lock(&self.0)?.handle(message).map_err(err)?;
-        let out = match incoming {
-            core_::Incoming::Application { sender, sender_key, bytes: b } => {
-                ("application", u64::from(sender), bytes(py, &b), bytes(py, &sender_key)).into_pyobject(py)?
-            }
-            core_::Incoming::Commit { epoch, by, added, removed } => {
-                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
-                ("commit", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
-            }
-            core_::Incoming::Refused { epoch, by, added, removed } => {
-                let keys = |list: Vec<Vec<u8>>| list.iter().map(|k| bytes(py, k)).collect::<Vec<_>>();
-                ("refused", epoch, bytes(py, &by), keys(added), keys(removed)).into_pyobject(py)?
-            }
-        };
-        Ok(out.into_any().unbind())
+        incoming_to_py(py, incoming)
+    }
+
+    /// One application message, as `handle` returns it; anything else (a
+    /// commit, say) raises SealError before it is decrypted, so the group is
+    /// unchanged and the message still reads with `handle`. For messages that
+    /// arrive outside the group's ordered log, such as commands.
+    fn handle_application(&self, py: Python<'_>, message: &[u8]) -> PyResult<Py<PyAny>> {
+        let incoming = lock(&self.0)?.handle_application(message).map_err(err)?;
+        incoming_to_py(py, incoming)
     }
 
     fn epoch(&self) -> PyResult<u64> {
