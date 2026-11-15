@@ -332,6 +332,14 @@ The sidecar config is the `hipimind` section above plus `"local_api": "http://12
 [`examples/hipimind-sidecar.json`](../examples/hipimind-sidecar.json). It forwards switches, state,
 events and live video; model choice and Test connection need the in-process connector.
 
+## 6b. End-to-end encryption (being built)
+
+HipiMind's protocol v2 lets a device send everything sealed, so HipiMind relays and stores it without
+being able to read it. The formats room-companion and the owner's pages share for it (the pairing code,
+the group log, commands, sealed events, state and frames) are in [e2ee.md](e2ee.md), and the device's
+side is `room_companion/e2ee.py`, which needs hm-seal's Python binding (`tools/hm-seal/python`, not on
+PyPI). The connector does not use it yet: it still speaks protocol v1, as described above.
+
 ## 7. Troubleshooting
 
 | log line / website | what it means |
