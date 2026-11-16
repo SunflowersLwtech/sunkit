@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+# device-broker — host-local lease registry for shared agent resources.
+#
+# One resource = one lease. A lease is a directory created with mkdir(2)
+# (atomic on every supported platform) holding a lease.json that records the
+# owner's pid, the pid's start time (so a reused pid cannot inherit a lease),
+# the owning worktree/session, and resource metadata (avd, port, udid, profile
+# dir, CDP port…). A lease whose owner process is gone, or whose pid now
+# belongs to a different process start, is stale and may be reclaimed by the
+# next acquirer — never by a "cleanup" that kills processes. A lease that
+# cannot be read (an empty or damaged lease.json, a simulator whose state
+# xcrun cannot report) is HELD, not free: acquire and check exit 4 on it, and
+# it counts against its cap. Only an unreadable lease.json that has not
+# changed for longer than the grace window (DB_GRACE_S, 30) — a write that
+# died — is reclaimed. lease.json is written to a temp file and moved into
+# place, so a reader never sees half of one.
+#
+# Subcommands:
+#   acquire  <resource> [--meta k=v …] [--ttl SEC] [--owner-pid PID]
+#            [--owner-key KEY] [--while-booted UDID]
+#                                -> prints lease key on stdout, exit 0
+#                                   exit 3 if a live lease is held by another
+#                                   exit 4 if state is unreadable (fail closed)
+#            --while-booted UDID: the lease also lives while that iOS
+#            simulator is booted (xcrun simctl list devices), after its owner
+#            pid has gone: a booted simulator has no process of the caller's
+#            to anchor it (simctl-run boot returns at once).
+#   release  <resource> [--owner-key KEY]
+#   check    <resource> [--owner-key KEY] [--require-mine]
+#            verify a device you already hold is still yours, or that nobody
+#            holds it (without --require-mine: exit 0 held-by-me-or-nobody,
+#            exit 3 held-by-other, exit 4 undeterminable)
+#   status   [--json]
+#   gc                      remove stale leases (never kills processes)
+#   limits    set <type> <n> | get <type> | list
+#
+# Resource naming (caller chooses; convention):
+#   android-emulator:port-<n>      the adb console port (what serial maps to)
+#   android-emulator:avd-<name>    an AVD definition (when -read-only not used)
+#   ios-simulator:udid-<udid>      one booted simulator
+#   ios-simulator:host             whole-machine "only N sims at once" budget
+#   browser:cdp-port-<n>           a CDP/debug port
+#   browser:profile-<hash>         a profile/user-data directory
+#   physical-device:<serial>       real hardware (fail closed, see check)
+#
+# Concurrency caps live in $DB_HOME/limits.json (defaults: android-emulator 1,
+# ios-simulator 1, browser:cdp-port 8 — see `limits`). Cap keys resolve by
+# longest-prefix match; a new lease under a key already at cap exits 6.
+#
+# Portability: bash 3.2+ (macOS system bash), Linux. No flock: mkdir is the
+# atomic. No /proc assumed: liveness is `kill -0` + `ps -o lstart=` compare.
+# Env: DB_HOME (default ~/.device-broker), DB_SESSION (free-form owner label,
+# default = git worktree or pwd), DB_QUIET=1 suppresses stderr chatter.
+#
+# THIS TOOL NEVER KILLS A PROCESS. Releasing/gc removes lease files only.
+# Stopping the emulator/browser/simulator is the lease holder's own job, by the
+# pid it recorded — never by pattern (no pkill -f, no killall, no --all).
+
+set -u
+
+DB_HOME="${DB_HOME:-$HOME/.device-broker}"
+LEASES="${DB_HOME}/leases"
+LIMITS_FILE="${DB_HOME}/limits.json"
+mkdir -p "${LEASES}" 2>/dev/null || {
+  echo "device-broker: cannot create ${LEASES}" >&2; exit 4; }
+
+say() { [ "${DB_QUIET:-0}" = "1" ] || printf '%s\n' "$*" >&2; }
+die() { say "device-broker: $*"; exit "${2:-4}"; }
+
+now_s() { date +%s; }
+
+# pid_lstart PID -> prints ps lstart string (empty if pid gone)
+pid_lstart() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
+
+# lease_is_live DIR -> 0 live, 1 stale, 2 cannot tell (callers: held)
+# Live = the lease has not passed its expiresAt, when one is set, AND
+#        either the owner pid exists (and its lstart, when recorded, still
+#        matches) or the simulator its whileBooted names is still booted.
+# Cannot tell = lease.json has no readable owner pid and changed within the
+#        grace window, or the whileBooted simulator's state cannot be read.
+lease_is_live() {
+  local d="$1" jf="${d}/lease.json" pid pls rec exp wb
+  if [ ! -f "${jf}" ]; then
+    # No lease.json: an acquire in flight owns the dir for a few seconds —
+    # treating that instant as stale would let a racer remove a brand-new
+    # claim. Only a bare dir that has outlived the grace window is stale.
+    [ -d "${d}" ] || return 1
+    local mt
+    mt="$(dir_mtime_s "${d}")"
+    [ -n "${mt}" ] && [ $(( $(now_s) - mt )) -gt "${DB_GRACE_S:-30}" ] && return 1
+    return 0
+  fi
+  pid="$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
+  if [ -z "${pid}" ]; then
+    # No owner pid to read (empty, cut short or damaged): a holder may be
+    # behind it, and a second holder of one device is what this tool exists to
+    # stop. Held, unless nothing has touched it for the grace window.
+    lease_young "${d}" && return 2
+    return 1
+  fi
+  exp="$(sed -n 's/.*"expiresAt": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
+  if [ -n "${exp}" ] && [ "$(now_s)" -ge "${exp}" ]; then
+    return 1                       # TTL elapsed -> stale
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
+    rec="$(sed -n 's/.*"pidStart": *"\([^"]*\)".*/\1/p' "${jf}" | head -1)"
+    pls=""
+    [ -n "${rec}" ] && pls="$(pid_lstart "${pid}")"
+    if [ -z "${rec}" ] || [ -z "${pls}" ] || [ "${pls}" = "${rec}" ]; then
+      return 0                     # the owner process still runs
+    fi
+    # pid reused by a different process: the owner is gone (below)
+  fi
+  # The owner process is gone. A simulator lease lives on while its
+  # simulator is booted; anything else is stale.
+  wb="$(sed -n 's/.*"whileBooted": *"\([^"]*\)".*/\1/p' "${jf}" | head -1)"
+  [ -n "${wb}" ] || return 1
+  sim_booted "${wb}"
+  case $? in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# lease_young DIR -> 0 if the lock dir or its lease.json changed within the
+# grace window (or its age cannot be read), 1 if both are older
+lease_young() {
+  local f mt
+  for f in "$1" "$1/lease.json"; do
+    [ -e "${f}" ] || continue
+    mt="$(dir_mtime_s "${f}")"
+    [ -n "${mt}" ] || return 0
+    [ $(( $(now_s) - mt )) -gt "${DB_GRACE_S:-30}" ] || return 0
+  done
+  return 1
+}
+
+# sim_booted UDID -> 0 booted (or booting), 1 not booted, 2 cannot tell
+sim_booted() {
+  local out
+  out="$(xcrun simctl list devices 2>/dev/null)" || return 2
+  [ -n "${out}" ] || return 2
+  case "${out}" in
+    *"(${1}) (Booted)"*|*"(${1}) (Booting)"*) return 0 ;;
+  esac
+  return 1
+}
+
+# dir_mtime_s DIR -> mtime seconds, "" if undeterminable
+dir_mtime_s() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# owner key: stable per session/worktree; --owner-key overrides (tests use it)
+owner_key() {
+  if [ -n "${OWNER_KEY:-}" ]; then printf '%s' "${OWNER_KEY}"; return; fi
+  if [ -n "${DB_OWNER_KEY:-}" ]; then printf '%s' "${DB_OWNER_KEY}"; return; fi
+  if [ -n "${DB_SESSION:-}" ]; then printf '%s' "${DB_SESSION}"; return; fi
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top="${PWD}"
+  printf '%s:%s' "${top}" "$$"
+}
+
+# cap_key_candidates RESOURCE -> candidate cap keys, longest first.
+# "browser:cdp-port-9222" -> "browser:cdp-port", "browser"
+# "ios-simulator:host"    -> "ios-simulator:host", "ios-simulator"
+# "android-emulator:port-1" -> "android-emulator:port", "android-emulator"
+cap_key_candidates() {
+  local res="$1" p1 rest
+  p1="${res%%:*}"; rest="${res#*:}"
+  if [ "${rest}" = "${res}" ]; then printf '%s\n' "${p1}"; return; fi
+  case "${rest}" in
+    *-*) printf '%s:%s\n' "${p1}" "${rest%-*}" ;;
+    *)   printf '%s:%s\n' "${p1}" "${rest}" ;;
+  esac
+  printf '%s\n' "${p1}"
+}
+
+# default_cap KEY -> cap from the built-in table, "" if unknown
+default_cap() {
+  case "$1" in
+    android-emulator|android-emulator:*) printf '1' ;;
+    ios-simulator|ios-simulator:*)       printf '1' ;;
+    browser|browser:*)                   printf '8' ;;
+    physical-device|physical-device:*)   printf '0' ;;
+    *)                                   printf '' ;;
+  esac
+}
+
+# limit_for KEY -> cap for exactly KEY (file override first, then defaults)
+limit_for() {
+  local k="$1" v
+  if [ -f "${LIMITS_FILE}" ]; then
+    v="$(sed -n 's/.*"'"${k}"'": *\([0-9][0-9]*\).*/\1/p' "${LIMITS_FILE}" | head -1)"
+    [ -n "${v}" ] && { printf '%s' "${v}"; return; }
+  fi
+  v="$(default_cap "${k}")"
+  [ -n "${v}" ] && { printf '%s' "${v}"; return; }
+  printf '8'
+}
+
+# resolve_cap RESOURCE -> "KEY CAP": the exact name first (a key may itself be
+# queried), then each candidate key longest-first; file override beats the
+# built-in table. Falls back to the first segment with cap 8.
+resolve_cap() {
+  local res="$1" k v hit="" first=1
+  # Exact name first, file only (an explicit "limits set <full-name>" win);
+  # then each candidate key, file then built-ins.
+  for k in "${res}" $(cap_key_candidates "${res}"); do
+    [ -z "${k}" ] && continue
+    if [ -f "${LIMITS_FILE}" ] && \
+       grep -q '"'"${k}"'"' "${LIMITS_FILE}" 2>/dev/null; then
+      hit="${k}"; break
+    fi
+    # The exact name must not match a built-in wildcard like browser:* —
+    # that would short-circuit the candidate keys below.
+    [ "${first}" = 1 ] && { first=0; continue; }
+    v="$(default_cap "${k}")"
+    if [ -n "${v}" ]; then hit="${k}"; break; fi
+  done
+  [ -z "${hit}" ] && hit="${res%%:*}"
+  printf '%s %s\n' "${hit}" "$(limit_for "${hit}")"
+}
+
+# count_live PREFIX [EXCLUDE_RESOURCE] -> live leases whose name starts with PREFIX
+count_live() {
+  local prefix="$1" excl="${2:-}" d r n=0
+  for d in "${LEASES}"/*.lock; do
+    [ -d "${d}" ] || continue
+    r="$(basename "${d}" .lock)"
+    [ "${r}" = "${excl}" ] && continue
+    case "${r}" in "${prefix}"*) ;; *) continue ;; esac
+    # Held, or cannot tell (held too): either counts against the cap.
+    lease_is_live "${d}"
+    [ $? -ne 1 ] && n=$((n+1))
+  done
+  printf '%s' "${n}"
+}
+
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+cmd_acquire() {
+  local res="" ttl="" ownerpid="" metas="" OWNER_KEY="" wb=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --meta) metas="${metas} $2"; shift 2 ;;
+      --ttl) ttl="$2"; shift 2 ;;
+      --while-booted) wb="$2"; shift 2 ;;
+      --owner-pid) ownerpid="$2"; shift 2 ;;
+      --owner-key) OWNER_KEY="$2"; export OWNER_KEY; shift 2 ;;
+      -*) die "unknown flag $1" 4 ;;
+      *) [ -z "${res}" ] && res="$1" || die "extra arg $1" 4; shift ;;
+    esac
+  done
+  [ -n "${res}" ] || die "usage: acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]" 4
+  case "${res}" in *[!A-Za-z0-9:._-]*) die "bad resource name ${res}" 4 ;; esac
+  case "${wb}" in *[!0-9A-Fa-f-]*) die "bad simulator UDID ${wb}" 4 ;; esac
+
+  local capkey cap
+  read -r capkey cap <<<"$(resolve_cap "${res}")"
+
+  # Physical devices: refuse outright — the registry cannot arbitrate humans
+  # (same reasoning as device-claim-check).
+  case "${res%%:*}" in
+    physical-device)
+      die "physical-device leases are not auto-acquirable (a human may be holding the device); see docs" 5 ;;
+  esac
+
+  local d="${LEASES}/${res}.lock" attempt=0
+  while [ "${attempt}" -lt 3 ]; do
+    if mkdir "${d}" 2>/dev/null; then
+      break
+    fi
+    # Exists: live, stale, or cannot tell?
+    local st; lease_is_live "${d}"; st=$?
+    if [ "${st}" -eq 2 ]; then
+      say "cannot tell whether ${res} is held (its lease cannot be read, or its simulator's state): not taking it"
+      sed 's/^/  /' "${d}/lease.json" >&2 2>/dev/null || true
+      exit 4
+    fi
+    if [ "${st}" -eq 0 ]; then
+      # Same owner re-acquiring is fine (idempotent).
+      local jf="${d}/lease.json" existing
+      existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${jf}" 2>/dev/null | head -1)"
+      if [ "${existing}" = "$(owner_key)" ]; then
+        say "already held by this owner"
+        printf '%s\n' "${res}"; exit 0
+      fi
+      say "held by another owner:"
+      sed 's/^/  /' "${jf}" >&2 || true
+      exit 3
+    else
+      # Stale or unreadable: reclaim by removing the dir, then retry mkdir.
+      rm -f "${d}/lease.json" 2>/dev/null
+      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+    fi
+    attempt=$((attempt+1))
+  done
+  [ -d "${d}" ] || die "could not acquire ${res} after ${attempt} attempts" 4
+
+  # Enforce the cap resolved for this resource's key: count OTHER live leases
+  # under the same prefix.
+  local live; live="$(count_live "${capkey}" "${res}")"
+  if [ "${live}" -ge "${cap}" ]; then
+    rmdir "${d}" 2>/dev/null
+    say "resource group ${capkey} is at cap ${cap}; live holders:"
+    for x in "${LEASES}/${capkey}:"*.lock "${LEASES}/${capkey}.lock"; do
+      [ -d "${x}" ] || continue
+      [ "${x}" = "${d}" ] && continue
+      lease_is_live "${x}" && say "  $(basename "${x}" .lock): $(sed -n 's/.*"worktree": *"\([^"]*\)".*/\1/p' "${x}/lease.json" 2>/dev/null | head -1)"
+    done
+    exit 6
+  fi
+
+  # Default owner pid is the CALLER ($PPID): the agent shell/subshell that
+  # stays alive for the task. $$ is the device-broker process itself, which
+  # exits at once — a lease recorded against it is born stale.
+  local opid="${ownerpid:-${PPID}}"
+  local pls; pls="$(pid_lstart "${opid}")"
+  local meta_json="" kv k v
+  for kv in ${metas}; do
+    k="${kv%%=*}"; v="${kv#*=}"
+    meta_json="${meta_json},\"${k}\": \"$(json_escape "${v}")\""
+  done
+  local exp="" wbj=""
+  [ -n "${ttl}" ] && exp="\"expiresAt\": $(( $(now_s) + ttl )),"
+  [ -n "${wb}" ] && wbj="\"whileBooted\": \"${wb}\","
+  # Written beside, then moved into place: a reader sees no lease.json (held,
+  # by the grace rule) or a whole one, never the empty file a redirect
+  # leaves while its command substitutions run.
+  local tmpf="${d}/.lease.json.$$"
+  cat > "${tmpf}" <<-EOF
+	{"schemaVersion": 1, "resource": "$(json_escape "${res}")",
+	 "ownerKey": "$(json_escape "$(owner_key)")",
+	 "owner": {"pid": ${opid}, "pidStart": "$(json_escape "${pls}")",
+	           "host": "$(hostname 2>/dev/null || echo unknown)",
+	           "worktree": "$(json_escape "${PWD}")",
+	           "session": "$(json_escape "${DB_SESSION:-}")",
+	           "command": "$(json_escape "$0 $*")"},
+	 "acquiredAt": $(now_s), ${exp} ${wbj}
+	 "meta": {${meta_json#,}}}
+	EOF
+  mv -f "${tmpf}" "${d}/lease.json" || {
+    rm -f "${tmpf}" 2>/dev/null; rmdir "${d}" 2>/dev/null
+    die "could not write the lease on ${res}" 4; }
+  say "acquired ${res} (pid ${opid})"
+  printf '%s\n' "${res}"
+  exit 0
+}
+
+cmd_release() {
+  local res="" OWNER_KEY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --owner-key) OWNER_KEY="$2"; export OWNER_KEY; shift 2 ;;
+      -*) die "unknown flag $1" 4 ;;
+      *) [ -z "${res}" ] && res="$1" || die "extra arg" 4; shift ;;
+    esac
+  done
+  [ -n "${res}" ] || die "usage: release <resource>" 4
+  local d="${LEASES}/${res}.lock"
+  [ -d "${d}" ] || { say "no lease on ${res}"; exit 0; }
+  local existing st
+  existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
+  lease_is_live "${d}"; st=$?
+  if [ "${st}" -ne 1 ] && [ "${existing}" != "$(owner_key)" ]; then
+    [ "${st}" -eq 2 ] && [ -z "${existing}" ] && \
+      die "the lease on ${res} cannot be read; refusing to release it (fail closed)" 4
+    die "lease on ${res} is held by another owner; refusing to release" 3
+  fi
+  rm -f "${d}/lease.json" 2>/dev/null
+  rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+  say "released ${res}"
+  exit 0
+}
+
+cmd_check() {
+  local res="" req="" OWNER_KEY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --require-mine) req=1; shift ;;
+      --owner-key) OWNER_KEY="$2"; export OWNER_KEY; shift 2 ;;
+      -*) die "unknown flag $1" 4 ;;
+      *) [ -z "${res}" ] && res="$1" || die "extra arg" 4; shift ;;
+    esac
+  done
+  [ -n "${res}" ] || die "usage: check <resource> [--require-mine]" 4
+  local d="${LEASES}/${res}.lock"
+  if [ ! -d "${d}" ]; then
+    if [ -n "${req}" ]; then
+      say "no lease on ${res}; cannot prove it is mine"; exit 4
+    fi
+    exit 0
+  fi
+  local st; lease_is_live "${d}"; st=$?
+  if [ "${st}" -eq 2 ]; then
+    say "cannot tell whether ${res} is held (its lease cannot be read, or its simulator's state)"; exit 4
+  fi
+  if [ "${st}" -eq 1 ]; then
+    [ -n "${req}" ] && { say "only a stale lease on ${res}"; exit 4; }
+    exit 0
+  fi
+  local existing
+  existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
+  if [ "${existing}" = "$(owner_key)" ]; then exit 0; fi
+  say "${res} held by another owner:"
+  sed 's/^/  /' "${d}/lease.json" >&2 || true
+  exit 3
+}
+
+cmd_status() {
+  local d live_dead r first=1
+  printf '['
+  for d in "${LEASES}"/*.lock; do
+    [ -d "${d}" ] || continue
+    r="$(basename "${d}" .lock)"
+    lease_is_live "${d}"
+    case $? in 0) live_dead=live ;; 1) live_dead=stale ;; *) live_dead=unknown ;; esac
+    [ "${first}" = 1 ] || printf ','
+    first=0
+    printf '\n  {"resource": "%s", "state": "%s", "lease": %s}' \
+      "${r}" "${live_dead}" "$(cat "${d}/lease.json" 2>/dev/null || echo '{}')"
+  done
+  printf '\n]\n'
+}
+
+cmd_gc() {
+  local d n=0
+  for d in "${LEASES}"/*.lock; do
+    [ -d "${d}" ] || continue
+    lease_is_live "${d}"
+    if [ $? -eq 1 ]; then
+      rm -f "${d}/lease.json" 2>/dev/null
+      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+      n=$((n+1))
+    fi
+  done
+  say "gc: reclaimed ${n} stale lease(s)"
+}
+
+cmd_limits() {
+  local sub="${1:-list}"
+  case "${sub}" in
+    list)
+      # Built-in cap keys plus every key the file defines (file wins per key).
+      local seen=" android-emulator ios-simulator ios-simulator:host browser browser:cdp-port browser:profile physical-device "
+      printf '{\n'
+      printf '  "android-emulator": %s,\n' "$(limit_for android-emulator)"
+      printf '  "ios-simulator": %s,\n' "$(limit_for ios-simulator)"
+      printf '  "ios-simulator:host": %s,\n' "$(limit_for ios-simulator:host)"
+      printf '  "browser": %s,\n' "$(limit_for browser)"
+      printf '  "browser:cdp-port": %s,\n' "$(limit_for browser:cdp-port)"
+      printf '  "browser:profile": %s,\n' "$(limit_for browser:profile)"
+      printf '  "physical-device": %s' "$(limit_for physical-device)"
+      if [ -f "${LIMITS_FILE}" ]; then
+        local line k
+        while IFS= read -r line; do
+          k="$(printf '%s' "${line}" | sed -n 's/.*"\([A-Za-z0-9:_-]*\)": *[0-9][0-9]*.*/\1/p')"
+          [ -z "${k}" ] && continue
+          case "${seen}" in *" ${k} "*) continue ;; esac
+          printf ',\n  "%s": %s' "${k}" "$(limit_for "${k}")"
+          seen="${seen}${k} "
+        done < <(tr ',{}' '\n\n\n' < "${LIMITS_FILE}")
+      fi
+      printf '\n}\n' ;;
+    get)
+      [ -n "${2:-}" ] || die "usage: limits get <key|resource>" 4
+      resolve_cap "$2" | awk '{print $2}' ;;
+    set)
+      [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "usage: limits set <type> <n>" 4
+      case "$3" in *[!0-9]*) die "n must be an integer" 4 ;; esac
+      case "$2" in *[!A-Za-z0-9:_-]*) die "bad type name" 4 ;; esac
+      # The limits file is a flat {"type": int} map that only this command
+      # writes, so rebuild it line by line instead of editing JSON in place.
+      local tmp="${LIMITS_FILE}.$$" k v out="\"$2\": $3"
+      if [ -f "${LIMITS_FILE}" ]; then
+        while IFS= read -r line; do
+          k="$(printf '%s' "${line}" | sed -n 's/.*"\([A-Za-z0-9:_-]*\)": *[0-9][0-9]*.*/\1/p')"
+          v="$(printf '%s' "${line}" | sed -n 's/.*"[A-Za-z0-9:_-]*": *\([0-9][0-9]*\).*/\1/p')"
+          [ -n "${k}" ] && [ -n "${v}" ] && [ "${k}" != "$2" ] && \
+            out="${out}, \"${k}\": ${v}"
+        done < <(tr ',{}' '\n\n\n' < "${LIMITS_FILE}")
+      fi
+      printf '{%s}\n' "${out}" > "${tmp}" && mv "${tmp}" "${LIMITS_FILE}"
+      ;;
+    *) die "usage: limits list|get <type>|set <type> <n>" 4 ;;
+  esac
+}
+
+main() {
+  local sub="${1:-}"; shift || true
+  case "${sub}" in
+    acquire) cmd_acquire "$@" ;;
+    release) cmd_release "$@" ;;
+    check)   cmd_check "$@" ;;
+    status)  cmd_status "$@" ;;
+    gc)      cmd_gc "$@" ;;
+    limits)  cmd_limits "$@" ;;
+    -h|--help|help|'') sed -n '2,40p' "$0" ;;
+    *) die "unknown subcommand ${sub}" 4 ;;
+  esac
+}
+main "$@"
