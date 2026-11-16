@@ -230,7 +230,11 @@ class DeviceGroup:
         self.reason: str | None = None
         self._admin_key: bytes | None = None
         self._last: int | None = None
+        self._join_body: str | None = None
         self.skipped = 0
+        #: How the last `open_command` went: "ok", "later" (for an epoch this device has not reached
+        #: yet: try again once the log has been read further) or "refused".
+        self.open_outcome: str | None = None
         self._load()
 
     # --- persistence -------------------------------------------------------------------------------
@@ -264,6 +268,11 @@ class DeviceGroup:
                 (status == "joining" and admin is None):
             self._break("the group state could not be read")
             return
+        if state.get("device_id") != self.device_id:
+            # Paired to HipiMind again (a new device id, perhaps another account): the old account's
+            # group and keys do not go to the new one.
+            self._end("unpaired", "this device was paired to HipiMind again; scan a new code")
+            return
         try:
             with open(self._path(SAVE_FILE), "rb") as f:
                 self._member = self._hm.Member.load(f.read())
@@ -287,14 +296,18 @@ class DeviceGroup:
         self.status = status
         self._admin_key = admin
         self._last = last
+        join = state.get("join")
+        self._join_body = join if status == "joining" and last is None and isinstance(join, str) else None
         self.skipped = state.get("skipped") if isinstance(state.get("skipped"), int) else 0
 
     def _save_state(self):
-        state = {"status": self.status, "last_seq": self._last, "skipped": self.skipped}
+        state = {"status": self.status, "device_id": self.device_id, "last_seq": self._last, "skipped": self.skipped}
         if self.reason:
             state["reason"] = self.reason
         if self._admin_key is not None and self.status == "joining":
             state["admin_key"] = b64(self._admin_key)
+        if self._join_body is not None and self.status == "joining":
+            state["join"] = self._join_body
         _write_private(self._path(GROUP_FILE), json.dumps(state).encode("utf-8"))
 
     def _save_member(self) -> bool:
@@ -323,6 +336,7 @@ class DeviceGroup:
         self._keys = []
         self._admin_key = None
         self._last = None
+        self._join_body = None
 
     def _end(self, status: str, reason: str | None):
         self._wipe()
@@ -353,23 +367,35 @@ class DeviceGroup:
         self._member = member
         if not self._save_member():
             raise PairingRefused(self.reason or "this device's keys could not be saved")
-        self.status = "joining"
-        self.reason = None
-        self._admin_key = parsed.admin_key
-        self._last = None
-        self.skipped = 0
-        self._save_state()
         body = encode_body({"t": "join", "id": b64(parsed.pairing_id), "key": b64(key), "kp": b64(kp),
                             "mac": b64(join_mac(parsed.secret, key, kp))})
         if len(body) > GROUP_MAX_CHARS:  # pragma: no cover - a key package is a few hundred bytes
             raise PairingRefused("the join request is too large")
+        self.status = "joining"
+        self.reason = None
+        self._admin_key = parsed.admin_key
+        self._last = None
+        self._join_body = body
+        self.skipped = 0
+        self._save_state()
         return body
+
+    def pending_join(self) -> str | None:
+        """A join request HipiMind has not numbered yet (the connection dropped, or the device restarted
+        before `join_sent`): append it again. It holds no secret: only the MAC the code's secret made."""
+        return self._join_body if self.status == "joining" and self._last is None else None
 
     def join_sent(self, seq: int):
         """HipiMind numbered this device's join request `seq`: the Welcome comes after it."""
         if self.status == "joining" and _is_seq(seq):
             self._last = seq
+            self._join_body = None
             self._save_state()
+
+    def fell_behind(self):
+        """The log no longer has the next number this device needs (it was away for longer than the log
+        keeps messages, 30 days): it can never catch up, and an admin has to add it again."""
+        self._end("unpaired", "the group log no longer has what this device missed; pair it again")
 
     @property
     def last_seq(self) -> int | None:
@@ -500,6 +526,7 @@ class DeviceGroup:
         """A command a page sent as a sealed message (docs/e2ee.md), or None. Only an application
         message is read (a commit is refused before it is decrypted and still applies from the log),
         and only a command from an admin device is returned."""
+        self.open_outcome = "refused"
         if self.status != "joined":
             return None
         message = unb64(body)
@@ -511,7 +538,12 @@ class DeviceGroup:
             self._end("removed", "an admin removed this device")
             return None
         except self._hm.SealError as e:
-            log.info("a sealed message did not open: %s", _short(e))
+            # OpenMLS refuses a message for a later epoch before decrypting it, so it opens once this
+            # device has applied that epoch's commit from the log.
+            if "WrongEpoch" in str(e):
+                self.open_outcome = "later"
+            else:
+                log.info("a sealed message did not open: %s", _short(e))
             self._save_member()
             return None
         if not self._save_member():
@@ -527,6 +559,7 @@ class DeviceGroup:
         if not isinstance(req, str) or not req or len(req) > REQ_MAX_CHARS or not isinstance(cmd, dict) \
                 or not isinstance(cmd.get("type"), str):
             return None
+        self.open_outcome = "ok"
         return Command(sender_key=sender_key, req=req, cmd=cmd)
 
     def seal_message(self, message: dict) -> str | None:

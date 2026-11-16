@@ -42,6 +42,7 @@ import urllib.request
 import uuid
 from datetime import datetime
 
+from . import e2ee
 from .models import clean_base_url
 
 log = logging.getLogger("room_companion.hipimind")
@@ -141,7 +142,40 @@ DEFAULTS = {
     "live": {"max_fps": 2, "max_width": 960, "jpeg_quality": 70},
     "events": {"reminders": True, "switches": True, "scene": True, "notices": True, "announce": True},
     "scene_event_min_minutes": 10,
+    # End-to-end encryption (HipiMind protocol v2, docs/e2ee.md). On, nothing about the room leaves the
+    # machine in plaintext; it needs hm-seal's Python binding, and without it the connector does not connect.
+    "e2ee": {"enabled": False, "dir": "~/.config/room-companion/e2ee"},
 }
+
+#: Commands a page sends (HipiMind docs §3, §4b, §4c, §5): in plaintext, or sealed when encrypting.
+COMMAND_TYPES = ("set", "config", "live", "camera_action", "test_model", "announce")
+SEALED_ONLY_MESSAGE = "this device takes commands only end-to-end encrypted"
+#: Room for the version byte, the SFrame header and its tag in a sealed frame.
+SEALED_FRAME_OVERHEAD = 64
+#: Sealed commands for an epoch this device has not reached yet: kept this long, at most this many.
+HELD_SEALED_SECONDS = 60
+HELD_SEALED_MAX = 16
+#: Group log reads this device asks for (HipiMind allows 30 a minute).
+GROUP_READS_PER_MINUTE = 20
+PAIRING_CODE_FILE = "pairing-code"
+
+
+class SealedCommand(dict):
+    """A command that came sealed from an admin device: its answer goes back sealed. A plaintext message
+    cannot be one (JSON gives plain dicts), so nothing HipiMind sends can ask for that."""
+
+
+def e2ee_dir(cfg: dict) -> str:
+    return os.path.expanduser((cfg.get("e2ee") or {}).get("dir") or DEFAULTS["e2ee"]["dir"])
+
+
+def save_pairing_code(cfg: dict, code: str) -> str:
+    """Leave an owner's pairing code (docs/e2ee.md) where the running connector picks it up: a file only
+    this user can read, deleted as soon as it is read. A damaged code is refused here."""
+    e2ee.parse_pairing_code(code)
+    path = os.path.join(e2ee_dir(cfg), PAIRING_CODE_FILE)
+    write_secret(path, code.strip())
+    return path
 
 
 # ---------------------------------------------------------------- config / files
@@ -861,6 +895,17 @@ class Bridge:
         self._closed_for_token: str | None = None
         self._inband_close: int | None = None
         self.camera_slot: asyncio.Semaphore | None = None
+        # End-to-end encryption: the device's place in the owner's group, once HipiMind has said which
+        # device this is, and where reading the group log stands.
+        self.e2ee_on = (cfg.get("e2ee") or {}).get("enabled") is True
+        self.group: e2ee.DeviceGroup | None = None
+        self._join_req: str | None = None
+        self._since_inflight = False
+        self._behind = False
+        self._since_rows = self._since_gaps = 0
+        self._since_times: list[float] = []
+        self._held: list[tuple[float, str]] = []
+        self._sealed_state_sent: dict | None = None
 
     def lang(self) -> str:
         if self.language in LANGUAGES:
@@ -883,7 +928,17 @@ class Bridge:
             caps += ["camera_config", "camera_action"]
         if getattr(self.device, "announce_capable", False):
             caps += ["announce"]
+        if self.e2ee_on:
+            caps += ["e2ee"]
         return caps
+
+    def _plain_state(self, state: dict | None = None) -> dict | None:
+        """The state as it may go out unsealed: all of it, or with encryption on only the three switches
+        (HipiMind starts live video only when video is on)."""
+        state = self.state if state is None else state
+        if not self.e2ee_on or state is None:
+            return state
+        return {"switches": dict(state.get("switches") or {k: False for k in KEYS})}
 
     def _limit(self, name: str, default: int) -> int:
         try:
@@ -913,12 +968,13 @@ class Bridge:
             while len(self.unacked) > 200:
                 self.unacked.pop(next(iter(self.unacked)))
             if self.ready:
-                await self._send_json(ev)
+                await self._send_event(ev)
 
     async def poll_forever(self):
         while not self.stopped.is_set():
             await self.poll_once()
             await self._close_if_token_replaced()
+            await self._take_pairing_code()
             try:
                 await asyncio.wait_for(self.stopped.wait(), self.cfg.get("poll_seconds", 1.0))
             except asyncio.TimeoutError:
@@ -967,6 +1023,9 @@ class Bridge:
         self.events.baselined = False  # what is in the local list now is history for the next account
         if reset_models and hasattr(self.device, "reset_remote_models"):
             await asyncio.to_thread(self.device.reset_remote_models)
+        if self.group is not None:  # nor its encrypted group and keys
+            self.group.forget()
+            self.group = None
 
     async def _close_if_token_replaced(self):
         """`pair` wrote a new token while connected with the old one: end this session, so the next one
@@ -989,6 +1048,13 @@ class Bridge:
         if why:
             self.stop_reason = why
             log.error("not connecting to HipiMind: %s", why)
+            self.stopped.set()
+            return self.stop_reason
+        if self.e2ee_on and not e2ee.available():
+            # Never fall back to plaintext when the owner asked for encryption.
+            self.stop_reason = ("end-to-end encryption is on in the config, but hm-seal's Python binding "
+                                "(hm_seal) is not installed")
+            log.error("not connecting to HipiMind: %s", self.stop_reason)
             self.stopped.set()
             return self.stop_reason
         self.loop = asyncio.get_running_loop()
@@ -1077,6 +1143,8 @@ class Bridge:
             return None
         self.ws, self.ready = ws, False
         self._inband_close = None
+        self._join_req, self._since_inflight, self._behind = None, False, False
+        self._held, self._sealed_state_sent = [], None
         sender = watcher = None
         self.control_q = asyncio.Queue()
         self.test_slots = asyncio.Semaphore(2)
@@ -1091,7 +1159,7 @@ class Bridge:
                 device["camera_drivers"] = camera_drivers(self.device)
             await ws.send(json.dumps({"type": "hello", "v": PROTOCOL_VERSION,
                                       "device": device,
-                                      "state": self.state or {"switches": {k: False for k in KEYS}}},
+                                      "state": self._plain_state(self.state or {"switches": {k: False for k in KEYS}})},
                                      ensure_ascii=False))
             watcher = asyncio.create_task(self._close_when_stopped(ws))
             first = json.loads(await asyncio.wait_for(ws.recv(), 20))
@@ -1151,9 +1219,17 @@ class Bridge:
         while True:
             await self.state_changed.wait()
             self.state_changed.clear()
-            if self.state is not None and self.state != sent:
-                sent = self.state
-                await self._send_json({"type": "state", "state": self.state})
+            plain = self._plain_state()
+            if plain is not None and plain != sent:
+                sent = plain
+                await self._send_json({"type": "state", "state": plain})
+            group = self.group
+            if self.e2ee_on and self.state is not None and group is not None and group.has_data_key() \
+                    and self.state != self._sealed_state_sent:
+                # The whole state, sealed under the data key; HipiMind hands the newest to a page that opens later.
+                body = group.seal_state(self.state)
+                if body is not None and await self._send_json({"type": "sealed", "body": body, "keep": True}):
+                    self._sealed_state_sent = self.state
             await asyncio.sleep(1.0)
 
     # ---- messages ----
@@ -1172,12 +1248,19 @@ class Bridge:
             self.limits = msg.get("limits") if isinstance(msg.get("limits"), dict) else {}
             self.ready = True
             log.info("connected to HipiMind as device %s", self.device_id)
+            if self.e2ee_on:
+                await self._open_group()
             self.state_changed.set()
             for ev in list(self.unacked.values()):
-                await self._send_json(ev)
+                await self._send_event(ev)
             if isinstance(msg.get("config"), dict) and self.control_q is not None:
-                # what the owner changed while this device was offline
-                self.control_q.put_nowait({"type": "_welcome_config", "config": msg["config"]})
+                if self.e2ee_on:
+                    # Settings HipiMind sends in plaintext could point a model at its own server; with
+                    # encryption on, settings come only sealed, from an admin device.
+                    log.info("encryption is on: the settings in HipiMind's welcome are not applied")
+                else:
+                    # what the owner changed while this device was offline
+                    self.control_q.put_nowait({"type": "_welcome_config", "config": msg["config"]})
         elif t == "ping":
             await self._send_json({"type": "pong", "t": msg.get("t")})
         elif t == "event_ack":
@@ -1188,7 +1271,33 @@ class Bridge:
             if isinstance(code, int) and not isinstance(code, bool) and 1000 <= code <= 4999:
                 self._inband_close = code
                 log.info("HipiMind is closing the connection (%s: %s)", code, str(msg.get("reason") or "")[:120])
-        elif t in ("set", "config", "live"):
+        elif t in COMMAND_TYPES:
+            if self.e2ee_on and t != "live":
+                # Anyone in control of HipiMind's servers could send a plaintext command. `live` only
+                # starts or stops sealed frames, which HipiMind cannot read.
+                await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False,
+                                        "error": {"code": "sealed_only", "message": SEALED_ONLY_MESSAGE}})
+                return
+            await self._dispatch(msg)
+        elif t == "group":
+            await self._on_group(msg)
+        elif t == "group_result":
+            await self._on_group_result(msg)
+        elif t == "group_end":
+            await self._on_group_end(msg)
+        elif t == "sealed":
+            await self._on_sealed(msg)
+        elif isinstance(t, str) and t.endswith("_result") and t[:-7] in CLOUD_KINDS:
+            fut = self.cloud_waiters.pop(msg.get("req"), None)
+            if fut is not None and not fut.done():
+                fut.set_result(msg)
+        elif t == "error":
+            log.warning("HipiMind reported an error: %s", str(msg.get("code"))[:60])
+
+    async def _dispatch(self, msg: dict):
+        """Hand a command to its lane: plaintext from HipiMind, or a SealedCommand from an admin device."""
+        t = msg.get("type")
+        if t in ("set", "config", "live"):
             if self.control_q is not None:
                 self.control_q.put_nowait(msg)
             else:
@@ -1204,7 +1313,7 @@ class Bridge:
                 if not self._tests_refused:
                     log.warning("Test connection refused: more than %d this minute", TESTS_PER_MINUTE)
                 self._tests_refused += 1
-                await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False, "error": {
+                await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False, "error": {
                     "code": "rate_limited",
                     "message": f"at most {TESTS_PER_MINUTE} connection tests a minute; try again in a minute"}})
                 return
@@ -1217,12 +1326,209 @@ class Bridge:
             task = asyncio.create_task(self._run_announce(msg))
             self.side_tasks.add(task)
             task.add_done_callback(self.side_tasks.discard)
-        elif isinstance(t, str) and t.endswith("_result") and t[:-7] in CLOUD_KINDS:
-            fut = self.cloud_waiters.pop(msg.get("req"), None)
-            if fut is not None and not fut.done():
-                fut.set_result(msg)
-        elif t == "error":
-            log.warning("HipiMind reported an error: %s", str(msg.get("code"))[:60])
+
+    async def _reply(self, msg: dict, body: dict) -> bool:
+        """The answer to a command: sealed for a sealed one (`{"t": "reply", "msg": …}`, docs/e2ee.md),
+        else in plaintext, with only the switches of the state when encrypting."""
+        if isinstance(msg, SealedCommand):
+            group = self.group
+            sealed = group.seal_message({"t": "reply", "msg": body}) if group is not None else None
+            if sealed is None:
+                log.warning("could not seal the answer to a %s command", str(msg.get("type"))[:30])
+                return False
+            return await self._send_json({"type": "sealed", "body": sealed})
+        if self.e2ee_on and isinstance(body.get("state"), dict):
+            body = dict(body, state=self._plain_state(body["state"]))
+        return await self._send_json(body)
+
+    async def _send_event(self, ev: dict) -> bool:
+        """An event: as it is, or with encryption on sealed under the data key (§9.3). Without a data key
+        yet it stays in `unacked` and goes out once one arrives."""
+        if not self.e2ee_on:
+            return await self._send_json(ev)
+        group = self.group
+        body = group.seal_event({k: ev.get(k) for k in ("kind", "text", "data", "at")}) if group is not None else None
+        if body is None:
+            return False
+        out = {"type": "sealed_event", "id": ev["id"], "body": body}
+        if ev.get("at"):
+            out["at"] = ev["at"]
+        if ev.get("kind") == "reminder":
+            out["remind"] = True  # the owner's notifications say only that a reminder arrived
+        return await self._send_json(out)
+
+    # ---- end-to-end encryption: the group log, pairing, sealed commands ----
+    async def _open_group(self):
+        """After a welcome: this device's place in the owner's group, and the group log read on from
+        where it was."""
+        if self.device_id is None:
+            return
+        if self.group is None or self.group.device_id != self.device_id:
+            self.group = e2ee.DeviceGroup(e2ee_dir(self.cfg), self.device_id)
+            log.info("end-to-end encryption: %s%s", self.group.status,
+                     f" ({self.group.reason})" if self.group.reason else "")
+        pending = self.group.pending_join()
+        if pending is not None:
+            await self._send_join(pending)
+        elif self.group.status in ("joining", "joined"):
+            self._behind = True
+            await self._request_since()
+
+    async def _take_pairing_code(self):
+        """A pairing code `e2ee-pair` left (docs/e2ee.md): ask to join that admin's group."""
+        group = self.group
+        if not self.e2ee_on or group is None or not self.ready or self.ws is None:
+            return
+        path = os.path.join(e2ee_dir(self.cfg), PAIRING_CODE_FILE)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                code = f.read()
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            log.warning("the pairing code could not be read (%s)", type(e).__name__)
+            return
+        try:
+            os.remove(path)  # the code's secret is for one use
+        except OSError:
+            pass
+        try:
+            body = group.start_pairing(code)
+        except e2ee.PairingRefused as e:
+            log.warning("pairing code not used: %s", e)
+            return
+        await self._send_join(body)
+
+    async def _send_join(self, body: str):
+        self._join_req = "join-" + uuid.uuid4().hex[:12]
+        await self._send_json({"type": "group", "req": self._join_req, "body": body})
+
+    async def _on_group_result(self, msg: dict):
+        if self._join_req is None or msg.get("req") != self._join_req:
+            return
+        self._join_req = None
+        group, seq = self.group, msg.get("seq")
+        if group is None:
+            return
+        if msg.get("ok") is True and isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1:
+            group.join_sent(seq)
+            log.info("asked to join the owner's encrypted group; confirm it on the HipiMind page")
+            self._behind = True
+            await self._request_since()
+        else:
+            code = (msg.get("error") or {}).get("code") if isinstance(msg.get("error"), dict) else None
+            log.warning("HipiMind did not take the join request (%s); it is sent again on the next connection",
+                        str(code)[:40])
+
+    async def _request_since(self):
+        """Ask for the group log after the last number this device dealt with: one read at a time."""
+        group = self.group
+        if self._since_inflight or group is None or group.status not in ("joining", "joined") \
+                or group.last_seq is None:
+            return
+        now = time.monotonic()
+        self._since_times = [x for x in self._since_times if now - x < 60]
+        if len(self._since_times) >= GROUP_READS_PER_MINUTE:
+            log.warning("not reading the group log again this minute (%d reads)", len(self._since_times))
+            return
+        self._since_times.append(now)
+        self._since_inflight, self._behind = True, False
+        self._since_rows = self._since_gaps = 0
+        await self._send_json({"type": "group_since", "seq": group.last_seq})
+
+    async def _on_group(self, msg: dict):
+        """One group log message, pushed or read back: processed strictly in order."""
+        group, seq, body = self.group, msg.get("seq"), msg.get("body")
+        if group is None or not isinstance(seq, int) or isinstance(seq, bool) or seq < 1 or not isinstance(body, str):
+            return
+        out = group.process(seq, body)
+        if self._since_inflight:
+            self._since_rows += 1
+            self._since_gaps += any(o[0] == "gap" for o in out)
+        commit = False
+        for o in out:
+            kind = o[0]
+            if kind in ("gap", "rewind"):
+                self._behind = True
+            elif kind == "joined":
+                log.info("joined the owner's encrypted group (epoch %s)", o[1])
+            elif kind == "datakey":
+                log.info("the account's data key arrived: the events and state that were waiting go out sealed")
+                self._sealed_state_sent = None
+                self.state_changed.set()
+                for ev in list(self.unacked.values()):
+                    await self._send_event(ev)
+            elif kind == "commit":
+                commit = True
+            elif kind == "refused":
+                log.warning("a device that is not an admin tried to change the group; it was not applied")
+            elif kind == "removed":
+                log.warning("an admin removed this device from the owner's group: its keys are deleted, and "
+                            "nothing more is sent until it is paired again")
+            elif kind in ("pairing_failed", "broken"):
+                log.warning("end-to-end encryption: %s", o[1])
+            else:
+                log.debug("group log message %s: %s", seq, kind)
+        if self._behind:
+            await self._request_since()
+        if commit and self._held:
+            await self._retry_held()
+
+    async def _on_group_end(self, msg: dict):
+        if not self._since_inflight:
+            return
+        self._since_inflight = False
+        group = self.group
+        if group is None:
+            return
+        if isinstance(msg.get("error"), dict):
+            log.warning("HipiMind did not send the group log (%s)", str(msg["error"].get("code"))[:40])
+            return
+        if self._since_rows and self._since_gaps == self._since_rows and group.status in ("joining", "joined"):
+            # Every message after the last one dealt with came with a gap before it: the next one is gone.
+            group.fell_behind()
+            log.error("end-to-end encryption: %s", group.reason)
+            return
+        if msg.get("more") is True or self._behind:
+            await self._request_since()
+
+    async def _on_sealed(self, msg: dict):
+        """A sealed message from a page: a command, if it opens and comes from an admin device."""
+        if not self.e2ee_on or self.group is None or not isinstance(msg.get("body"), str):
+            return
+        body = msg["body"]
+        cmd = self.group.open_command(body)
+        if cmd is not None:
+            await self._run_sealed(cmd)
+        elif self.group.open_outcome == "later":
+            # Sealed for an epoch whose commit this device has not read from the log yet.
+            now = time.monotonic()
+            self._held = [(t0, b) for t0, b in self._held if now - t0 < HELD_SEALED_SECONDS]
+            if len(self._held) < HELD_SEALED_MAX:
+                self._held.append((now, body))
+            self._behind = True
+            await self._request_since()
+
+    async def _retry_held(self):
+        group, held, self._held = self.group, self._held, []
+        now = time.monotonic()
+        for t0, body in held:
+            if group is None or now - t0 >= HELD_SEALED_SECONDS:
+                continue
+            cmd = group.open_command(body)
+            if cmd is not None:
+                await self._run_sealed(cmd)
+            elif group.open_outcome == "later":
+                self._held.append((t0, body))
+
+    async def _run_sealed(self, cmd: e2ee.Command):
+        msg = SealedCommand(cmd.cmd)
+        msg["req"] = cmd.req
+        if msg.get("type") not in COMMAND_TYPES:
+            await self._reply(msg, {"type": "ack", "req": cmd.req, "ok": False,
+                                    "error": {"code": "unsupported", "message": "not a command this device takes"}})
+            return
+        await self._dispatch(msg)
 
     async def _control_worker(self, q: asyncio.Queue):
         while True:
@@ -1248,7 +1554,7 @@ class Bridge:
         except Exception as e:
             log.warning("a %s command failed (%s)", t, type(e).__name__)
             if t != "_welcome_config":
-                await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
+                await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False,
                                        "error": {"code": "bad_request", "message": f"could not apply ({type(e).__name__})"}})
 
     async def _run_announce(self, msg: dict):
@@ -1258,7 +1564,7 @@ class Bridge:
         text = msg.get("text")
 
         async def refuse(code: str, message: str):
-            await self._send_json({"type": "ack", "req": req, "ok": False, "error": {"code": code, "message": message}})
+            await self._reply(msg, {"type": "ack", "req": req, "ok": False, "error": {"code": code, "message": message}})
 
         if not getattr(self.device, "announce_capable", False):
             return await refuse("no_output", "this device cannot read text out")
@@ -1278,7 +1584,7 @@ class Bridge:
                     "seconds": r.get("seconds") if isinstance(r.get("seconds"), (int, float)) else None,
                     "peak": r.get("peak") if isinstance(r.get("peak"), (int, float)) else None,
                     "error": None if r.get("ok") else (announce_error_code(r.get("error")) or "playback_failed")}
-            asyncio.run_coroutine_threadsafe(self._send_json(body), loop)
+            asyncio.run_coroutine_threadsafe(self._reply(msg, body), loop)
 
         source = f"HipiMind ({str(msg.get('source') or 'web')[:20]})"
         try:
@@ -1291,8 +1597,8 @@ class Bridge:
             code = str(res.get("code") or "busy")[:20]
             # The local message can name the output; HipiMind gets the code and a sentence built from it.
             return await refuse(code, ANNOUNCE_REFUSALS.get(code, ANNOUNCE_REFUSALS["busy"]))
-        await self._send_json({"type": "ack", "req": req, "ok": True,
-                               "result": {"id": str(res.get("id") or req)[:64]}})
+        await self._reply(msg, {"type": "ack", "req": req, "ok": True,
+                                "result": {"id": str(res.get("id") or req)[:64]}})
 
     async def _run_camera_action(self, msg: dict):
         if self.camera_slot is None:
@@ -1307,42 +1613,42 @@ class Bridge:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
-                                   "error": {"code": "bad_response", "message": type(e).__name__}})
+            await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False,
+                                    "error": {"code": "bad_response", "message": type(e).__name__}})
 
-    async def _ack(self, req, ok: bool, error: dict | None = None, **extra):
+    async def _ack(self, msg: dict, ok: bool, error: dict | None = None, **extra):
         await self.poll_once()
-        body = {"type": "ack", "req": req, "ok": ok}
+        body = {"type": "ack", "req": msg.get("req"), "ok": ok}
         if ok:
             body["state"] = self.state
         else:
             body["error"] = error
         body.update(extra)
-        await self._send_json(body)
+        await self._reply(msg, body)
 
     async def on_set(self, msg: dict):
         sw = msg.get("switches") if isinstance(msg.get("switches"), dict) else {}
         changes = {k: v for k, v in sw.items() if k in KEYS and isinstance(v, bool)}
         if not changes:
-            return await self._ack(msg.get("req"), False, {"code": "bad_request", "message": "no switch to change"})
+            return await self._ack(msg, False, {"code": "bad_request", "message": "no switch to change"})
         source = f"HipiMind ({str(msg.get('source') or 'web')[:20]})"
         try:
             code, body = await asyncio.to_thread(self.device.switch, changes, source)
         except Exception as e:
-            return await self._ack(msg.get("req"), False, {"code": "local_unreachable", "message": type(e).__name__})
+            return await self._ack(msg, False, {"code": "local_unreachable", "message": type(e).__name__})
         if code != 200:
-            return await self._ack(msg.get("req"), False,
+            return await self._ack(msg, False,
                                    {"code": "local_error", "message": str(body.get("message") or code)[:200]})
-        await self._ack(msg.get("req"), True)
+        await self._ack(msg, True)
 
     async def on_config(self, msg: dict):
         cfg = msg.get("config") if isinstance(msg.get("config"), dict) else {}
         keys = msg.get("model_keys") if isinstance(msg.get("model_keys"), dict) else None
         ok, err, ignored = await self._apply_config(cfg, keys)
         if ok:
-            await self._ack(msg.get("req"), True, ignored=ignored)
+            await self._ack(msg, True, ignored=ignored)
         else:
-            await self._ack(msg.get("req"), False, err)
+            await self._ack(msg, False, err)
 
     async def _apply_config(self, cfg: dict, keys: dict | None, from_welcome: bool = False):
         """Apply a Config (from a `config` command, or the one in `welcome`). Returns (ok, error, ignored).
@@ -1403,29 +1709,29 @@ class Bridge:
     async def on_camera_action(self, msg: dict):
         action = msg.get("action")
         if not getattr(self.device, "camera_capable", False):
-            return await self._ack(msg.get("req"), False, {"code": "unsupported", "message": "no camera drivers"})
+            return await self._ack(msg, False, {"code": "unsupported", "message": "no camera drivers"})
         if action not in ("pair", "recover", "wake"):
-            return await self._ack(msg.get("req"), False, {"code": "bad_request", "message": "unknown action"})
+            return await self._ack(msg, False, {"code": "bad_request", "message": "unknown action"})
         ok, detail = await asyncio.to_thread(self.device.camera_action, action)
         if ok:
-            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": True,
-                                   "result": {"detail": str(detail or "")[:200]}})
+            await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": True,
+                                    "result": {"detail": str(detail or "")[:200]}})
         else:
-            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False,
-                                   "error": {"code": "driver_unavailable", "message": str(detail or "")[:200]}})
+            await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False,
+                                    "error": {"code": "driver_unavailable", "message": str(detail or "")[:200]}})
 
     async def on_test_model(self, msg: dict):
         if not self.models_capable:
-            return await self._ack(msg.get("req"), False, {"code": "unsupported",
+            return await self._ack(msg, False, {"code": "unsupported",
                                                            "message": "this device cannot test models"})
         slot, model, key = msg.get("slot"), msg.get("model"), msg.get("key")
         if slot not in ("vision", "stt", "tts") or not isinstance(model, dict):
-            return await self._ack(msg.get("req"), False, {"code": "bad_request", "message": "slot and model needed"})
+            return await self._ack(msg, False, {"code": "bad_request", "message": "slot and model needed"})
         res = await asyncio.to_thread(self.device.test_model, slot, model, key if isinstance(key, str) else None)
         if res.get("ok"):
-            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": True, "result": res.get("result")})
+            await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": True, "result": res.get("result")})
         else:
-            await self._send_json({"type": "ack", "req": msg.get("req"), "ok": False, "error": res.get("error")})
+            await self._reply(msg, {"type": "ack", "req": msg.get("req"), "ok": False, "error": res.get("error")})
 
     async def on_live(self, msg: dict):
         await self._stop_live()
@@ -1437,7 +1743,7 @@ class Bridge:
                 if want_fps <= 0 or want_width <= 0:
                     raise ValueError
             except (TypeError, ValueError):
-                return await self._ack(msg.get("req"), False, {"code": "bad_request",
+                return await self._ack(msg, False, {"code": "bad_request",
                                                                "message": "fps and max_width must be positive numbers"})
             fps = min(want_fps, float(conf.get("max_fps", DEFAULT_LIVE_MAX_FPS)),
                       float(self._limit("live_max_fps", DEFAULT_LIVE_MAX_FPS)))
@@ -1446,7 +1752,7 @@ class Bridge:
                                 "quality": int(conf.get("jpeg_quality", 70)),
                                 "max_bytes": self._limit("frame_max_bytes", DEFAULT_FRAME_MAX_BYTES)}
             self.live_task = asyncio.create_task(self._live_loop())
-        await self._ack(msg.get("req"), True)
+        await self._ack(msg, True)
 
     async def _stop_live(self):
         self.live_params = {"on": False}
@@ -1468,7 +1774,11 @@ class Bridge:
             except Exception:
                 jpeg = None
             if jpeg:
-                frame = await asyncio.to_thread(fit_frame, jpeg, p["width"], p["quality"], p["max_bytes"])
+                room = SEALED_FRAME_OVERHEAD if self.e2ee_on else 0
+                frame = await asyncio.to_thread(fit_frame, jpeg, p["width"], p["quality"], p["max_bytes"] - room)
+                if frame and self.e2ee_on:
+                    # 0x01 and an SFrame (§9.1); nothing while this device is not in the owner's group.
+                    frame = self.group.seal_frame(frame) if self.group is not None else None
                 if frame and self.ws is not None:
                     try:
                         await self.ws.send(frame)
@@ -1478,6 +1788,10 @@ class Bridge:
 
     # ---- HipiMind cloud models (for slots set to "cloud") ----
     async def cloud(self, kind: str, payload: dict, timeout: float = 60) -> dict:
+        if self.e2ee_on:
+            # A cloud request carries the frame or the audio in plaintext.
+            return {"ok": False, "error": {"code": "unavailable",
+                                           "message": "HipiMind's cloud models are not used while end-to-end encryption is on"}}
         if kind not in CLOUD_KINDS:
             return {"ok": False, "error": {"code": "bad_request", "message": "unknown cloud request"}}
         if self.ws is None or not self.ready:
@@ -1570,6 +1884,27 @@ def pair_from_app_config(argv, app_cfg: dict) -> int:
     return 0
 
 
+def _e2ee_pair(cfg: dict, code: str) -> int:
+    if not (cfg.get("e2ee") or {}).get("enabled"):
+        print('end-to-end encryption is off: set "e2ee": {"enabled": true} in the config first', file=sys.stderr)
+        return 2
+    try:
+        save_pairing_code(cfg, code)
+    except e2ee.PairingRefused as e:
+        print(f"pairing code refused: {e}", file=sys.stderr)
+        return 2
+    print("the device asks to join the owner's encrypted group when it is next connected; confirm it on the page")
+    return 0
+
+
+def e2ee_pair_from_app_config(argv, app_cfg: dict) -> int:
+    """`python -m room_companion e2ee-pair --code hmroom1…`: the e2ee directory comes from the app config."""
+    ap = argparse.ArgumentParser(prog="room-companion e2ee-pair")
+    ap.add_argument("--code", required=True, help="the text of the pairing code the HipiMind page shows")
+    args = ap.parse_args(argv)
+    return _e2ee_pair(load_config_dict(dict(app_cfg.get("hipimind") or {})), args.code)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="room-companion-hipimind", description="Connect room-companion to HipiMind Room")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1579,6 +1914,9 @@ def main(argv=None) -> int:
     p.add_argument("--name", default="Room")
     p.add_argument("--token-file", default=DEFAULTS["token_file"])
     p.add_argument("--config", help="read server and token_file from this config file")
+    e = sub.add_parser("e2ee-pair", help="join the owner's encrypted group with the code the HipiMind page shows")
+    e.add_argument("--config", required=True)
+    e.add_argument("--code", required=True)
     r = sub.add_parser("run", help="keep the device connected (sidecar, through the local HTTP API)")
     r.add_argument("--config", required=True)
     r.add_argument("-v", "--verbose", action="store_true")
@@ -1599,6 +1937,8 @@ def main(argv=None) -> int:
             return 2
         print(paired_message(res))
         return 0
+    if args.cmd == "e2ee-pair":
+        return _e2ee_pair(load_config(args.config), args.code)
     cfg = load_config(args.config)
     bridge = Bridge(cfg)
     reason = asyncio.run(bridge.run_forever())
