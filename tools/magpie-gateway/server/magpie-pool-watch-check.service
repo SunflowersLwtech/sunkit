@@ -1,0 +1,9 @@
+[Unit]
+Description=magpie: pool-watch self-check (the pool was full but no "waits for room" line matched for a day)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=120
+ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/pool-watch.py selfcheck

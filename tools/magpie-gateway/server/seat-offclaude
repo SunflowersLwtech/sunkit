@@ -1,0 +1,100 @@
+#!/usr/bin/python3
+"""seat-offclaude - sessions that should be on Claude but got a turn from another model.
+
+Read-only; runs as root on the gateway host (2026-11-16, seat-fix3). Reads
+route-all-flash's options (the session whitelist and the secretary's seat
+lease) and magpie's usage for the last N minutes, and prints one JSON object
+listing, for each watched session, its turns that answered 200 with a served
+model that is not claude-*.
+
+Watched: the whitelist (options.sessions); the sessions given with --also
+(the Claude workers herdr knows, whitelisted or not); and the secretary's
+sessions, i.e. any session with a request sent as group/secretary-seat or
+group/flash-paid in the window (the middleware gives those two only to the
+secretary). The secretary is whitelisted by device, which usage does not
+show, so that is how its sessions are found.
+
+  seat-offclaude [--minutes 15] [--also <id>,<id>...]
+
+Used by the secretary's stuck-sweep.mjs every 10 minutes over ssh. A usage CSV that lacks a column this reads exits 2
+(2026-11-16: until then a renamed column read as "no session off Claude"); `rows` is how many requests the window
+held, and stuck-sweep takes 0 as a failure too.
+"""
+import csv
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+CONTAINER = "magpie-magpie-1"
+MAGPIE = os.environ.get("SO_MAGPIE", "docker exec %s magpie" % CONTAINER).split()
+NEEDS = ("time", "session", "status", "served_model", "requested_model", "provider")
+NAME = "/plugins/route-all-flash.middleware.js"
+SECRETARY_MODELS = ("group/secretary-seat", "group/flash-paid")
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def magpie(*args):
+    r = subprocess.run(MAGPIE + list(args), capture_output=True, text=True, timeout=90)
+    if r.returncode != 0:
+        raise SystemExit("seat-offclaude: magpie %s failed: %s" % (args[0], (r.stderr or r.stdout).strip()[:200]))
+    return r.stdout
+
+
+def main(argv):
+    minutes, also = 15, set()
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--minutes" and i + 1 < len(argv):
+            minutes = int(argv[i + 1]); i += 2
+        elif argv[i] == "--also" and i + 1 < len(argv):
+            also |= {x.strip() for x in argv[i + 1].split(",") if UUID.match(x.strip())}; i += 2
+        else:
+            raise SystemExit("usage: seat-offclaude [--minutes N] [--also <id>,<id>...]")
+    if not 1 <= minutes <= 24 * 60:
+        raise SystemExit("seat-offclaude: --minutes must be 1..1440")
+
+    opts = json.loads(magpie("plugin", "options", NAME))
+    listed = set(opts.get("sessions") or [])
+    reader = csv.DictReader(io.StringIO(magpie("usage", "--csv", "--last", "%dm" % minutes)))
+    missing = [c for c in NEEDS if c not in (reader.fieldnames or [])]
+    if missing:
+        sys.stderr.write("seat-offclaude: magpie usage CSV lacks %s (has %s)\n" % (", ".join(missing), ",".join(reader.fieldnames or [])[:300]))
+        return 2
+    rows = list(reader)
+    secretary = {r["session"] for r in rows if r.get("requested_model") in SECRETARY_MODELS and r.get("session")}
+    watch = listed | also | secretary
+
+    out = {}
+    for r in rows:
+        s = r.get("session") or ""
+        served = r.get("served_model") or ""
+        if s not in watch or r.get("status") != "200" or not served or served.startswith("claude-"):
+            continue
+        e = out.setdefault(s, {"session": s, "turns": 0, "served": {}, "requested": {},
+                               "first": r["time"], "last": r["time"], "listed": s in listed,
+                               "secretary": s in secretary, "worker": s in also})
+        e["turns"] += 1
+        k = "%s/%s" % (r.get("provider") or "?", served)
+        e["served"][k] = e["served"].get(k, 0) + 1
+        q = r.get("requested_model") or "?"
+        e["requested"][q] = e["requested"].get(q, 0) + 1
+        e["first"] = min(e["first"], r["time"])
+        e["last"] = max(e["last"], r["time"])
+
+    now = int(time.time() * 1000)
+    print(json.dumps({
+        "minutes": minutes,
+        "rows": len(rows),            # how many requests the window held: 0 means nothing was seen, not that all is well
+        "watched": len(watch),
+        "lease": "on" if (opts.get("seatUntil") or 0) > now else "off",
+        "sessions": sorted(out.values(), key=lambda e: e["last"]),
+    }, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
