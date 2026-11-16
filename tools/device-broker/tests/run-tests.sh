@@ -152,6 +152,62 @@ T="t12: status marks stale"
 OUT="$(DB_HOME="${H11}" "${BIN}/device-broker" status)"
 case "${OUT}" in *'"state": "live"'*) ok ;; *) bad "no live lease reported: ${OUT}" ;; esac
 
+# --- T13: expired lease (ttl) is stale and reclaimable
+T="t13: ttl-expired lease is reclaimable by another owner"
+H13="$(newhome)"
+DB_HOME="${H13}" "${BIN}/device-broker" acquire browser:cdp-port-9300 \
+  --owner-key sess-A --ttl 1 >/dev/null 2>&1
+sleep 2
+DB_HOME="${H13}" "${BIN}/device-broker" acquire browser:cdp-port-9300 \
+  --owner-key sess-B >/dev/null 2>&1
+rc=$?
+[ "${rc}" -eq 0 ] && ok || bad "expected 0 on expired lease, got ${rc}"
+
+# --- T14: a bare lock dir younger than the grace window is NOT reclaimed
+#         (an acquire in flight owns it while lease.json is being written)
+T="t14: fresh bare lock dir is treated as held"
+H14="$(newhome)"
+mkdir -p "${H14}/leases/android-emulator:port-6040.lock"
+DB_HOME="${H14}" "${BIN}/device-broker" acquire android-emulator:port-6040 \
+  --owner-key sess-B >/dev/null 2>&1
+rc=$?
+[ "${rc}" -eq 3 ] && ok || bad "expected 3 for in-flight bare dir, got ${rc}"
+
+# --- T15: a bare lock dir older than the grace window IS reclaimed
+T="t15: ancient bare lock dir is reclaimed"
+H15="$(newhome)"
+mkdir -p "${H15}/leases/android-emulator:port-6041.lock"
+touch -d "2 minutes ago" "${H15}/leases/android-emulator:port-6041.lock" 2>/dev/null \
+  || touch -t "$(date -v-2M '+%Y%m%d%H%M.%S' 2>/dev/null)" "${H15}/leases/android-emulator:port-6041.lock" 2>/dev/null
+DB_HOME="${H15}" "${BIN}/device-broker" acquire android-emulator:port-6041 \
+  --owner-key sess-B >/dev/null 2>&1
+rc=$?
+[ "${rc}" -eq 0 ] && ok || bad "expected 0 reclaiming ancient bare dir, got ${rc}"
+
+# --- T16: limits set/get round-trip, and the custom cap is enforced
+T="t16: limits set persists and is enforced"
+H16="$(newhome)"
+DB_HOME="${H16}" "${BIN}/device-broker" limits set browser:cdp-port 1 >/dev/null 2>&1
+GOT="$(DB_HOME="${H16}" "${BIN}/device-broker" limits get browser:cdp-port 2>/dev/null)"
+[ "${GOT}" = "1" ] && ok || bad "limits get returned '${GOT}', want 1"
+DB_HOME="${H16}" "${BIN}/device-broker" acquire browser:cdp-port-9400 \
+  --owner-key sess-A >/dev/null 2>&1
+DB_HOME="${H16}" "${BIN}/device-broker" acquire browser:cdp-port-9401 \
+  --owner-key sess-B >/dev/null 2>&1
+rc=$?
+[ "${rc}" -eq 6 ] && ok || bad "expected cap refusal 6, got ${rc}"
+T="t16b: custom cap enforced"
+LIST="$(DB_HOME="${H16}" "${BIN}/device-broker" limits list)"
+case "${LIST}" in *'"browser:cdp-port": 1'*) ok ;; *) bad "limits list lost override: ${LIST}" ;; esac
+T="t16c: limits list shows override"
+
+# --- T17: malformed limits.json still yields defaults (fail to defaults)
+T="t17: unreadable limits.json falls back to defaults"
+H17="$(newhome)"
+printf 'not json at all' > "${H17}/limits.json"
+GOT="$(DB_HOME="${H17}" "${BIN}/device-broker" limits get android-emulator 2>/dev/null)"
+[ "${GOT}" = "1" ] && ok || bad "expected default 1, got '${GOT}'"
+
 say ""
 say "== ${PASS} passed, ${FAIL} failed =="
 [ "${FAIL}" -eq 0 ]

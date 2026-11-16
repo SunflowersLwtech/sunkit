@@ -65,18 +65,23 @@ every wrapper inherits it. `OWNER_KEY`/`--owner-key` exists for tests.
 
 ### Resource names and caps
 
-| Resource | Cap default | Notes |
-|---|---|---|
-| `android-emulator:port-<n>` | type cap **1** | the adb console port; on devdesk/aws-sin the rule is one emulator at a time |
-| `android-emulator:avd-<name>` | — | an AVD definition when not booting `-read-only` |
-| `ios-simulator:udid-<u>` | type cap **1** | one booted simulator |
-| `ios-simulator:host` | **1** | machine-wide boot budget (M4: cold boot spikes load to 150–280) |
-| `browser:cdp-port-<n>` | 8 | parallel browser sessions on distinct ports |
-| `browser:profile-<hash>` | 8 | one agent per profile dir |
-| `physical-device:<serial>` | **0** | never auto-acquirable — a human may be holding it |
+Cap keys resolve by longest-prefix match on the resource name. The candidates
+for `browser:cdp-port-9222` are `browser:cdp-port`, then `browser`; the first
+key with a setting wins.
 
-Caps live in `~/.device-broker/limits.json` (`limits set <type> <n>`). A new
-lease of a type already at cap exits 6 and lists the live holders.
+| Resource | Cap key resolved | Default | Notes |
+|---|---|---|---|
+| `android-emulator:port-<n>` | `android-emulator` | **1** | the adb console port; devdesk/aws-sin rule is one emulator at a time |
+| `android-emulator:avd-<name>` | `android-emulator` | 1 | an AVD definition when not booting `-read-only` |
+| `ios-simulator:udid-<u>` | `ios-simulator` | **1** | one booted simulator |
+| `ios-simulator:host` | `ios-simulator:host` | **1** | machine-wide boot budget (M4: cold boot spikes load to 150–280) |
+| `browser:cdp-port-<n>` | `browser:cdp-port` | 8 | parallel sessions on distinct ports |
+| `browser:profile-<hash>` | `browser:profile` | 8 | one agent per profile dir |
+| `physical-device:<serial>` | `physical-device` | **0** | never auto-acquirable — a human may be holding it |
+
+Caps live in `~/.device-broker/limits.json`; `limits set <key> <n>` writes any
+key (e.g. `limits set browser:cdp-port 1`). A new lease under a key already at
+cap exits 6 and lists the live holders.
 
 ## Wrappers (`bin/`)
 

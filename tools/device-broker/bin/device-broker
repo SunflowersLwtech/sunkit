@@ -32,9 +32,9 @@
 #   browser:profile-<hash>         a profile/user-data directory
 #   physical-device:<serial>       real hardware (fail closed, see check)
 #
-# Concurrency caps live in $DB_HOME/limits.json (default: android-emulator 1,
-# ios-simulator 1, browser-cdp 8 — see `limits`). acquire of a *new* resource of
-# a type that is already at cap fails with exit 6 and lists the holders.
+# Concurrency caps live in $DB_HOME/limits.json (defaults: android-emulator 1,
+# ios-simulator 1, browser:cdp-port 8 — see `limits`). Cap keys resolve by
+# longest-prefix match; a new lease under a key already at cap exits 6.
 #
 # Portability: bash 3.2+ (macOS system bash), Linux. No flock: mkdir is the
 # atomic. No /proc assumed: liveness is `kill -0` + `ps -o lstart=` compare.
@@ -64,11 +64,21 @@ pid_lstart() {
 }
 
 # lease_is_live DIR -> 0 live, 1 stale, 2 unreadable
-# Live = owner pid exists AND (no recorded lstart OR lstart still matches).
+# Live = owner pid exists AND (no recorded lstart OR lstart still matches)
+#        AND the lease has not passed its expiresAt, when one is set.
 # Unreadable = json missing/corrupt — treat as stale only when pid also dead.
 lease_is_live() {
-  local d="$1" jf="${d}/lease.json" pid pls rec
-  [ -f "${jf}" ] || return 1
+  local d="$1" jf="${d}/lease.json" pid pls rec exp
+  if [ ! -f "${jf}" ]; then
+    # No lease.json: an acquire in flight owns the dir for a few seconds —
+    # treating that instant as stale would let a racer remove a brand-new
+    # claim. Only a bare dir that has outlived the grace window is stale.
+    [ -d "${d}" ] || return 1
+    local mt
+    mt="$(dir_mtime_s "${d}")"
+    [ -n "${mt}" ] && [ $(( $(now_s) - mt )) -gt "${DB_GRACE_S:-30}" ] && return 1
+    return 0
+  fi
   pid="$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
   [ -n "${pid}" ] || return 2
   if ! kill -0 "${pid}" 2>/dev/null; then
@@ -81,7 +91,16 @@ lease_is_live() {
       return 1                     # pid reused by a different process -> stale
     fi
   fi
+  exp="$(sed -n 's/.*"expiresAt": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
+  if [ -n "${exp}" ] && [ "$(now_s)" -ge "${exp}" ]; then
+    return 1                       # TTL elapsed -> stale
+  fi
   return 0
+}
+
+# dir_mtime_s DIR -> mtime seconds, "" if undeterminable
+dir_mtime_s() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
 # owner key: stable per session/worktree; --owner-key overrides (tests use it)
@@ -94,33 +113,75 @@ owner_key() {
   printf '%s:%s' "${top}" "$$"
 }
 
-# resource_type RESOURCE -> the part before ':'
-resource_type() { printf '%s' "${1%%:*}"; }
+# cap_key_candidates RESOURCE -> candidate cap keys, longest first.
+# "browser:cdp-port-9222" -> "browser:cdp-port", "browser"
+# "ios-simulator:host"    -> "ios-simulator:host", "ios-simulator"
+# "android-emulator:port-1" -> "android-emulator:port", "android-emulator"
+cap_key_candidates() {
+  local res="$1" p1 rest
+  p1="${res%%:*}"; rest="${res#*:}"
+  if [ "${rest}" = "${res}" ]; then printf '%s\n' "${p1}"; return; fi
+  case "${rest}" in
+    *-*) printf '%s:%s\n' "${p1}" "${rest%-*}" ;;
+    *)   printf '%s:%s\n' "${p1}" "${rest}" ;;
+  esac
+  printf '%s\n' "${p1}"
+}
 
-# type_limit TYPE -> integer cap (default per built-in table; overrides in limits.json)
-type_limit() {
-  local t="$1" v
-  if [ -f "${LIMITS_FILE}" ]; then
-    v="$(sed -n 's/.*"'"${t}"'": *\([0-9][0-9]*\).*/\1/p' "${LIMITS_FILE}" | head -1)"
-    [ -n "${v}" ] && { printf '%s' "${v}"; return; }
-  fi
-  case "${t}" in
-    android-emulator) printf '1' ;;
-    ios-simulator)    printf '1' ;;
-    ios-simulator-host) printf '1' ;;
-    physical-device)  printf '0' ;;   # never auto-acquirable; see docs
-    *)                printf '8' ;;
+# default_cap KEY -> cap from the built-in table, "" if unknown
+default_cap() {
+  case "$1" in
+    android-emulator|android-emulator:*) printf '1' ;;
+    ios-simulator|ios-simulator:*)       printf '1' ;;
+    browser|browser:*)                   printf '8' ;;
+    physical-device|physical-device:*)   printf '0' ;;
+    *)                                   printf '' ;;
   esac
 }
 
-# count_live TYPE [EXCLUDE_RESOURCE] -> prints live lease count of that type
+# limit_for KEY -> cap for exactly KEY (file override first, then defaults)
+limit_for() {
+  local k="$1" v
+  if [ -f "${LIMITS_FILE}" ]; then
+    v="$(sed -n 's/.*"'"${k}"'": *\([0-9][0-9]*\).*/\1/p' "${LIMITS_FILE}" | head -1)"
+    [ -n "${v}" ] && { printf '%s' "${v}"; return; }
+  fi
+  v="$(default_cap "${k}")"
+  [ -n "${v}" ] && { printf '%s' "${v}"; return; }
+  printf '8'
+}
+
+# resolve_cap RESOURCE -> "KEY CAP": the exact name first (a key may itself be
+# queried), then each candidate key longest-first; file override beats the
+# built-in table. Falls back to the first segment with cap 8.
+resolve_cap() {
+  local res="$1" k v hit="" first=1
+  # Exact name first, file only (an explicit "limits set <full-name>" win);
+  # then each candidate key, file then built-ins.
+  for k in "${res}" $(cap_key_candidates "${res}"); do
+    [ -z "${k}" ] && continue
+    if [ -f "${LIMITS_FILE}" ] && \
+       grep -q '"'"${k}"'"' "${LIMITS_FILE}" 2>/dev/null; then
+      hit="${k}"; break
+    fi
+    # The exact name must not match a built-in wildcard like browser:* —
+    # that would short-circuit the candidate keys below.
+    [ "${first}" = 1 ] && { first=0; continue; }
+    v="$(default_cap "${k}")"
+    if [ -n "${v}" ]; then hit="${k}"; break; fi
+  done
+  [ -z "${hit}" ] && hit="${res%%:*}"
+  printf '%s %s\n' "${hit}" "$(limit_for "${hit}")"
+}
+
+# count_live PREFIX [EXCLUDE_RESOURCE] -> live leases whose name starts with PREFIX
 count_live() {
-  local t="$1" excl="${2:-}" d r n=0
+  local prefix="$1" excl="${2:-}" d r n=0
   for d in "${LEASES}"/*.lock; do
     [ -d "${d}" ] || continue
     r="$(basename "${d}" .lock)"
     [ "${r}" = "${excl}" ] && continue
-    [ "$(resource_type "${r}")" = "${t}" ] || continue
+    case "${r}" in "${prefix}"*) ;; *) continue ;; esac
     if lease_is_live "${d}"; then n=$((n+1)); fi
   done
   printf '%s' "${n}"
@@ -143,14 +204,15 @@ cmd_acquire() {
   [ -n "${res}" ] || die "usage: acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]" 4
   case "${res}" in *[!A-Za-z0-9:._-]*) die "bad resource name ${res}" 4 ;; esac
 
-  local t; t="$(resource_type "${res}")"
-  local cap; cap="$(type_limit "${t}")"
+  local capkey cap
+  read -r capkey cap <<<"$(resolve_cap "${res}")"
 
-  # Physical devices: refuse outright unless caller already holds it — the
-  # registry cannot arbitrate humans (same reasoning as device-claim-check).
-  if [ "${t}" = "physical-device" ]; then
-    die "physical-device leases are not auto-acquirable (a human may be holding the device); see docs" 5
-  fi
+  # Physical devices: refuse outright — the registry cannot arbitrate humans
+  # (same reasoning as device-claim-check).
+  case "${res%%:*}" in
+    physical-device)
+      die "physical-device leases are not auto-acquirable (a human may be holding the device); see docs" 5 ;;
+  esac
 
   local d="${LEASES}/${res}.lock" attempt=0
   while [ "${attempt}" -lt 3 ]; do
@@ -178,13 +240,15 @@ cmd_acquire() {
   done
   [ -d "${d}" ] || die "could not acquire ${res} after ${attempt} attempts" 4
 
-  # Enforce per-type cap: count other live leases of this type.
-  local live; live="$(count_live "${t}" "${res}")"
+  # Enforce the cap resolved for this resource's key: count OTHER live leases
+  # under the same prefix.
+  local live; live="$(count_live "${capkey}" "${res}")"
   if [ "${live}" -ge "${cap}" ]; then
     rmdir "${d}" 2>/dev/null
-    say "type ${t} is at cap ${cap}; live holders:"
-    for x in "${LEASES}/${t}:"*.lock; do
+    say "resource group ${capkey} is at cap ${cap}; live holders:"
+    for x in "${LEASES}/${capkey}:"*.lock "${LEASES}/${capkey}.lock"; do
       [ -d "${x}" ] || continue
+      [ "${x}" = "${d}" ] && continue
       lease_is_live "${x}" && say "  $(basename "${x}" .lock): $(sed -n 's/.*"worktree": *"\([^"]*\)".*/\1/p' "${x}/lease.json" 2>/dev/null | head -1)"
     done
     exit 6
@@ -303,26 +367,46 @@ cmd_limits() {
   local sub="${1:-list}"
   case "${sub}" in
     list)
+      # Built-in cap keys plus every key the file defines (file wins per key).
+      local seen=" android-emulator ios-simulator ios-simulator:host browser browser:cdp-port browser:profile physical-device "
       printf '{\n'
-      printf '  "android-emulator": %s,\n' "$(type_limit android-emulator)"
-      printf '  "ios-simulator": %s,\n' "$(type_limit ios-simulator)"
-      printf '  "ios-simulator-host": %s,\n' "$(type_limit ios-simulator-host)"
-      printf '  "browser-cdp": %s,\n' "$(type_limit browser-cdp)"
-      printf '  "physical-device": %s\n' "$(type_limit physical-device)"
-      printf '}\n' ;;
-    get) [ -n "${2:-}" ] || die "usage: limits get <type>" 4; type_limit "$2" ;;
+      printf '  "android-emulator": %s,\n' "$(limit_for android-emulator)"
+      printf '  "ios-simulator": %s,\n' "$(limit_for ios-simulator)"
+      printf '  "ios-simulator:host": %s,\n' "$(limit_for ios-simulator:host)"
+      printf '  "browser": %s,\n' "$(limit_for browser)"
+      printf '  "browser:cdp-port": %s,\n' "$(limit_for browser:cdp-port)"
+      printf '  "browser:profile": %s,\n' "$(limit_for browser:profile)"
+      printf '  "physical-device": %s' "$(limit_for physical-device)"
+      if [ -f "${LIMITS_FILE}" ]; then
+        local line k
+        while IFS= read -r line; do
+          k="$(printf '%s' "${line}" | sed -n 's/.*"\([A-Za-z0-9:_-]*\)": *[0-9][0-9]*.*/\1/p')"
+          [ -z "${k}" ] && continue
+          case "${seen}" in *" ${k} "*) continue ;; esac
+          printf ',\n  "%s": %s' "${k}" "$(limit_for "${k}")"
+          seen="${seen}${k} "
+        done < <(tr ',{}' '\n\n\n' < "${LIMITS_FILE}")
+      fi
+      printf '\n}\n' ;;
+    get)
+      [ -n "${2:-}" ] || die "usage: limits get <key|resource>" 4
+      resolve_cap "$2" | awk '{print $2}' ;;
     set)
       [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "usage: limits set <type> <n>" 4
       case "$3" in *[!0-9]*) die "n must be an integer" 4 ;; esac
-      # naive but adequate json upsert for flat string->int map
-      local tmp="${LIMITS_FILE}.$$"
+      case "$2" in *[!A-Za-z0-9:_-]*) die "bad type name" 4 ;; esac
+      # The limits file is a flat {"type": int} map that only this command
+      # writes, so rebuild it line by line instead of editing JSON in place.
+      local tmp="${LIMITS_FILE}.$$" k v out="\"$2\": $3"
       if [ -f "${LIMITS_FILE}" ]; then
-        grep -v '"'"$2"'"' "${LIMITS_FILE}" | sed 's/{/{/"'"$2"'": '"$3"',/' > "${tmp}" 2>/dev/null || \
-          printf '{"%s": %s}\n' "$2" "$3" > "${tmp}"
-      else
-        printf '{"%s": %s}\n' "$2" "$3" > "${tmp}"
+        while IFS= read -r line; do
+          k="$(printf '%s' "${line}" | sed -n 's/.*"\([A-Za-z0-9:_-]*\)": *[0-9][0-9]*.*/\1/p')"
+          v="$(printf '%s' "${line}" | sed -n 's/.*"[A-Za-z0-9:_-]*": *\([0-9][0-9]*\).*/\1/p')"
+          [ -n "${k}" ] && [ -n "${v}" ] && [ "${k}" != "$2" ] && \
+            out="${out}, \"${k}\": ${v}"
+        done < <(tr ',{}' '\n\n\n' < "${LIMITS_FILE}")
       fi
-      mv "${tmp}" "${LIMITS_FILE}"
+      printf '{%s}\n' "${out}" > "${tmp}" && mv "${tmp}" "${LIMITS_FILE}"
       ;;
     *) die "usage: limits list|get <type>|set <type> <n>" 4 ;;
   esac
