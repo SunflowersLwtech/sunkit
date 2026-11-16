@@ -159,21 +159,24 @@ test("the leased secretary asking for a Claude model still gets the group, never
   assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...o, secretarySeat: "group/other" })), "group/other")
 })
 
-const feishu = "你是刘维的个人助理。"
+// the phrase lives in the gateway's options (options.assistantPhrase), not in the code; a stand-in here
+const PHRASE = "某人的个人助理"
+const feishu = "你是" + PHRASE + "。"
+const AP = { assistantPhrase: PHRASE }
 
 test("the Feishu assistant, known by its system prompt, goes to group/flash-paid when not leased", () => {
   const blocks = cc("group/auto-deepseek-v4-1-flash", "x")
   blocks.system = [{ type: "text", text: "You are Claude Code." }, { type: "text", text: feishu }]
-  assert.equal(run(blocks, ctx("claude")), "group/flash-paid")
+  assert.equal(run(blocks, ctx("claude", AP)), "group/flash-paid")
   const str = cc("group/auto-deepseek-v4-1-flash", "x")
   str.system = "x " + feishu
-  assert.equal(run(str, ctx("claude")), "group/flash-paid")
+  assert.equal(run(str, ctx("claude", AP)), "group/flash-paid")
   const chat = { model: "group/auto-deepseek-v4-1-flash", messages: [{ role: "system", content: feishu }, { role: "user", content: "hi" }] }
-  assert.equal(run(chat, ctx("litellm")), "group/flash-paid")
+  assert.equal(run(chat, ctx("litellm", AP)), "group/flash-paid")
   const dev = { model: "x", messages: [{ role: "developer", content: [{ type: "text", text: feishu }] }] }
-  assert.equal(run(dev, ctx("litellm")), "group/flash-paid")
+  assert.equal(run(dev, ctx("litellm", AP)), "group/flash-paid")
   const resp = { model: "x", instructions: feishu, input: [{ role: "user", content: "hi" }] }
-  assert.equal(run(resp, ctx("codex")), "group/flash-paid")
+  assert.equal(run(resp, ctx("codex", AP)), "group/flash-paid")
 })
 
 test("the assistant's phrase anywhere but the system prompt is not the assistant", () => {
@@ -181,17 +184,17 @@ test("the assistant's phrase anywhere but the system prompt is not the assistant
   const user = cc("claude-opus-5-5", "x")
   user.system = [{ type: "text", text: "You are Claude Code." }]
   user.messages = [{ role: "user", content: "what does " + feishu + " mean in this note?" }]
-  assert.equal(run(user, ctx("claude")), "group/flash-ds")
+  assert.equal(run(user, ctx("claude", AP)), "group/flash-ds")
   const tool = cc("claude-opus-5-5", "x")
   tool.messages = [
     { role: "user", content: "read the config" },
     { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "cat config.toml" } }] },
     { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "append_system_prompt = \"" + feishu + "\"" }] }] },
   ]
-  assert.equal(run(tool, ctx("claude")), "group/flash-ds")
+  assert.equal(run(tool, ctx("claude", AP)), "group/flash-ds")
   const meta = cc("claude-opus-5-5", "x")
   meta.metadata.note = feishu
-  assert.equal(run(meta, ctx("claude")), "group/flash-ds")
+  assert.equal(run(meta, ctx("claude", AP)), "group/flash-ds")
 })
 
 test("real routes of their own are left as asked", () => {
@@ -217,7 +220,7 @@ test("a full pool changes nothing for anyone but the leased secretary", () => {
   assert.equal(run(cc("claude-opus-5-5"), ctx("claude", { ...full, sessions: [SESSION] })), "claude/claude-opus-5-5")
   assert.equal(run(cc("claude-opus-5-5", "y"), ctx("claude", full)), "group/flash-ds")
   // lease off: the secretary is in no list, so it goes by its system prompt as before
-  const unleased = { secretary: [DEVICE], seatUntil: Date.now() - 1, ...full }
+  const unleased = { secretary: [DEVICE], seatUntil: Date.now() - 1, ...full, ...AP }
   assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", unleased)), "group/flash-ds")
   const sec = cc("claude-opus-5-5", "x"); sec.system = [{ type: "text", text: feishu }]
   assert.equal(run(sec, ctx("claude", unleased)), "group/flash-paid")
@@ -231,4 +234,22 @@ test("options.sessionSeat and options.drillUntil, left over from the removed ove
   assert.equal(run(cc("claude-opus-5-5"), ctx("claude", o)), "claude/claude-opus-5-5")
   assert.equal(run(cc("group/overflow-drill", "y"), ctx("claude", o)), "group/flash-ds")
   assert.equal(run(cc("team-overflow-sec/claude-opus-5-5-overflow", "y"), ctx("claude", o)), "group/flash-ds")
+})
+
+// 2026-11-16: the phrase that marks the assistant comes from the options, so the code names no one
+test("the assistant is known only by options.assistantPhrase, and a missing, blank or too short one marks no one", () => {
+  // onRequest rewrites body.model in place: a fresh request for each ask
+  const sec = (text = feishu) => { const b = cc("group/auto-deepseek-v4-1-flash", "x"); b.system = [{ type: "text", text }]; return b }
+  assert.equal(run(sec(), ctx("claude", AP)), "group/flash-paid")
+  for (const o of [{}, { assistantPhrase: "" }, { assistantPhrase: "   " }, { assistantPhrase: "你是" }, { assistantPhrase: 42 }]) {
+    assert.equal(run(sec(), ctx("claude", o)), "group/flash-ds", JSON.stringify(o))
+  }
+  // another phrase in the options: the old one in a prompt is no longer the assistant
+  assert.equal(run(sec(), ctx("claude", { assistantPhrase: "另一个人的个人助理" })), "group/flash-ds")
+  assert.equal(run(sec("你是另一个人的个人助理。"), ctx("claude", { assistantPhrase: "另一个人的个人助理" })), "group/flash-paid")
+})
+
+test("no name is written into the middleware or this test", () => {
+  const src = readFileSync(new URL("./route-all-flash.middleware.js", import.meta.url), "utf8")
+  assert.doesNotMatch(src, /个人助理"|const FEISHU/, "the assistant's phrase is back in the code")
 })
