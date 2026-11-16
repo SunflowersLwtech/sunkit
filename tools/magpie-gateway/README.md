@@ -119,6 +119,20 @@ Install: `seat-refresh.py` to `/opt/magpie/monitor/` (root, 700), the two unit f
 
 Install: `glm-guard.py` to `/opt/magpie/monitor/` (root, 700), `mesh.env` with `MESH_RELAY_URL` and `MESH_TOKEN`, the two unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-glm-guard.timer`. Pause: `touch /etc/magpie-glm-guard/paused` (each run exits without touching anything). Off: `systemctl disable --now magpie-glm-guard.timer`. `glm-guard.py --dry-run` prints what it reads and what it would run. Tests: `python3 server/glm-guard.test.py` (fake cards, relay and magpie on 127.0.0.1).
 
+## Secretary past a full Claude Code pool
+
+magpie runs at most `claudeRunsMost` Claude Code processes (18 on the gateway); one more waits for room up to 2 minutes (`claudeRoomWait`, fixed in `internal/gateway/claude_room.go`, no per-caller reserve), and only then does its group try the next member. `server/pool-watch.py` (`magpie-pool-watch.service`, always running) follows the gateway's log and, on a `waits for room` or `found no room` line, sets route-all-flash's `options.poolFullUntil` 5 minutes ahead (renewed at most once a minute while such lines keep coming). Meanwhile the middleware sends the leased secretary to `group/flash-paid` (Devin Opus first, which takes no Claude Code process) instead of `group/secretary-seat`. The value runs out by itself. `pool-watch.py set <secs> | clear | status` by hand.
+
+The match is one fixed sentence of magpie's log, so `pool-watch.py selfcheck` (`magpie-pool-watch-check.timer`, every 10 minutes) watches the watcher: it counts the Claude Code processes in the container (`docker top … -eo pid,args`, binary `…/claude-code/<version>/claude`) against `claudeRunsMost`, and when the pool was full after the last match while nothing has matched for 24 hours (or since the watcher first ran), it tells `feishu-assistant` once over mesh (else the ntfy relay). Its stamps are in `/var/lib/magpie-pool-watch/`; failing to write them never stops the bypass.
+
+Install: `pool-watch.py` to `/opt/magpie/monitor/` (root, 700), the three unit files to `/etc/systemd/system`, then `systemctl enable --now magpie-pool-watch.service magpie-pool-watch-check.timer`. Off: `systemctl disable --now magpie-pool-watch.service magpie-pool-watch-check.timer` and `pool-watch.py clear`. Tests: `python3 server/pool-watch.test.py`.
+
+## Sessions that should be on Claude
+
+`server/seat-offclaude` (root, 755, `/usr/local/bin/`, read-only) lists the sessions that should be on Claude (the whitelist, the secretary's, the Claude workers the secretary's stuck-sweep names with `--also`) and got a turn answered by a model that is not `claude-*`; the secretary's stuck-sweep calls it every 10 minutes. A usage CSV that lacks a column it reads exits 2, and `rows` (the requests in the window) lets the caller tell an empty window from a blind one. Tests: `python3 server/seat-offclaude.test.py`.
+
+A Team API overflow lane for Claude Code sessions (route them to the Team org's subscriber API credit when the seats are full) was built and removed on 2026-11-16: subscriber API credits do not cover Claude Code (platform.claude.com/docs/en/about-claude/api-credits-for-subscribers, "What the credits cover"). Do not rebuild it.
+
 ## Feishu assistant fallback (N150)
 
 The Feishu assistant on N150 is pinned to `provider=magpie`, so a gateway outage took the assistant down with it (the nights of 10-26 and 10-27). Three files keep it reachable:

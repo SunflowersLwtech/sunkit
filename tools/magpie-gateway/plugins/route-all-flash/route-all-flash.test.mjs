@@ -199,3 +199,36 @@ test("real routes of their own are left as asked", () => {
     assert.equal(run(cc(m), ctx("claude")), m)
   }
 })
+
+// 2026-11-16: magpie's Claude Code pool full (18 runs): the leased secretary skips the seats' member, which would
+// wait 2 minutes for room, and goes to group/flash-paid (Devin Opus, then the Team API lane, then the seats)
+test("while the pool is full the leased secretary goes to group/flash-paid, and only while it is", () => {
+  const lease = { secretary: [DEVICE], seatUntil: Date.now() + 60000 }
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...lease, poolFullUntil: Date.now() + 60000 })), "group/flash-paid")
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...lease, poolFullUntil: Date.now() - 1 })), "group/secretary-seat")
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...lease, poolFullUntil: "soon" })), "group/secretary-seat")
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...lease, poolFullUntil: Date.now() + 60000, poolFullSeat: "group/other" })), "group/other")
+  // the secretarySeat override does not win over a full pool
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", { ...lease, secretarySeat: "group/other", poolFullUntil: Date.now() + 60000 })), "group/flash-paid")
+})
+
+test("a full pool changes nothing for anyone but the leased secretary", () => {
+  const full = { poolFullUntil: Date.now() + 60000 }
+  assert.equal(run(cc("claude-opus-5-5"), ctx("claude", { ...full, sessions: [SESSION] })), "claude/claude-opus-5-5")
+  assert.equal(run(cc("claude-opus-5-5", "y"), ctx("claude", full)), "group/flash-ds")
+  // lease off: the secretary is in no list, so it goes by its system prompt as before
+  const unleased = { secretary: [DEVICE], seatUntil: Date.now() - 1, ...full }
+  assert.equal(run(cc("claude-opus-5-5", "x"), ctx("claude", unleased)), "group/flash-ds")
+  const sec = cc("claude-opus-5-5", "x"); sec.system = [{ type: "text", text: feishu }]
+  assert.equal(run(sec, ctx("claude", unleased)), "group/flash-paid")
+  assert.equal(run(probe("frontier"), ctx("fleet-watch", full)), "claude/claude-opus-5-5")
+})
+
+// 2026-11-16: the Team API overflow lanes were removed for good (subscriber API credits do not cover Claude Code);
+// the options they used must route nothing
+test("options.sessionSeat and options.drillUntil, left over from the removed overflow lanes, change nothing", () => {
+  const o = { sessions: [SESSION], sessionSeat: "group/worker-seat", drillUntil: Date.now() + 60000 }
+  assert.equal(run(cc("claude-opus-5-5"), ctx("claude", o)), "claude/claude-opus-5-5")
+  assert.equal(run(cc("group/overflow-drill", "y"), ctx("claude", o)), "group/flash-ds")
+  assert.equal(run(cc("team-overflow-sec/claude-opus-5-5-overflow", "y"), ctx("claude", o)), "group/flash-ds")
+})

@@ -43,11 +43,19 @@
 //                             the claude provider's own fallback (GLM) answers
 //                             a request for its model when every seat is at
 //                             its cap, but not a group's member
+//                             While options.poolFullUntil is also ahead (magpie's
+//                             Claude Code pool is full: server/pool-watch.py
+//                             sets it from magpie's "waits for room" log
+//                             lines), the leased secretary goes to
+//                             options.poolFullSeat, else group/flash-paid: the
+//                             seats' member would wait 2 minutes for room
+//                             (claudeRoomWait) before the group moved on
 //   everything else         -> group/flash-ds
 //
 //   {"free": "group/flash-ds", "paid": "group/flash-paid",
 //    "sessions": ["<session id>", …], "secretary": ["<device or session>", …],
 //    "seatUntil": <epoch ms>, "secretarySeat": "<model or group>",
+//    "poolFullUntil": <epoch ms>, "poolFullSeat": "<model or group>",
 //    "probe": "<provider/model>", "off": false}
 
 const FREE = "group/flash-ds"
@@ -119,6 +127,10 @@ function listed(v, x) {
 const PROBE_TEXT = /^Health check [0-9a-f]{12}\. Reply with the word PONG\.$/
 const PROBE_MAX_TOKENS = 256
 
+function ahead(t) {
+  return typeof t === "number" && Date.now() < t
+}
+
 function empty(v) {
   return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0)
 }
@@ -163,9 +175,9 @@ export function onRequest(body, ctx) {
       return body
     }
   }
-  const leased = typeof o.seatUntil === "number" && Date.now() < o.seatUntil
-  if (leased && (listed(o.secretary, who.session) || listed(o.secretary, who.device))) {
-    body.model = typeof o.secretarySeat === "string" && o.secretarySeat ? o.secretarySeat : SECRETARY_SEAT
+  if (ahead(o.seatUntil) && (listed(o.secretary, who.session) || listed(o.secretary, who.device))) {
+    if (ahead(o.poolFullUntil)) body.model = typeof o.poolFullSeat === "string" && o.poolFullSeat ? o.poolFullSeat : PAID
+    else body.model = typeof o.secretarySeat === "string" && o.secretarySeat ? o.secretarySeat : SECRETARY_SEAT
     return body
   }
   body.model = isFeishu(body) ? PAID : (typeof o.free === "string" && o.free ? o.free : FREE)
