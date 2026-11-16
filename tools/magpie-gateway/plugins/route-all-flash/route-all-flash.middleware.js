@@ -2,7 +2,7 @@
 // (onRequest: before routing). The gateway resolves model aliases first
 // (auto/x -> group/auto-x), and Info carries no caller key, so the split
 // uses what the body itself carries: cc-connect's append_system_prompt
-// ("刘维的个人助理…", looked for in the system prompt only: a session that
+// (options.assistantPhrase, a phrase of its, looked for in the system prompt only: a session that
 // reads the assistant's files carries the phrase in its messages too) for
 // the Feishu assistant, and Claude Code's
 // metadata.user_id (a JSON string: device_id, account_uuid, session_id)
@@ -55,7 +55,7 @@
 //   {"free": "group/flash-ds", "paid": "group/flash-paid",
 //    "sessions": ["<session id>", …], "secretary": ["<device or session>", …],
 //    "seatUntil": <epoch ms>, "secretarySeat": "<model or group>",
-//    "poolFullUntil": <epoch ms>, "poolFullSeat": "<model or group>",
+//    "poolFullUntil": <epoch ms>, "poolFullSeat": "<model or group>", "assistantPhrase": "<text>",
 //    "probe": "<provider/model>", "off": false}
 
 const FREE = "group/flash-ds"
@@ -64,7 +64,6 @@ const SEAT = "claude/claude-opus-5-5"
 const PROBE = "fleet-watch"
 const SECRETARY_SEAT = "group/secretary-seat"
 const PASSTHROUGH = /^(deepseek\/|always-up|devin\/|group\/flash-paid|zcode\/|workbuddy\/|litellm-claude-api\/)/  // 11-09: cc-compactor 的压缩请求发 litellm-claude-api/*，不放行就被改写到 flash-ds（现为 WorkBuddy），专用 Haiku 通道一个都走不到
-const FEISHU = "刘维的个人助理"
 
 // systemText: the request's system prompt, in each API's shape: Anthropic's
 // system (a string or text blocks), the system and developer messages of
@@ -85,8 +84,11 @@ function systemText(body) {
   return out.join("\n")
 }
 
-function isFeishu(body) {
-  return systemText(body).includes(FEISHU)
+// the phrase that marks the assistant is in the options on the gateway, not in this file (2026-11-16: it names a person);
+// without it nothing is taken for the assistant
+function isFeishu(body, o) {
+  const phrase = typeof o.assistantPhrase === "string" ? o.assistantPhrase.trim() : ""
+  return phrase.length >= 4 && systemText(body).includes(phrase)
 }
 
 // who is Claude Code's conversation, from the body's metadata.user_id:
@@ -180,6 +182,6 @@ export function onRequest(body, ctx) {
     else body.model = typeof o.secretarySeat === "string" && o.secretarySeat ? o.secretarySeat : SECRETARY_SEAT
     return body
   }
-  body.model = isFeishu(body) ? PAID : (typeof o.free === "string" && o.free ? o.free : FREE)
+  body.model = isFeishu(body, o) ? PAID : (typeof o.free === "string" && o.free ? o.free : FREE)
   return body
 }
