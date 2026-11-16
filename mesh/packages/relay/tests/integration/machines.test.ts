@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { harness, openSession, readSse, req, S } from './ledger-helpers.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_meshd_m4', handle: 'duocode', label: 'meshd-m4', grant: { role: 'executor' as const, workgroup: 'liuwei', machine: 'm4' } },
-  { id: 'tk_meshd_aws', handle: 'weiliu', label: 'meshd-aws', grant: { role: 'executor' as const, workgroup: 'liuwei', machine: 'aws-sin' } },
-  { id: 'tk_orch', handle: 'weiliu', label: 'orch-feishu', grant: { role: 'orchestrator' as const, workgroup: 'liuwei', visible: ['team'] } },
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
+  { id: 'tk_meshd_m4', handle: 'duocode', label: 'meshd-m4', grant: { role: 'executor' as const, workgroup: 'home', machine: 'm4' } },
+  { id: 'tk_meshd_aws', handle: 'owner', label: 'meshd-aws', grant: { role: 'executor' as const, workgroup: 'home', machine: 'aws-sin' } },
+  { id: 'tk_orch', handle: 'owner', label: 'orch-feishu', grant: { role: 'orchestrator' as const, workgroup: 'home', visible: ['team'] } },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
-  { id: 'tk_admin', handle: 'weiliu', label: 'bootstrap-admin', tier: 'admin' as const },
+  { id: 'tk_admin', handle: 'owner', label: 'bootstrap-admin', tier: 'admin' as const },
 ]
 
 const report = {
@@ -16,7 +16,7 @@ const report = {
   herdr: { ok: true, version: '0.9.5' },
   load: { load1: 1.2, cpus: 8 },
   kinds: [{ kind: 'claude', version: '2.1.300' }],
-  seats: [{ email: 'duocodetechu@gmail.com', plan: 'team', five_hour_pct: 40, resets_at: '2026-10-20T05:00:00Z' }],
+  seats: [{ email: 'seat2@example.com', plan: 'team', five_hour_pct: 40, resets_at: '2026-10-20T05:00:00Z' }],
   active: 1, blocked: 0, max_active: 8,
   agents: [{ name: 'fr-inkrec', agent: 'claude', status: 'idle', pane: 'wC:p54', tab: 'wC:t4Y', workspace: 'wC', cwd: '/Users/sunfl/Developer/products/foldrender' }],
   roots: [{ path: '~/Developer/products', exists: true }],

@@ -2,7 +2,7 @@
 # gw-fallback 的宿主机入口（2026-10-27，sunkit tools/magpie-gateway）：逻辑全在容器里的 gw-fallback.n150.py，
 # 这里只做三件容器里做不了的事：单实例锁、把 feishu-cc 最近的日志喂给它判空闲、把它的 NOTIFY 行交给 ntfy/Discord。
 # N150 crontab：* * * * * /opt/data/feishu-cc/bin/gw-fallback >/dev/null 2>&1
-# 停用：注释掉这一行，再 rm /opt/data/feishu-cc/gw-fallback/direct（有标记时秘书新起的进程会直连）。
+# 停用：注释掉这一行，再 rm /opt/data/feishu-cc/gw-fallback/direct（有标记时主会话新起的进程会直连）。
 D=/opt/data/feishu-cc
 PY=/root/.claude/tools/uv/bin/python3
 exec 9>/tmp/gw-fallback.lock

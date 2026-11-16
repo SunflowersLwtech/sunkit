@@ -6,14 +6,14 @@ import { PresenceRegistry } from '../../src/presence/registry.ts'
 import { SessionRegistry } from '../../src/sessions/registry.ts'
 import { buildApp } from '../../src/app.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
-const ORCH = { role: 'orchestrator' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
+const ORCH = { role: 'orchestrator' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
-  { id: 'tk_aws', handle: 'weiliu', label: 'aws-sin', grant: LIUWEI },
-  { id: 'tk_orch', handle: 'weiliu', label: 'orch-feishu', grant: ORCH },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
+  { id: 'tk_aws', handle: 'owner', label: 'aws-sin', grant: OWN_WG },
+  { id: 'tk_orch', handle: 'owner', label: 'orch-feishu', grant: ORCH },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
-  { id: 'tk_admin', handle: 'weiliu', label: 'bootstrap-admin', tier: 'admin' as const },
+  { id: 'tk_admin', handle: 'owner', label: 'bootstrap-admin', tier: 'admin' as const },
 ]
 
 type H = ReturnType<typeof harness>

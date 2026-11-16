@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { harness, openSession, req, S } from './ledger-helpers.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
-  { id: 'tk_aws', handle: 'weiliu', label: 'aws-sin', grant: LIUWEI },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
+  { id: 'tk_aws', handle: 'owner', label: 'aws-sin', grant: OWN_WG },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
 ]
 
@@ -26,7 +26,7 @@ describe('session cards (POST /v1/sessions/self)', () => {
     expect(row).toMatchObject({
       name: 'fr-inkrec', agent: 'claude', model: 'claude-opus-5-5', repo: 'foldrender', branch: 'feat/ink',
       herdr: { machine: 'm4', tab: 'wC:t4Y', pane: 'wC:p54' }, source: 'hook',
-      workgroup: 'liuwei', role: 'worker', age_s: 7,
+      workgroup: 'home', role: 'worker', age_s: 7,
     })
   })
 
@@ -36,7 +36,7 @@ describe('session cards (POST /v1/sessions/self)', () => {
     const base = { session: S.b1 }
     expect((await req(h.app, h.tok.tk_mate!, 'POST', '/v1/sessions/self', { ...base, role: 'orchestrator' })).status).toBe(400)
     expect((await req(h.app, h.tok.tk_mate!, 'POST', '/v1/sessions/self', { ...base, dispatched_by: 'feishu-assistant' })).status).toBe(400)
-    const forged = await req(h.app, h.tok.tk_mate!, 'POST', '/v1/sessions/self', { ...base, workgroup: 'liuwei' })
+    const forged = await req(h.app, h.tok.tk_mate!, 'POST', '/v1/sessions/self', { ...base, workgroup: 'home' })
     expect(forged.status).toBe(403)
     expect(await forged.json()).toMatchObject({ error: 'workgroup_not_granted' })
     const row = (await list(h, h.tok.tk_mate!)).find(r => r.session_id === S.b1)!
@@ -51,16 +51,16 @@ describe('session cards (POST /v1/sessions/self)', () => {
   })
 
   it('on reconnect a session follows its token\'s current grant, unless it moved itself to a workgroup still granted', async () => {
-    const h = harness([{ id: 'tk_x', handle: 'weiliu', label: 'x' }, { id: 'tk_admin', handle: 'weiliu', label: 'admin', tier: 'admin' as const }])
+    const h = harness([{ id: 'tk_x', handle: 'owner', label: 'x' }, { id: 'tk_admin', handle: 'owner', label: 'admin', tier: 'admin' as const }])
     const a = await openSession(h.app, h.tok.tk_x!, S.a1, 'stays')
     const b = await openSession(h.app, h.tok.tk_x!, S.a2, 'moves')
-    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_x/grant', { role: 'worker', workgroup: 'liuwei', visible: ['team'] })
+    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_x/grant', { role: 'worker', workgroup: 'home', visible: ['team'] })
     expect((await req(h.app, h.tok.tk_x!, 'POST', '/v1/sessions/self', { session: S.a2, workgroup: 'team' })).status).toBe(200)
     await a.body!.cancel(); await b.body!.cancel()
     await openSession(h.app, h.tok.tk_x!, S.a1, 'stays')
     await openSession(h.app, h.tok.tk_x!, S.a2, 'moves')
     const rows = await list(h, h.tok.tk_x!)
-    expect(rows.find(r => r.session_id === S.a1)?.workgroup).toBe('liuwei')
+    expect(rows.find(r => r.session_id === S.a1)?.workgroup).toBe('home')
     expect(rows.find(r => r.session_id === S.a2)?.workgroup).toBe('team')
   })
 

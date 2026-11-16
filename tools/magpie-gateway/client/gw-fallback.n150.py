@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# gw-fallback（2026-10-27，sunkit tools/magpie-gateway）：飞书秘书的网关兜底。
-# 秘书钉在 provider=magpie（刘维 10-26 定）；网关一挂，秘书就整段失联（10-26/27 两次整夜）。
-# 这里每 5 分钟用秘书自己的网关 key 发一个最小的真实请求（和秘书同一个模型名、同一条网络路径；
+# gw-fallback（2026-10-27，sunkit tools/magpie-gateway）：飞书主会话的网关兜底。
+# 主会话钉在 provider=magpie（10-26 定）；网关一挂，主会话就整段失联（10-26/27 两次整夜）。
+# 这里每 5 分钟用主会话自己的网关 key 发一个最小的真实请求（和主会话同一个模型名、同一条网络路径；
 # 网关上 Opus 座位答一个词约 25 秒、约 1.7K token，一天 288 次约 0.5M 座位 token），出现失败后改为每分钟探，
 #   连续 3 次失败 → 写标记 gw-fallback/direct（内容 = 失败的网关地址），ntfy 告警；
-#     claude-bypass 看到标记就去掉网关的环境变量，新起的秘书进程直连容器里登录的席位；
-#     秘书空闲时（最后一条是 turn complete 且 60 秒没动静）结束还连着网关的那个 claude 进程，
+#     claude-bypass 看到标记就去掉网关的环境变量，新起的主会话进程直连容器里登录的席位；
+#     主会话空闲时（最后一条是 turn complete 且 60 秒没动静）结束还连着网关的那个 claude 进程，
 #     cc-connect 在下一条消息时用 --resume 原样接上；网关挂满 20 分钟仍不空闲就直接结束它。
 #   直连期间每分钟探一次，连续 5 次正常 → 删标记、ntfy 告知，空闲时让直连进程重起、回到网关。
 # 不改 config.toml、不重启 cc-connect 或容器；provider 不是 magpie 时只探测、不切换。
@@ -65,7 +65,7 @@ def probe(base, headers, model):
             "messages": [{"role": "user", "content": "Health check %s. Reply with the word PONG." % uuid.uuid4().hex[:12]}]}
     req = urllib.request.Request(base + "/v1/messages", data=json.dumps(body).encode(), method="POST", headers={
         **headers, "content-type": "application/json", "anthropic-version": "2023-06-01", "user-agent": "gw-fallback/1"})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 和秘书的 claude 一样不走代理
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 和主会话的 claude 一样不走代理
     t = time.time()
     try:
         with opener.open(req, timeout=TIMEOUT) as r:
@@ -146,7 +146,7 @@ def main():
         log("config unreadable: %s" % e)
     if not gw:
         if not st.get("no_config"):
-            notify("秘书网关兜底停了", "config.toml 里找不到 magpie provider，gw-fallback 没法探测", 4)
+            notify("主会话网关兜底停了", "config.toml 里找不到 magpie provider，gw-fallback 没法探测", 4)
         st["no_config"] = True
         json.dump(st, open(STATE, "w"))
         return
@@ -173,10 +173,10 @@ def main():
                     f.write(base)
                 os.replace(FLAG + ".tmp", FLAG)
                 st["pending"] = "direct"
-            notify("秘书的网关不通，已切直连席位" if pinned else "秘书的网关不通",
+            notify("主会话的网关不通，已切直连席位" if pinned else "主会话的网关不通",
                    "网关连续 %d 次探测失败（最近一次：%s）。%s" % (
                        FAIL_N, st["last_error"],
-                       "秘书空闲时换成直连本机席位接着同一段对话；网关恢复后自动切回。" if pinned else "秘书现在的 provider 是 %s，没有切换。" % active), 4)
+                       "主会话空闲时换成直连本机席位接着同一段对话；网关恢复后自动切回。" if pinned else "主会话现在的 provider 是 %s，没有切换。" % active), 4)
             log("switch -> direct (pinned=%s)" % pinned)
         elif st["mode"] == "direct" and st["oks"] >= OK_N:
             minutes = int((now - st.get("since", now)) / 60)
@@ -184,7 +184,7 @@ def main():
             if os.path.exists(FLAG):
                 os.remove(FLAG)
                 st["pending"] = "gateway"
-            notify("网关恢复，秘书切回网关", "连续 %d 次探测正常；直连持续了约 %d 分钟。秘书空闲时切回。" % (OK_N, minutes), 2)
+            notify("网关恢复，主会话切回网关", "连续 %d 次探测正常；直连持续了约 %d 分钟。主会话空闲时切回。" % (OK_N, minutes), 2)
             log("switch -> gateway after %d min" % minutes)
 
     if st["pending"]:
@@ -206,7 +206,7 @@ def main():
                     except OSError as e:
                         log("pending %s: kill %d failed: %s" % (want, pid, e))
                 if force and not free and not st.get("forced_note"):
-                    notify("秘书进程被强制重起", "网关已挂满 %d 分钟、秘书一直没空闲；已结束还连着网关的进程，下一条消息直连接上。排队中的消息可能要重发。" % (FORCE // 60), 4)
+                    notify("主会话进程被强制重起", "网关已挂满 %d 分钟、主会话一直没空闲；已结束还连着网关的进程，下一条消息直连接上。排队中的消息可能要重发。" % (FORCE // 60), 4)
                     st["forced_note"] = True
             else:
                 log("pending %s: busy, waiting" % want)

@@ -18,7 +18,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 飞书助理（feishu-assistant）高频工作流清单 | 已发 mesh 征集，回复到达后评审入 sunkit |
+| 飞书主会话（feishu-assistant）高频工作流清单 | 已发 mesh 征集，回复到达后评审入 sunkit |
 | p0620 工作区散件（`_transfer/` 归档、`utility/`、`agent-browser-e2e-kit/`、`bossai-cua/` 等） | 待逐项判定：该进 sunkit `tools/` 的收，纯归档不动 |
 | devdesk worker 产出（shell-network 沙箱调研） | 报告落 `BossAI/tasks/` 后回填链接 |
 

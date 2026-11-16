@@ -160,7 +160,7 @@ test("the leased secretary asking for a Claude model still gets the group, never
 })
 
 // the phrase lives in the gateway's options (options.assistantPhrase), not in the code; a stand-in here
-const PHRASE = "某人的个人助理"
+const PHRASE = "某个会话的识别词"
 const feishu = "你是" + PHRASE + "。"
 const AP = { assistantPhrase: PHRASE }
 
@@ -245,11 +245,11 @@ test("the assistant is known only by options.assistantPhrase, and a missing, bla
     assert.equal(run(sec(), ctx("claude", o)), "group/flash-ds", JSON.stringify(o))
   }
   // another phrase in the options: the old one in a prompt is no longer the assistant
-  assert.equal(run(sec(), ctx("claude", { assistantPhrase: "另一个人的个人助理" })), "group/flash-ds")
-  assert.equal(run(sec("你是另一个人的个人助理。"), ctx("claude", { assistantPhrase: "另一个人的个人助理" })), "group/flash-paid")
+  assert.equal(run(sec(), ctx("claude", { assistantPhrase: "另一个识别词" })), "group/flash-ds")
+  assert.equal(run(sec("你是另一个识别词。"), ctx("claude", { assistantPhrase: "另一个识别词" })), "group/flash-paid")
 })
 
 test("no name is written into the middleware or this test", () => {
   const src = readFileSync(new URL("./route-all-flash.middleware.js", import.meta.url), "utf8")
-  assert.doesNotMatch(src, /个人助理"|const FEISHU/, "the assistant's phrase is back in the code")
+  assert.doesNotMatch(src, /const FEISHU|[\u4e00-\u9fff]{4,}["'`]/, "the assistant's phrase is back in the code")
 })

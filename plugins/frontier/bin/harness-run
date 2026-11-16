@@ -19,11 +19,11 @@ HOSTNAMES = {"m4": "Lius-MacBook-Air", "m2": "s-MacBook-Air"}
 ZCODE_APP = "/Applications/ZCode.app/Contents/Resources"
 HARNESSES = {
     "agy-pro": dict(kind="agy", host="m2", model="gemini-4-argon-medium",
-                    about="Antigravity, weiliu0607 (Google AI Pro, paid)"),
+                    about="Antigravity, the Google AI Pro account (paid)"),
     "agy-trial": dict(kind="agy", host="m4", model="gemini-4-argon-medium",
-                      about="Antigravity, devweiliu0607 (Samsung trial)"),
+                      about="Antigravity, the Samsung trial account"),
     "zcode": dict(kind="zcode", host="m4", model="",
-                  about="ZCode CLI, Z.ai account tp085412 (GLM; model is the account's plan default)"),
+                  about="ZCode CLI, the Z.ai account (GLM; model is the account's plan default)"),
     "zen": dict(kind="opencode", host="", model="opencode/deepseek-v4.1-flash-free",
                 about="OpenCode CLI, Zen free models"),
     "gw": dict(kind="claude", host="", model="auto/gpt-6.1-sol",

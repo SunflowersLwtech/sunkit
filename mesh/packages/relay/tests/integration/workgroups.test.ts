@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { harness, openSession, readSse, req, S } from './ledger-helpers.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
-  { id: 'tk_sec', handle: 'weiliu', label: 'n150', grant: LIUWEI },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
+  { id: 'tk_sec', handle: 'owner', label: 'n150', grant: OWN_WG },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
   { id: 'tk_mate2', handle: 'frankie', label: 'frankie-laptop' },
 ]
@@ -29,12 +29,12 @@ describe('workgroup boundary on messages', () => {
     const out = await send(h, h.tok.tk_sec!, { to: 'jovie', to_session: S.b1, content: 'please look at #12' }, S.o1)
     expect(out.status).toBe(201)
     const first = (await out.json()) as { id: string }
-    const reply = await send(h, h.tok.tk_mate!, { to: 'weiliu', to_session: S.o1, content: 'done', in_reply_to: first.id }, S.b1)
+    const reply = await send(h, h.tok.tk_mate!, { to: 'owner', to_session: S.o1, content: 'done', in_reply_to: first.id }, S.b1)
     expect(reply.status).toBe(201)
     const got = await readSse(sec.body!, 1)
     expect(got[0]!.data).toContain('"content":"done"')
     // Without the reply link the private session stays unreachable.
-    expect((await send(h, h.tok.tk_mate!, { to: 'weiliu', to_session: S.o1, content: 'again' }, S.b1)).status).toBe(403)
+    expect((await send(h, h.tok.tk_mate!, { to: 'owner', to_session: S.o1, content: 'again' }, S.b1)).status).toBe(403)
   })
 
   it('a reply link only opens the session that wrote to you, not a sibling', async () => {
@@ -43,7 +43,7 @@ describe('workgroup boundary on messages', () => {
     await openSession(h.app, h.tok.tk_sec!, S.o1.replace('ooooo1', 'ooooo2'), 'other-private')
     await openSession(h.app, h.tok.tk_mate!, S.b1, 'mate')
     const first = (await (await send(h, h.tok.tk_sec!, { to: 'jovie', to_session: S.b1, content: 'x' }, S.o1)).json()) as { id: string }
-    const res = await send(h, h.tok.tk_mate!, { to: 'weiliu', to_session: S.o1.replace('ooooo1', 'ooooo2'), content: 'y', in_reply_to: first.id }, S.b1)
+    const res = await send(h, h.tok.tk_mate!, { to: 'owner', to_session: S.o1.replace('ooooo1', 'ooooo2'), content: 'y', in_reply_to: first.id }, S.b1)
     expect(res.status).toBe(403)
   })
 

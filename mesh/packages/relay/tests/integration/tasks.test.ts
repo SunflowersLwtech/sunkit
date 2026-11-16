@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { harness, openSession, readSse, req, S } from './ledger-helpers.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
-const ORCH = { role: 'orchestrator' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
+const ORCH = { role: 'orchestrator' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
-  { id: 'tk_orch', handle: 'weiliu', label: 'orch-feishu', grant: ORCH },
-  { id: 'tk_aws', handle: 'weiliu', label: 'aws-sin', grant: LIUWEI },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
+  { id: 'tk_orch', handle: 'owner', label: 'orch-feishu', grant: ORCH },
+  { id: 'tk_aws', handle: 'owner', label: 'aws-sin', grant: OWN_WG },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
-  { id: 'tk_admin', handle: 'weiliu', label: 'bootstrap-admin', tier: 'admin' as const },
+  { id: 'tk_admin', handle: 'owner', label: 'bootstrap-admin', tier: 'admin' as const },
 ]
 
 type H = ReturnType<typeof harness>
@@ -33,7 +33,7 @@ describe('tasks: who may create them', () => {
     const res = await create(h, h.tok.tk_m4!, { title: 'deploy foldrender by hand' }, S.a1)
     expect(res.status).toBe(201)
     const t = await res.json() as Task
-    expect(t).toMatchObject({ state: 'working', depth: 0, workgroup: 'liuwei', assignee: { session: S.a1, name: 'manual-work' } })
+    expect(t).toMatchObject({ state: 'working', depth: 0, workgroup: 'home', assignee: { session: S.a1, name: 'manual-work' } })
     expect((await req(h.app, h.tok.tk_m4!, 'POST', '/v1/sessions/self', { session: S.a1, task_id: t.id })).status).toBe(200)
     const rows = await (await req(h.app, h.tok.tk_aws!, 'GET', '/v1/sessions')).json() as Array<Record<string, unknown>>
     expect(rows.find(r => r.session_id === S.a1)).toMatchObject({ task_id: t.id, dispatched_by: 'manual-work' })

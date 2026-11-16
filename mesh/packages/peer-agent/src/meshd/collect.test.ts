@@ -45,13 +45,13 @@ describe('parseCcQuota', () => {
   it('reads seats with their five-hour usage', () => {
     const seats = parseCcQuota({
       host: 'h', accounts: [
-        { config_dir: '~/.claude', email: 'weiliu@duocodetech.com', org_name: 'DuoCode', subscription: 'team', five_hour: { pct: 26, resets_at: '2026-10-20T01:59:59Z' }, blocked: [] },
+        { config_dir: '~/.claude', email: 'seat@example.com', org_name: 'DuoCode', subscription: 'team', five_hour: { pct: 26, resets_at: '2026-10-20T01:59:59Z' }, blocked: [] },
         { config_dir: '~/.claude-max', email: 'x@y.z', subscription: 'max', five_hour: { pct: 99 }, blocked: ['opus'] },
         { email: 'not an email' },
       ],
     })
     expect(seats).toEqual([
-      { email: 'weiliu@duocodetech.com', org: 'DuoCode', plan: 'team', five_hour_pct: 26, resets_at: '2026-10-20T01:59:59.000Z', blocked: false },
+      { email: 'seat@example.com', org: 'DuoCode', plan: 'team', five_hour_pct: 26, resets_at: '2026-10-20T01:59:59.000Z', blocked: false },
       { email: 'x@y.z', plan: 'max', five_hour_pct: 99, blocked: true },
     ])
   })
