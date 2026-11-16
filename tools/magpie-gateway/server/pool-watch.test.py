@@ -85,6 +85,8 @@ class SelfCheck(unittest.TestCase):
         with open(os.path.join(self.d, "settings.json"), "w") as f:
             json.dump({"claudeRunsMost": 18}, f)
         self.told = os.path.join(self.d, "told.txt")
+        self.usage = os.path.join(self.d, "usage.csv")
+        self.served(0)
 
     def procs(self, claude, helpers=6):
         # what `docker top <container> -eo pid,args` prints (11-16: without pid it refuses, "Couldn't find PID field")
@@ -97,11 +99,28 @@ class SelfCheck(unittest.TestCase):
         with open(os.path.join(self.var, name), "w") as f:
             f.write(str(int((time.time() - hours_ago * 3600) * 1000)))
 
-    def check(self):
-        env = dict(os.environ, PW_VAR=self.var, PW_TOP="cat " + self.top, PW_SETTINGS=os.path.join(self.d, "settings.json"), PW_TELL=self.told)
+    def check(self, rc=0, **env_extra):
+        env = dict(os.environ, PW_VAR=self.var, PW_TOP="cat " + self.top, PW_SETTINGS=os.path.join(self.d, "settings.json"), PW_TELL=self.told,
+                   PW_USAGE="cat " + self.usage)
+        env.update(env_extra)
         r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "pool-watch.py"), "selfcheck"], env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, rc, r.stdout + r.stderr)
         return r.stdout
+
+    def served(self, claude, other=2):
+        # what `magpie usage --csv --last 15m` prints, cut to the columns read here
+        rows = ["time,provider,served_model,status"] + ["2026-11-16T20:00:00+08:00,claude,claude-opus-5-5,200"] * claude
+        rows += ["2026-11-16T20:00:01+08:00,devin,swe-2,200"] * other
+        with open(self.usage, "w") as f:
+            f.write("\n".join(rows) + "\n")
+
+    def state(self, **kw):
+        p = os.path.join(self.var, "selfcheck.json")
+        if kw:
+            with open(p, "w") as f:
+                json.dump(kw, f)
+        with open(p) as f:
+            return json.load(f)
 
     def told_n(self):
         try:
@@ -147,6 +166,49 @@ class SelfCheck(unittest.TestCase):
         self.stamp("started", 25); self.procs(18)
         self.check()
         self.assertEqual(self.told_n(), 1, "no match at all since the watcher started a day ago")
+
+    # 11-16, pr-cap2's review of #78: the count's own blind spot, and the check itself failing
+    def test_a_count_of_zero_while_claude_answers_is_told_once_after_six_hours(self):
+        self.stamp("started", 1); self.stamp("last-match", 0); self.procs(0, helpers=0); self.served(40)
+        self.state(zero_since=int((time.time() - 7 * 3600) * 1000))
+        self.assertIn("zero since", self.check())
+        self.assertEqual(self.told_n(), 1, "0 Claude Code processes for 7 hours while the claude provider answers: the pattern is stale")
+        self.assertIn("CLAUDE_BIN", open(self.told).read())
+        self.check()
+        self.assertEqual(self.told_n(), 1, "told twice for the same zero spell")
+        self.procs(18)
+        self.check()
+        self.assertNotIn("zero_since", self.state(), "a count above 0 ends the zero spell")
+
+    def test_a_count_of_zero_starts_the_clock_and_idle_zero_is_no_zero(self):
+        self.stamp("started", 1); self.stamp("last-match", 0); self.procs(0, helpers=0); self.served(40)
+        self.check()
+        self.assertTrue(self.state().get("zero_since"), "a zero while claude answers must start the clock")
+        self.assertEqual(self.told_n(), 0, "one zero is not six hours")
+        self.state(zero_since=int((time.time() - 7 * 3600) * 1000))
+        self.served(0)
+        self.check()
+        self.assertEqual(self.told_n(), 0, "no claude traffic: 0 processes is just idle")
+        self.assertNotIn("zero_since", self.state(), "an idle check must reset the zero clock")
+        self.state(zero_since=int((time.time() - 5 * 3600) * 1000))
+        self.served(40)
+        self.check()
+        self.assertEqual(self.told_n(), 0, "five hours is not yet six")
+
+    def test_a_failing_self_check_is_told_after_three_runs_once_a_spell(self):
+        self.stamp("started", 1); self.procs(18)
+        broken = dict(PW_TOP="false")
+        self.check(1, **broken); self.check(1, **broken)
+        self.assertEqual(self.told_n(), 0, "two failures are not yet a spell")
+        self.check(1, **broken)
+        self.assertEqual(self.told_n(), 1, "three failed self-checks must reach the secretary")
+        self.assertIn("自检连续 3 次失败", open(self.told).read())
+        self.check(1, **broken)
+        self.assertEqual(self.told_n(), 1, "told twice for the same failing spell")
+        self.check()
+        self.assertFalse(os.path.exists(os.path.join(self.var, "selfcheck-fail.json")), "a good run must clear the count")
+        self.check(1, **broken); self.check(1, **broken); self.check(1, **broken)
+        self.assertEqual(self.told_n(), 2, "a new failing spell is told again")
 
 
 if __name__ == "__main__":
