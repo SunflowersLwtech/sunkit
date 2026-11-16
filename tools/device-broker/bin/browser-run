@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# browser-run — acquire a lease on a browser debug port and/or profile dir,
+# then exec the wrapped browser command.
+#
+#   browser-run --cdp-port <n> [--profile-dir <path>] -- <browser cmd…>
+#
+# Leases browser:cdp-port-<n> (default cap 8/machine — several browser-driven
+# agents can coexist, but two agents may NOT drive the same port) and, when
+# given, browser:profile-<sha1(path)> so two agents never share one profile
+# directory. The wrapped command runs as a child; when it exits the leases are
+# released (pid death frees them anyway).
+#
+# This does NOT wrap or proxy the browser; it is the same "registry + wrapper"
+# split as adb-run: agents that launch browsers through this tool cannot land
+# on another agent's port by accident, and `device-broker check` lets any
+# later step re-verify.
+
+set -u
+DB="${DEVICE_BROKER:-device-broker}"
+
+PORT=""; PROF=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cdp-port) PORT="$2"; shift 2 ;;
+    --profile-dir) PROF="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[ -n "${PORT}" ] || { echo "browser-run: need --cdp-port <n>" >&2; exit 4; }
+[ $# -gt 0 ] || { echo "browser-run: need a command after --" >&2; exit 4; }
+
+RES="browser:cdp-port-${PORT}"
+"${DB}" acquire "${RES}" --meta "port=${PORT}" || exit $?
+
+PRES=""
+if [ -n "${PROF}" ]; then
+  H="$(printf '%s' "${PROF}" | shasum | cut -c1-16)"
+  PRES="browser:profile-${H}"
+  "${DB}" acquire "${PRES}" --meta "profileDir=${PROF}" || { "${DB}" release "${RES}"; exit 4; }
+fi
+
+"$@" &
+CHILD=$!
+sleep 1
+if ! kill -0 "${CHILD}" 2>/dev/null; then
+  "${DB}" release "${RES}"; [ -n "${PRES}" ] && "${DB}" release "${PRES}"
+  echo "browser-run: browser exited during startup" >&2; exit 1
+fi
+echo "browser-run: pid ${CHILD} on cdp port ${PORT}, leases ${RES} ${PRES:+and ${PRES}}" >&2
+wait "${CHILD}"
+RC=$?
+"${DB}" release "${RES}"; [ -n "${PRES}" ] && "${DB}" release "${PRES}"
+exit "${RC}"

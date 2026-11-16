@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# emulator-run — start an Android emulator under a device-broker lease.
+#
+#   emulator-run -avd <name> -port <n> [extra emulator args…]
+#
+# Takes a lease on android-emulator:port-<n> BEFORE starting. Refuses if the
+# port is already leased by someone else or the machine is at its emulator
+# cap. Records the emulator's pid and the AVD name in the lease, so `adb-run`
+# can later prove that the device answering on emulator-<n> is the one this
+# lease was taken for. Releases the lease when the emulator exits.
+#
+# Env: DEVICE_BROKER (default: device-broker on PATH), DB_* pass through.
+
+set -u
+DB="${DEVICE_BROKER:-device-broker}"
+
+AVD=""; PORT=""; ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -avd) AVD="$2"; shift 2 ;;
+    -port) PORT="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+[ -n "${AVD}" ] && [ -n "${PORT}" ] || {
+  echo "emulator-run: need -avd <name> -port <n>" >&2; exit 4; }
+
+RES="android-emulator:port-${PORT}"
+
+"${DB}" acquire "${RES}" --meta "avd=${AVD}" --meta "port=${PORT}" --owner-pid "$$"
+case $? in
+  0) : ;;
+  *) exit $? ;;
+esac
+
+# Start the emulator, capture its real pid, record it in the lease.
+emulator -avd "${AVD}" -port "${PORT}" "${ARGS[@]}" &
+EMPID=$!
+
+# Record emulator pid as the lease's owner pid (the process whose death frees
+# the port). Rewrite lease.json owner.pid/pidStart.
+JF="${DB_HOME:-$HOME/.device-broker}/leases/${RES}.lock/lease.json"
+if [ -f "${JF}" ]; then
+  LSTART="$(ps -o lstart= -p "${EMPID}" 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  TMP="${JF}.$$"
+  sed -e 's/"pid": [0-9][0-9]*/"pid": '"${EMPID}"'/' \
+      -e 's/"pidStart": "[^"]*"/"pidStart": "'"${LSTART}"'"/' "${JF}" > "${TMP}" \
+    && mv "${TMP}" "${JF}"
+fi
+
+# If the emulator dies at boot, free the lease for the next caller.
+sleep 2
+if ! kill -0 "${EMPID}" 2>/dev/null; then
+  "${DB}" release "${RES}"
+  echo "emulator-run: emulator exited during boot" >&2
+  exit 1
+fi
+
+echo "emulator-run: ${AVD} on port ${PORT} (pid ${EMPID}), lease ${RES}" >&2
+echo "${EMPID}"
+wait "${EMPID}"
+"${DB}" release "${RES}"

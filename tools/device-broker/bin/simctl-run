@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# simctl-run — run xcrun simctl against a UDID under a device-broker lease.
+#
+#   simctl-run boot <udid>            -> lease ios-simulator:udid-<udid> + host budget, then boot
+#   simctl-run <verb> <udid> [args…]  -> verify lease holder is me, then run xcrun simctl
+#   simctl-run shutdown <udid>        -> verify, shutdown, release
+#
+# Two resources are leased on boot: the per-UDID lease (who owns this
+# simulator) and ios-simulator:host (the machine-wide "only N sims at once"
+# budget — 1 on M4). A shared, persistent simulator the task doc says to leave
+# booted is still leased, but shutdown is never run on it by simctl-run; the
+# caller just releases the lease.
+#
+# Env: DEVICE_BROKER, DB_*.
+
+set -u
+DB="${DEVICE_BROKER:-device-broker}"
+
+VERB="${1:-}"; UDID="${2:-}"; shift 2 || true
+[ -n "${VERB}" ] && [ -n "${UDID}" ] || {
+  echo "usage: simctl-run <verb> <udid> [args…]" >&2; exit 4; }
+case "${UDID}" in
+  [0-9A-Fa-f]*-[0-9A-Fa-f]*) ;;  # UDID-ish
+  *) echo "simctl-run: '${UDID}' is not a simulator UDID" >&2; exit 4 ;;
+esac
+
+RES="ios-simulator:udid-${UDID}"
+HOSTRES="ios-simulator:host"
+
+case "${VERB}" in
+  boot)
+    "${DB}" acquire "${HOSTRES}" --meta "purpose=simulator-budget" || exit $?
+    "${DB}" acquire "${RES}" --meta "udid=${UDID}" || { "${DB}" release "${HOSTRES}"; exit 4; }
+    xcrun simctl boot "${UDID}" 2>/dev/null || true
+    echo "simctl-run: booted ${UDID}, leases ${RES} + ${HOSTRES}" >&2
+    ;;
+  shutdown)
+    "${DB}" check "${RES}" --require-mine || exit $?
+    xcrun simctl shutdown "${UDID}"
+    "${DB}" release "${RES}"; "${DB}" release "${HOSTRES}"
+    ;;
+  *)
+    "${DB}" check "${RES}" --require-mine || exit $?
+    exec xcrun simctl "${VERB}" "${UDID}" "$@"
+    ;;
+esac

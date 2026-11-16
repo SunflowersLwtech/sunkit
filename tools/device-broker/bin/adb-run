@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# adb-run — run an adb command against a serial, but only after proving the
+# device answering on that serial is the one this session leased.
+#
+#   adb-run -s emulator-<port> <adb args…>
+#
+# For emulator-* serials it does three checks, any one of which stops the call:
+#   1. a live lease exists on android-emulator:port-<port>
+#   2. the lease holder is this owner (same ownerKey: worktree+pid lineage, or
+#      DB_SESSION if you share it inside one task)
+#   3. the AVD name the device itself reports (`adb -s <serial> emu avd name`)
+#      equals the AVD recorded in the lease — this is the check that stops
+#      "my emulator died, someone else's booted onto my port", the 2026-11-16
+#      incident where `adb -s emulator-5584` drove a fold7 that was not ours.
+#
+# Physical-device serials fail closed (exit 5): a human may be holding it and
+# the registry cannot see that. Use `adb` directly on real hardware only after
+# the human-owner checks in phone-use.
+#
+# Env: DEVICE_BROKER, DB_*, ADB (default adb).
+
+set -u
+DB="${DEVICE_BROKER:-device-broker}"
+ADB="${ADB:-adb}"
+
+SERIAL=""; ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) SERIAL="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+[ -n "${SERIAL}" ] || { echo "adb-run: need -s <serial>" >&2; exit 4; }
+
+case "${SERIAL}" in
+  emulator-*) ;;
+  *) echo "adb-run: ${SERIAL} is not an emulator serial; refusing to arbitrate physical devices" >&2; exit 5 ;;
+esac
+
+PORT="${SERIAL#emulator-}"
+RES="android-emulator:port-${PORT}"
+
+"${DB}" check "${RES}" --require-mine || exit $?
+
+# Identity check: the device on the port must be the AVD the lease names.
+JF="${DB_HOME:-$HOME/.device-broker}/leases/${RES}.lock/lease.json"
+WANT="$(sed -n 's/.*"avd": *"\([^"]*\)".*/\1/p' "${JF}" 2>/dev/null | head -1)"
+if [ -n "${WANT}" ]; then
+  GOT="$("${ADB}" -s "${SERIAL}" emu avd name 2>/dev/null | head -1 | tr -d '\r')"
+  if [ "${GOT}" != "${WANT}" ]; then
+    echo "adb-run: ${SERIAL} answers as AVD '${GOT}', lease is for '${WANT}' — not your device" >&2
+    exit 7
+  fi
+fi
+
+exec "${ADB}" -s "${SERIAL}" "${ARGS[@]}"
