@@ -7,7 +7,11 @@
 #
 # Two resources are leased on boot: the per-UDID lease (who owns this
 # simulator) and ios-simulator:host (the machine-wide "only N sims at once"
-# budget — 1 on M4). A shared, persistent simulator the task doc says to leave
+# budget — 1 on M4). Both live while the simulator is booted (--while-booted):
+# this script exits once xcrun simctl boot returns, so its own pid cannot be
+# what keeps them. A boot needs DB_OWNER_KEY (or DB_SESSION), the session's own
+# name: the default key names the broker's process and no later call matches
+# it, so without one the session could not shut its simulator down. A shared, persistent simulator the task doc says to leave
 # booted is still leased, but shutdown is never run on it by simctl-run; the
 # caller just releases the lease.
 #
@@ -29,8 +33,11 @@ HOSTRES="ios-simulator:host"
 
 case "${VERB}" in
   boot)
-    "${DB}" acquire "${HOSTRES}" --meta "purpose=simulator-budget" || exit $?
-    "${DB}" acquire "${RES}" --meta "udid=${UDID}" || { "${DB}" release "${HOSTRES}"; exit 4; }
+    [ -n "${DB_OWNER_KEY:-}${DB_SESSION:-}" ] || {
+      echo "simctl-run: set DB_OWNER_KEY (or DB_SESSION) to this session's own name before boot: without it no later call can show the simulator is this session's, and shutdown would refuse" >&2
+      exit 4; }
+    "${DB}" acquire "${HOSTRES}" --meta "purpose=simulator-budget" --while-booted "${UDID}" || exit $?
+    "${DB}" acquire "${RES}" --meta "udid=${UDID}" --while-booted "${UDID}" || { "${DB}" release "${HOSTRES}"; exit 4; }
     xcrun simctl boot "${UDID}" 2>/dev/null || true
     echo "simctl-run: booted ${UDID}, leases ${RES} + ${HOSTRES}" >&2
     ;;

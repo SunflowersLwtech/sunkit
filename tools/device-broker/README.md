@@ -34,9 +34,18 @@ metadata (avd, port, udid, profile dir).
 - **Stale is structural**: lease holder's pid dead → stale; pid alive but its
   `lstart` no longer matches the recorded start → the pid was reused → stale.
   Stale leases are reclaimed by the next `acquire` or by `gc`. "Looks long
-  idle" is never a reason — a holder sitting quiet is still the holder.
+  idle" is never a reason — a holder sitting quiet is still the holder. A
+  simulator's leases (`--while-booted <udid>`) also live while that simulator
+  is booted (`xcrun simctl list devices`): the process that booted it is gone
+  by then.
 - **Fail closed**: unreadable lease file, missing registry, undeterminable
-  ownership, physical-device serial — all refuse.
+  ownership, physical-device serial — all refuse. A lease that can't be read
+  (an empty or damaged `lease.json`, a simulator whose state `xcrun` can't
+  report) is held: `acquire` and `check` exit 4 on it, another owner can't
+  release it, and it counts against its cap. Only a `lease.json` nothing has
+  touched for the grace window (`DB_GRACE_S`, 30 s) — a write that died — is
+  reclaimed. `lease.json` is written beside and moved into place, so a reader
+  never sees half of one.
 - **Never kills**: the tool removes lease *files* only. Stopping a device is
   the holder's own job, by the pid it recorded — never `pkill -f`, `killall`,
   `close --all`.
@@ -95,8 +104,11 @@ cap exits 6 and lists the live holders.
   incident, where the port's device was fold7 and the caller's lease was not.
   Physical serials exit 5.
 - **`simctl-run <verb> <udid>`** — `boot` leases both `ios-simulator:udid-<u>`
-  and the `ios-simulator:host` budget; other verbs verify the lease before
-  running `xcrun simctl`. `shutdown` releases. Shared persistent simulators
+  and the `ios-simulator:host` budget, both alive while the simulator is
+  booted; other verbs verify the lease before running `xcrun simctl`.
+  `shutdown` releases. `boot` needs `DB_OWNER_KEY` (or `DB_SESSION`): without
+  it no later call could show the simulator is the session's, so it refuses
+  (exit 4) before leasing or booting anything. Shared persistent simulators
   stay booted — release the lease, don't shutdown.
 - **`browser-run --cdp-port N [--profile-dir P] -- <cmd>`** — leases the port
   (and profile) before exec'ing the browser; releases on exit.

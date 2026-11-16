@@ -7,13 +7,24 @@
 # the owning worktree/session, and resource metadata (avd, port, udid, profile
 # dir, CDP port…). A lease whose owner process is gone, or whose pid now
 # belongs to a different process start, is stale and may be reclaimed by the
-# next acquirer — never by a "cleanup" that kills processes.
+# next acquirer — never by a "cleanup" that kills processes. A lease that
+# cannot be read (an empty or damaged lease.json, a simulator whose state
+# xcrun cannot report) is HELD, not free: acquire and check exit 4 on it, and
+# it counts against its cap. Only an unreadable lease.json that has not
+# changed for longer than the grace window (DB_GRACE_S, 30) — a write that
+# died — is reclaimed. lease.json is written to a temp file and moved into
+# place, so a reader never sees half of one.
 #
 # Subcommands:
 #   acquire  <resource> [--meta k=v …] [--ttl SEC] [--owner-pid PID]
-#            [--owner-key KEY]   -> prints lease key on stdout, exit 0
+#            [--owner-key KEY] [--while-booted UDID]
+#                                -> prints lease key on stdout, exit 0
 #                                   exit 3 if a live lease is held by another
 #                                   exit 4 if state is unreadable (fail closed)
+#            --while-booted UDID: the lease also lives while that iOS
+#            simulator is booted (xcrun simctl list devices), after its owner
+#            pid has gone: a booted simulator has no process of the caller's
+#            to anchor it (simctl-run boot returns at once).
 #   release  <resource> [--owner-key KEY]
 #   check    <resource> [--owner-key KEY] [--require-mine]
 #            verify a device you already hold is still yours, or that nobody
@@ -63,12 +74,14 @@ pid_lstart() {
   ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'
 }
 
-# lease_is_live DIR -> 0 live, 1 stale, 2 unreadable
-# Live = owner pid exists AND (no recorded lstart OR lstart still matches)
-#        AND the lease has not passed its expiresAt, when one is set.
-# Unreadable = json missing/corrupt — treat as stale only when pid also dead.
+# lease_is_live DIR -> 0 live, 1 stale, 2 cannot tell (callers: held)
+# Live = the lease has not passed its expiresAt, when one is set, AND
+#        either the owner pid exists (and its lstart, when recorded, still
+#        matches) or the simulator its whileBooted names is still booted.
+# Cannot tell = lease.json has no readable owner pid and changed within the
+#        grace window, or the whileBooted simulator's state cannot be read.
 lease_is_live() {
-  local d="$1" jf="${d}/lease.json" pid pls rec exp
+  local d="$1" jf="${d}/lease.json" pid pls rec exp wb
   if [ ! -f "${jf}" ]; then
     # No lease.json: an acquire in flight owns the dir for a few seconds —
     # treating that instant as stale would let a racer remove a brand-new
@@ -80,22 +93,60 @@ lease_is_live() {
     return 0
   fi
   pid="$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
-  [ -n "${pid}" ] || return 2
-  if ! kill -0 "${pid}" 2>/dev/null; then
-    return 1                       # dead pid -> stale
-  fi
-  rec="$(sed -n 's/.*"pidStart": *"\([^"]*\)".*/\1/p' "${jf}" | head -1)"
-  if [ -n "${rec}" ]; then
-    pls="$(pid_lstart "${pid}")"
-    if [ -n "${pls}" ] && [ "${pls}" != "${rec}" ]; then
-      return 1                     # pid reused by a different process -> stale
-    fi
+  if [ -z "${pid}" ]; then
+    # No owner pid to read (empty, cut short or damaged): a holder may be
+    # behind it, and a second holder of one device is what this tool exists to
+    # stop. Held, unless nothing has touched it for the grace window.
+    lease_young "${d}" && return 2
+    return 1
   fi
   exp="$(sed -n 's/.*"expiresAt": *\([0-9][0-9]*\).*/\1/p' "${jf}" | head -1)"
   if [ -n "${exp}" ] && [ "$(now_s)" -ge "${exp}" ]; then
     return 1                       # TTL elapsed -> stale
   fi
-  return 0
+  if kill -0 "${pid}" 2>/dev/null; then
+    rec="$(sed -n 's/.*"pidStart": *"\([^"]*\)".*/\1/p' "${jf}" | head -1)"
+    pls=""
+    [ -n "${rec}" ] && pls="$(pid_lstart "${pid}")"
+    if [ -z "${rec}" ] || [ -z "${pls}" ] || [ "${pls}" = "${rec}" ]; then
+      return 0                     # the owner process still runs
+    fi
+    # pid reused by a different process: the owner is gone (below)
+  fi
+  # The owner process is gone. A simulator lease lives on while its
+  # simulator is booted; anything else is stale.
+  wb="$(sed -n 's/.*"whileBooted": *"\([^"]*\)".*/\1/p' "${jf}" | head -1)"
+  [ -n "${wb}" ] || return 1
+  sim_booted "${wb}"
+  case $? in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# lease_young DIR -> 0 if the lock dir or its lease.json changed within the
+# grace window (or its age cannot be read), 1 if both are older
+lease_young() {
+  local f mt
+  for f in "$1" "$1/lease.json"; do
+    [ -e "${f}" ] || continue
+    mt="$(dir_mtime_s "${f}")"
+    [ -n "${mt}" ] || return 0
+    [ $(( $(now_s) - mt )) -gt "${DB_GRACE_S:-30}" ] || return 0
+  done
+  return 1
+}
+
+# sim_booted UDID -> 0 booted (or booting), 1 not booted, 2 cannot tell
+sim_booted() {
+  local out
+  out="$(xcrun simctl list devices 2>/dev/null)" || return 2
+  [ -n "${out}" ] || return 2
+  case "${out}" in
+    *"(${1}) (Booted)"*|*"(${1}) (Booting)"*) return 0 ;;
+  esac
+  return 1
 }
 
 # dir_mtime_s DIR -> mtime seconds, "" if undeterminable
@@ -182,7 +233,9 @@ count_live() {
     r="$(basename "${d}" .lock)"
     [ "${r}" = "${excl}" ] && continue
     case "${r}" in "${prefix}"*) ;; *) continue ;; esac
-    if lease_is_live "${d}"; then n=$((n+1)); fi
+    # Held, or cannot tell (held too): either counts against the cap.
+    lease_is_live "${d}"
+    [ $? -ne 1 ] && n=$((n+1))
   done
   printf '%s' "${n}"
 }
@@ -190,11 +243,12 @@ count_live() {
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 cmd_acquire() {
-  local res="" ttl="" ownerpid="" metas="" OWNER_KEY=""
+  local res="" ttl="" ownerpid="" metas="" OWNER_KEY="" wb=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --meta) metas="${metas} $2"; shift 2 ;;
       --ttl) ttl="$2"; shift 2 ;;
+      --while-booted) wb="$2"; shift 2 ;;
       --owner-pid) ownerpid="$2"; shift 2 ;;
       --owner-key) OWNER_KEY="$2"; export OWNER_KEY; shift 2 ;;
       -*) die "unknown flag $1" 4 ;;
@@ -203,6 +257,7 @@ cmd_acquire() {
   done
   [ -n "${res}" ] || die "usage: acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]" 4
   case "${res}" in *[!A-Za-z0-9:._-]*) die "bad resource name ${res}" 4 ;; esac
+  case "${wb}" in *[!0-9A-Fa-f-]*) die "bad simulator UDID ${wb}" 4 ;; esac
 
   local capkey cap
   read -r capkey cap <<<"$(resolve_cap "${res}")"
@@ -219,8 +274,14 @@ cmd_acquire() {
     if mkdir "${d}" 2>/dev/null; then
       break
     fi
-    # Exists: live or stale?
-    if lease_is_live "${d}"; then
+    # Exists: live, stale, or cannot tell?
+    local st; lease_is_live "${d}"; st=$?
+    if [ "${st}" -eq 2 ]; then
+      say "cannot tell whether ${res} is held (its lease cannot be read, or its simulator's state): not taking it"
+      sed 's/^/  /' "${d}/lease.json" >&2 2>/dev/null || true
+      exit 4
+    fi
+    if [ "${st}" -eq 0 ]; then
       # Same owner re-acquiring is fine (idempotent).
       local jf="${d}/lease.json" existing
       existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${jf}" 2>/dev/null | head -1)"
@@ -264,9 +325,14 @@ cmd_acquire() {
     k="${kv%%=*}"; v="${kv#*=}"
     meta_json="${meta_json},\"${k}\": \"$(json_escape "${v}")\""
   done
-  local exp=""
+  local exp="" wbj=""
   [ -n "${ttl}" ] && exp="\"expiresAt\": $(( $(now_s) + ttl )),"
-  cat > "${d}/lease.json" <<-EOF
+  [ -n "${wb}" ] && wbj="\"whileBooted\": \"${wb}\","
+  # Written beside, then moved into place: a reader sees no lease.json (held,
+  # by the grace rule) or a whole one, never the empty file a redirect
+  # leaves while its command substitutions run.
+  local tmpf="${d}/.lease.json.$$"
+  cat > "${tmpf}" <<-EOF
 	{"schemaVersion": 1, "resource": "$(json_escape "${res}")",
 	 "ownerKey": "$(json_escape "$(owner_key)")",
 	 "owner": {"pid": ${opid}, "pidStart": "$(json_escape "${pls}")",
@@ -274,9 +340,12 @@ cmd_acquire() {
 	           "worktree": "$(json_escape "${PWD}")",
 	           "session": "$(json_escape "${DB_SESSION:-}")",
 	           "command": "$(json_escape "$0 $*")"},
-	 "acquiredAt": $(now_s), ${exp}
+	 "acquiredAt": $(now_s), ${exp} ${wbj}
 	 "meta": {${meta_json#,}}}
 	EOF
+  mv -f "${tmpf}" "${d}/lease.json" || {
+    rm -f "${tmpf}" 2>/dev/null; rmdir "${d}" 2>/dev/null
+    die "could not write the lease on ${res}" 4; }
   say "acquired ${res} (pid ${opid})"
   printf '%s\n' "${res}"
   exit 0
@@ -294,9 +363,12 @@ cmd_release() {
   [ -n "${res}" ] || die "usage: release <resource>" 4
   local d="${LEASES}/${res}.lock"
   [ -d "${d}" ] || { say "no lease on ${res}"; exit 0; }
-  local existing
+  local existing st
   existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
-  if lease_is_live "${d}" && [ "${existing}" != "$(owner_key)" ]; then
+  lease_is_live "${d}"; st=$?
+  if [ "${st}" -ne 1 ] && [ "${existing}" != "$(owner_key)" ]; then
+    [ "${st}" -eq 2 ] && [ -z "${existing}" ] && \
+      die "the lease on ${res} cannot be read; refusing to release it (fail closed)" 4
     die "lease on ${res} is held by another owner; refusing to release" 3
   fi
   rm -f "${d}/lease.json" 2>/dev/null
@@ -323,7 +395,11 @@ cmd_check() {
     fi
     exit 0
   fi
-  if ! lease_is_live "${d}"; then
+  local st; lease_is_live "${d}"; st=$?
+  if [ "${st}" -eq 2 ]; then
+    say "cannot tell whether ${res} is held (its lease cannot be read, or its simulator's state)"; exit 4
+  fi
+  if [ "${st}" -eq 1 ]; then
     [ -n "${req}" ] && { say "only a stale lease on ${res}"; exit 4; }
     exit 0
   fi
@@ -341,7 +417,8 @@ cmd_status() {
   for d in "${LEASES}"/*.lock; do
     [ -d "${d}" ] || continue
     r="$(basename "${d}" .lock)"
-    if lease_is_live "${d}"; then live_dead=live; else live_dead=stale; fi
+    lease_is_live "${d}"
+    case $? in 0) live_dead=live ;; 1) live_dead=stale ;; *) live_dead=unknown ;; esac
     [ "${first}" = 1 ] || printf ','
     first=0
     printf '\n  {"resource": "%s", "state": "%s", "lease": %s}' \
@@ -354,7 +431,8 @@ cmd_gc() {
   local d n=0
   for d in "${LEASES}"/*.lock; do
     [ -d "${d}" ] || continue
-    if ! lease_is_live "${d}"; then
+    lease_is_live "${d}"
+    if [ $? -eq 1 ]; then
       rm -f "${d}/lease.json" 2>/dev/null
       rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
       n=$((n+1))
