@@ -24,6 +24,10 @@ The skill is written in Chinese (its trigger words included); it fires on asks l
 - **Before delivery**: render the page and look at it (a green validation script is not a
   geometry check), hunt down dangling references, keep implementation identifiers away
   from non-engineering readers, and ship no agent fingerprints.
+- **Every page is published**: the self-contained HTML goes to FoldRender with
+  `foldrender publish`, and the returned `…/artifacts/<login>/<name>` link ships together
+  with the local file path. Private by default; widening access is an explicit choice.
+  The host app's own artifact or canvas is never the delivery.
 
 ## Renderers (all optional)
 
@@ -76,3 +80,7 @@ each renderer: [skills/show-me/references/tooling.md](skills/show-me/references/
 - PNG export needs a Playwright Chromium; a `chrome-headless-shell` already in the
   Playwright cache is enough. The tooling notes walk the whole dependency chain and its
   fallbacks.
+- The `foldrender` CLI publishes every page ([foldrender-kit](https://github.com/SunflowersLwtech/foldrender-kit)):
+  install with `curl -fsSL https://foldrender.dev/install.sh | sh`, then `foldrender login`.
+  The `foldrender-artifacts` skill covers publishing, sharing, reading pages back and
+  editing them in place.
