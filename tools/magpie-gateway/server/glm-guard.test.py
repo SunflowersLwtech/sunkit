@@ -170,7 +170,7 @@ class GlmGuard(unittest.TestCase):
         gg.now = lambda: self.t
         Fake.cards[:], Fake.messages[:], Fake.pushes[:], Fake.unrests[:] = [], [], [], []
         Fake.unrest_reply = (200, {"lifted": False})
-        Fake.sessions[:] = [{"name": "feishu-assistant", "session_id": "s-sec", "account": "weiliu", "status": "idle"}]
+        Fake.sessions[:] = [{"name": "feishu-assistant", "session_id": "s-sec", "account": "owner", "status": "idle"}]
         self.providers(zcode_off=True)
         self.history({})
 
@@ -279,7 +279,7 @@ class GlmGuard(unittest.TestCase):
         self.assertEqual(len(Fake.messages), 1)
         body, sender = Fake.messages[0]
         self.assertEqual(sender, "magpie-glm-guard")
-        self.assertEqual((body["to"], body["to_session"]), ("weiliu", "s-sec"))
+        self.assertEqual((body["to"], body["to_session"]), ("owner", "s-sec"))
         self.assertIn("已自动打开 GLM 兜底", body["content"].splitlines()[0])
         self.assertIn("m@x.com（个人 Max）：7 天额度用完", body["content"])
         # 再跑一轮：已经对齐，不再改、不再发
@@ -419,7 +419,7 @@ class GlmGuard(unittest.TestCase):
 
     def test_mesh_without_secretary_falls_back_to_backup_then_ntfy(self):
         self.zroom()
-        Fake.sessions[:] = [{"name": "feishu-assistant-backup", "session_id": "s-bk", "account": "weiliu",
+        Fake.sessions[:] = [{"name": "feishu-assistant-backup", "session_id": "s-bk", "account": "owner",
                              "status": "idle"}]
         Fake.cards[:] = [self.seat("a@x.com", 99, 100), self.seat("b@x.com", 99, 100), self.seat("c@x.com", 99, 100)]
         self.run_guard()

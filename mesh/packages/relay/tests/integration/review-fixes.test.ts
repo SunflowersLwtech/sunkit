@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { harness, openSession, readSse, req, S } from './ledger-helpers.ts'
 import { purgeInactive } from '../../src/purge.ts'
 
-const LIUWEI = { role: 'worker' as const, workgroup: 'liuwei', visible: ['team'] }
-const ORCH = { role: 'orchestrator' as const, workgroup: 'liuwei', visible: ['team'] }
+const OWN_WG = { role: 'worker' as const, workgroup: 'home', visible: ['team'] }
+const ORCH = { role: 'orchestrator' as const, workgroup: 'home', visible: ['team'] }
 const specs = [
-  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: LIUWEI },
-  { id: 'tk_aws', handle: 'weiliu', label: 'aws-sin', grant: LIUWEI },
-  { id: 'tk_orch', handle: 'weiliu', label: 'orch-feishu', grant: ORCH },
-  { id: 'tk_orch2', handle: 'weiliu', label: 'orch-backup', grant: ORCH },
-  { id: 'tk_obs', handle: 'weiliu', label: 'probe', grant: { role: 'observer' as const, workgroup: 'liuwei', visible: ['team'] } },
+  { id: 'tk_m4', handle: 'duocode', label: 'm4', grant: OWN_WG },
+  { id: 'tk_aws', handle: 'owner', label: 'aws-sin', grant: OWN_WG },
+  { id: 'tk_orch', handle: 'owner', label: 'orch-feishu', grant: ORCH },
+  { id: 'tk_orch2', handle: 'owner', label: 'orch-backup', grant: ORCH },
+  { id: 'tk_obs', handle: 'owner', label: 'probe', grant: { role: 'observer' as const, workgroup: 'home', visible: ['team'] } },
   { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
   { id: 'tk_admin', handle: 'admin', label: 'bootstrap-admin', tier: 'admin' as const },
 ]
@@ -145,18 +145,18 @@ describe('streams follow grant changes', () => {
 describe('review round 2', () => {
   it('a grant change applies to live sessions right away, not only after they reconnect', async () => {
     const h = harness([
-      { id: 'tk_owner', handle: 'weiliu', label: 'm4' },
+      { id: 'tk_owner', handle: 'owner', label: 'm4' },
       { id: 'tk_mate', handle: 'jovie', label: 'jovie-laptop' },
       { id: 'tk_admin', handle: 'admin', label: 'bootstrap-admin', tier: 'admin' as const },
     ])
     await openSession(h.app, h.tok.tk_owner!, S.a1, 'private-work')
     await openSession(h.app, h.tok.tk_owner!, S.a2, 'moved-to-team')
     expect((await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/sessions')).json() as unknown[]).length).toBe(2)
-    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_owner/grant', { role: 'worker', workgroup: 'liuwei', visible: ['team'] })
+    await req(h.app, h.tok.tk_admin!, 'PUT', '/v1/admin/tokens/tk_owner/grant', { role: 'worker', workgroup: 'home', visible: ['team'] })
     await req(h.app, h.tok.tk_owner!, 'POST', '/v1/sessions/self', { session: S.a2, workgroup: 'team' })
     const mate = await (await req(h.app, h.tok.tk_mate!, 'GET', '/v1/sessions')).json() as Array<{ session_id: string }>
     expect(mate.map(r => r.session_id)).toEqual([S.a2])
-    expect((await req(h.app, h.tok.tk_mate!, 'POST', '/v1/messages', { to: 'weiliu', to_session: S.a1, kind: 'chat', content: 'x' })).status).toBe(403)
+    expect((await req(h.app, h.tok.tk_mate!, 'POST', '/v1/messages', { to: 'owner', to_session: S.a1, kind: 'chat', content: 'x' })).status).toBe(403)
   })
 
   it('depth is per session: one session holding a dispatched task does not stop its sibling dispatching', async () => {

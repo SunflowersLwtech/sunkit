@@ -34,7 +34,7 @@ describe('ids', () => {
 
 describe('workgroup', () => {
   it('accepts short lowercase names only', () => {
-    expect(WorkgroupSchema.safeParse('liuwei').success).toBe(true)
+    expect(WorkgroupSchema.safeParse('home').success).toBe(true)
     expect(WorkgroupSchema.safeParse('team').success).toBe(true)
     expect(WorkgroupSchema.safeParse('Team').success).toBe(false)
     expect(WorkgroupSchema.safeParse('a'.repeat(33)).success).toBe(false)
@@ -126,7 +126,7 @@ describe('machine report', () => {
     herdr: { ok: true, version: '0.9.5' },
     load: { load1: 1.5, cpus: 8 },
     kinds: [{ kind: 'claude', version: '2.1.300' }, { kind: 'pi' }],
-    seats: [{ email: 'weiliu@duocodetech.com', plan: 'team', five_hour_pct: 26, resets_at: '2026-10-20T01:59:59Z', blocked: false }],
+    seats: [{ email: 'seat@example.com', plan: 'team', five_hour_pct: 26, resets_at: '2026-10-20T01:59:59Z', blocked: false }],
     active: 2, blocked: 0, max_active: 3,
     agents: [{
       name: 'mesh-a2a', agent: 'claude', status: 'working', pane: 'w4:p1R', tab: 'w4:t1R', workspace: 'w4', cwd: '/home/sunfl',

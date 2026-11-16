@@ -193,7 +193,7 @@ class GwFallback(unittest.TestCase):
         Fake.status = 503
         out = "".join(self.run_once() for _ in range(3))
         self.assertIsNone(self.flag())
-        self.assertIn("秘书的网关不通", out)
+        self.assertIn("主会话的网关不通", out)
         self.assertNotIn("SIGTERM", self.log())
 
     def test_a_hung_timer_line_counts_as_busy(self):

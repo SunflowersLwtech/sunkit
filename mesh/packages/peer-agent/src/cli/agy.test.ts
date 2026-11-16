@@ -70,7 +70,7 @@ describe('mesh agy install', () => {
 describe('mesh agy hook', () => {
   it('session rules come from AGY_SESSION_RULES_B64, else AGY_SESSION_RULES_FILE, trimmed and capped', () => {
     const b64 = (t: string) => Buffer.from(t, 'utf8').toString('base64')
-    expect(sessionRules({ AGY_SESSION_RULES_B64: b64('  汇报给「秘书」\n第二条 \'x\'  ') })).toBe('汇报给「秘书」\n第二条 \'x\'')
+    expect(sessionRules({ AGY_SESSION_RULES_B64: b64('  汇报给「主会话」\n第二条 \'x\'  ') })).toBe('汇报给「主会话」\n第二条 \'x\'')
     const dir = mkdtempSync(join(tmpdir(), 'agy-rules-'))
     writeFileSync(join(dir, 'r.txt'), 'from file\n')
     expect(sessionRules({ AGY_SESSION_RULES_FILE: join(dir, 'r.txt') })).toBe('from file')

@@ -110,7 +110,7 @@ class SeatRefresh(unittest.TestCase):
 
     def test_unknown_reset_is_read_and_the_card_keeps_its_name(self):
         # the reported case: a spare seat at 0% whose last reset passed, shown with no reset time
-        u = "weiliu@duocodetech.com · DuoCode"
+        u = "seat@example.com · Example Org"
         Fake.cards = [card(u, five=(0, None), read=-12 * 3600)]
         Fake.after[u] = card(u, five=(1, 6600), read=0)
         self.assertEqual(sr.main(), 0)

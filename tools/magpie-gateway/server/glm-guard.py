@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # glm-guard（2026-10-31，sunkit tools/magpie-gateway）：Claude 座位快用完时，自动把 GLM 加回 claude-* 三个组、排在 Claude
 #   成员后面；座位恢复后再拿掉。跑在网关本机，systemd timer 每 5 分钟一次（magpie-glm-guard.timer）。
-# 为什么要它：刘维 10-31「暂时不用glm了，你也确保额度不要打满，假设有必要可以打开glm，任务效率和我的需求高于一切」。
+# 为什么要它：负责人 10-31 定「暂时不用glm了，你也确保额度不要打满，假设有必要可以打开glm，任务效率和我的需求高于一切」。
 #   claude-opus/sonnet/haiku-5-5 平时只有 Claude（座位 → Kiro/Devin/Zed 上的 Claude），三个 Team 座位都到上限时请求就停住；
 #   这时让溢出的请求落到 ZCode 的 GLM（付费 GLM Coding Max），活不停。组是 order 路由，GLM 排在所有 Claude 成员后面，
 #   所以打开着的时候座位还有余量也没有请求去 GLM，只有座位全到上限才溢出。
@@ -35,7 +35,7 @@
 #   看不懂（没有数字）的一律算不知道：Max 要两个窗口都有数字读数，Trial 要它的桶有数字读数，ZCode 一个读数都没有就什么都
 #   不加，消息写「读不到 ZCode 余量」。关上时这几个成员（Max 和 Trial 的）都拿掉。
 # Trial 开关（11-02 起，默认关）：Start Plan 的请求要装成 ZCode 客户端、从机房 IP 发，社区报过 3012 风控封整个 ZCode 账号（连
-#   付费套餐和官方 App），用不用由刘维定（工作台卡 glm-trial-risk）。/etc/magpie-glm-guard/use-trial 在才加 Trial 成员、才解除
+#   付费套餐和官方 App），用不用由负责人定（工作台卡 glm-trial-risk）。/etc/magpie-glm-guard/use-trial 在才加 Trial 成员、才解除
 #   账号休息；不在时 Max 用完就什么都不加，消息写「兜底已空」并说 Trial 没开。
 # 账号休息（11-02 起）：magpie 把一次拒绝记在整个账号上（rest key「zcode@<账号>」），只有 -Trial 条目自己被拒才只歇那个条目。
 #   Max 回 1310（周/月上限）时同账号的 Trial 一起歇到周额度重置，组里有 Trial 也一个请求都到不了它（11-02 01:10 实测）。rest 只
@@ -650,7 +650,7 @@ def message(kind, why, ss, a, zw, use, cmds, t, zcode_on=False, others=(), rests
     lines += rest_lines(rests, lifts or {}, deferred or {}, zw, trial_on)
     if kind != "close" and not trial_on and empty and any(pick(zw, rests, True).values()):
         lines.append("免费 Trial（ZCode Start Plan）还有余量，但开关没开：用它可能被 ZCode 风控（3012）封掉整个 ZCode 账号（连付费"
-                     "套餐和官方 App），要不要用由刘维定（工作台卡 glm-trial-risk）。打开：sudo touch /etc/magpie-glm-guard/"
+                     "套餐和官方 App），要不要用由负责人定（工作台卡 glm-trial-risk）。打开：sudo touch /etc/magpie-glm-guard/"
                      + TRIAL_SWITCH + "。")
     if trial:
         lines.append("Trial 是 ZCode 免费的 Start Plan：GLM-5.3 每天 300 万 token、GLM-5.3-Flash 每天 500 万，23:59 重置。")

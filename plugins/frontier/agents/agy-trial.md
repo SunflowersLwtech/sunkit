@@ -1,6 +1,6 @@
 ---
 name: agy-trial
-description: Hands one task to Google Antigravity on M4 (m4), signed in as devweiliu0607 (Samsung trial), and brings back its answer. Antigravity runs Gemini 4 Argon, Gemini 3.8 Flash and its own Claude Opus/Sonnet 5.5 on that account's quota, and can make images and read images, video and audio. Use it for image generation, video or audio understanding, a Gemini second opinion, or work that should not spend Claude seat quota. It runs in a scratch folder on M4 (m4), so it cannot see this repository; send the files it needs.
+description: Hands one task to Google Antigravity on M4 (m4), signed in to the Samsung trial account, and brings back its answer. Antigravity runs Gemini 4 Argon, Gemini 3.8 Flash and its own Claude Opus/Sonnet 5.5 on that account's quota, and can make images and read images, video and audio. Use it for image generation, video or audio understanding, a Gemini second opinion, or work that should not spend Claude seat quota. It runs in a scratch folder on M4 (m4), so it cannot see this repository; send the files it needs.
 tools: Bash, Read
 model: haiku
 ---

@@ -267,7 +267,7 @@ describe("context-budget Magpie middleware plugin", () => {
       {
         time: new Date(nowMs - 60_000).toISOString(),
         provider: "claude",
-        account: "duocodetechu@gmail.com",
+        account: "seat-b@example.com",
         key: "seat-b",
         status: 200,
         cacheWrite: 95000,
@@ -277,9 +277,9 @@ describe("context-budget Magpie middleware plugin", () => {
     );
 
     const seats = [
-      { key: "seat-a", account: "weiliu@duocodetech.com", used: 93, soon: [nowMs + 4 * 3600 * 1000], resting: false },
-      { key: "seat-b", account: "duocodetechu@gmail.com", used: 62, soon: [nowMs + 3 * 3600 * 1000], resting: false },
-      { key: "seat-c", account: "duocodetechu@duocodetech.com", used: 56, soon: [nowMs + 3 * 3600 * 1000], resting: false },
+      { key: "seat-a", account: "seat-a@example.com", used: 93, soon: [nowMs + 4 * 3600 * 1000], resting: false },
+      { key: "seat-b", account: "seat-b@example.com", used: 62, soon: [nowMs + 3 * 3600 * 1000], resting: false },
+      { key: "seat-c", account: "seat-c@example.com", used: 56, soon: [nowMs + 3 * 3600 * 1000], resting: false },
       { key: "seat-d", account: "expiring-seat@duocodetech.com", used: 89, soon: [nowMs + 10 * 60 * 1000], resting: false },
     ];
 

@@ -7,7 +7,7 @@ for a in "$@"; do
   if [ "$prev" = "--permission-mode" ] && [ "$a" = "auto" ]; then a="bypassPermissions"; fi
   out+=("$a"); prev="$a"
 done
-# 2026-10-27：秘书的自动压缩窗口以 config.toml [projects.agent.options.env] 为准。
+# 2026-10-27：主会话的自动压缩窗口以 config.toml [projects.agent.options.env] 为准。
 # 共享的 /root/.claude/settings.json 由 claude-config-sync 从 vault 覆盖（10-27 10:00 起是 300000），
 # 而 settings.json 的 env 会盖过进程环境变量，config.toml 的 160000 因此失效，s274 长到 ~190K，
 # 被 long-off-seats 改道后整条 long 链接不住（全 400）。--settings 的优先级高于 settings.json（实测）。

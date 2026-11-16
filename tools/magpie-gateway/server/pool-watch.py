@@ -228,7 +228,7 @@ def selfcheck():
     due = bool(anchor) and now - anchor >= DAY_MS and st.get("last_full", 0) > anchor and st.get("alerted_for") != anchor
     if due:
         how = tell("[pool-watch] magpie 的 Claude Code 进程池 %s 之后满过（最近一次 %s，%d/%d），但池满监视器自 %s 起一次都没认出"
-                   "「waits for room」日志：多半是 magpie 改了这句日志的写法，或者监视器没在跑。这期间秘书池满时的插队不生效。"
+                   "「waits for room」日志：多半是 magpie 改了这句日志的写法，或者监视器没在跑。这期间主会话池满时的插队不生效。"
                    "查：网关主机上 systemctl status magpie-pool-watch；docker logs magpie-magpie-1 | grep -i room 看现在的原文，"
                    "照着改 /opt/magpie/monitor/pool-watch.py 的 LINE（源码 sunkit tools/magpie-gateway/server/pool-watch.py）。"
                    % (hm(anchor), hm(st["last_full"]), n, most, hm(anchor)))
@@ -262,7 +262,7 @@ def selfcheck_guarded():
         print("selfcheck failed (%d in a row): %s" % (fail["n"], fail["last"]), flush=True)
         if fail["n"] >= FAIL_ROUNDS and not fail["alerted"]:
             try:
-                tell("[pool-watch] 池满监视器的自检连续 %d 次失败（自 %s，最近一次：%s），这期间看不出秘书池满插队是不是还管用。"
+                tell("[pool-watch] 池满监视器的自检连续 %d 次失败（自 %s，最近一次：%s），这期间看不出主会话池满插队是不是还管用。"
                      "查：网关主机上 systemctl status magpie-pool-watch-check；journalctl -u magpie-pool-watch-check -n 20。"
                      % (fail["n"], time.strftime("%m-%d %H:%MZ", time.gmtime(fail["since"] / 1000)), fail["last"]))
                 fail["alerted"] = now

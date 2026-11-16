@@ -1,6 +1,6 @@
 ---
 name: agy-pro
-description: Hands one task to Google Antigravity on m2, signed in as weiliu0607 (Google AI Pro, paid), and brings back its answer. Antigravity runs Gemini 4 Argon, Gemini 3.8 Flash and its own Claude Opus/Sonnet 5.5 on that account's quota, and can make images and read images, video and audio. Use it for image generation, video or audio understanding, a Gemini second opinion, or work that should not spend Claude seat quota. It runs in a scratch folder on m2, so it cannot see this repository; send the files it needs.
+description: Hands one task to Google Antigravity on m2, signed in to the Google AI Pro account (paid), and brings back its answer. Antigravity runs Gemini 4 Argon, Gemini 3.8 Flash and its own Claude Opus/Sonnet 5.5 on that account's quota, and can make images and read images, video and audio. Use it for image generation, video or audio understanding, a Gemini second opinion, or work that should not spend Claude seat quota. It runs in a scratch folder on m2, so it cannot see this repository; send the files it needs.
 tools: Bash, Read
 model: haiku
 ---

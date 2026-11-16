@@ -1,11 +1,11 @@
 #!/bin/sh
-# seat-provider-watcher（2026-10-25，sunkit tools/magpie-gateway；接手飞书秘书 10:52 的计划）
+# seat-provider-watcher（2026-10-25，sunkit tools/magpie-gateway；接手飞书主会话 10:52 的计划）
 # cc-connect 默认 provider 按三个 Claude 席位 5h 余量自动切换：
 #   全部 ≥95% → provider=magpie（llm-gateway 网关；opus 组在网关内 kiro→zed sonnet 兜底）
 #   任一 <80% → provider=anthropic（直连；登录席位由 seat-guard tick 负责切到最空的）
 #   80–95% 之间不动（滞回）。只翻 config.toml 的 provider 行，其余配置原样保留；
 #   换入/空闲重启/失败回滚全部复用 swap-config-when-idle.sh，且只在已空闲时发起，
-#   不长期占 /tmp/feishu-cc-restart.lock，不影响秘书自己的重启。
+#   不长期占 /tmp/feishu-cc-restart.lock，不影响主会话自己的重启。
 # crontab（N150 主机）：*/2 * * * * /opt/data/feishu-cc/bin/seat-provider-watcher >/dev/null 2>&1
 D=/opt/data/feishu-cc
 CFG=$D/config.toml

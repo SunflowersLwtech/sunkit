@@ -16,7 +16,7 @@ test('peers: one a session, its state in the desk\'s words, its machine by the d
   const out = peers([
     { ref: 'aaaaaa', name: 'hm', account: 'duocode', device: 'sunfl', status: 'busy', mode: 'push', agent: 'claude', model: 'claude-opus-5-5', herdr: { machine: 'm4' }, cwd: '/Users/x/Developer/products/HipiMind', age_s: 12, last_seen: iso(1) },
     { ref: 'bbbbbb', name: 'dv', account: 'duocode', device: 'mone', status: 'reconnecting', mode: 'pull', agent: 'devin', repo: 'obsun' },
-    { ref: 'cccccc', name: 'x', account: 'weiliu', device: 'm2', status: 'weird' },
+    { ref: 'cccccc', name: 'x', account: 'owner', device: 'm2', status: 'weird' },
     { ref: 'aaaaaa', name: 'dup' },
   ], NAMES)
   assert.deepEqual(out.map((p) => [p.key, p.state, p.body.machine]), [['aaaaaa', 'busy', 'M4'], ['bbbbbb', 'away', 'mone'], ['cccccc', 'unknown', 'mone']])
@@ -30,7 +30,7 @@ test('peers: one a session, its state in the desk\'s words, its machine by the d
 const ev = (seq, msg, state, extra = {}) => ({
   seq, at: extra.at ?? iso(60_000 - seq), msg_id: msg, state, bytes: 412, sent_at: extra.sent_at ?? iso(60_000),
   from: { account: 'duocode', name: 'm4-dsh', ref: 'g0wkjh', device: 'm2' },
-  to: { account: 'weiliu', name: extra.to ?? 'feishu-assistant', ref: '88ex02', device: 'n150' },
+  to: { account: 'owner', name: extra.to ?? 'feishu-assistant', ref: '88ex02', device: 'n150' },
   ...(state === 'delivered' ? { latency_ms: extra.latency_ms ?? 180, via: extra.via ?? 'live' } : {}),
 })
 

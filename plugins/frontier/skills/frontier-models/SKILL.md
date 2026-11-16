@@ -32,8 +32,8 @@ Each runs `harness-run` (this plugin's `bin/`), returns the answer and any files
 
 | subagent | client, account, where | good for |
 |---|---|---|
-| `agy-pro` | Antigravity, weiliu0607 (AI Pro, paid), on m2 | images, video, audio, Gemini 4 Argon, Antigravity's Opus 5.5 |
-| `agy-trial` | Antigravity, devweiliu0607 (Samsung trial), on M4 | the same, a separate quota |
+| `agy-pro` | Antigravity, the Google AI Pro account (paid), on m2 | images, video, audio, Gemini 4 Argon, Antigravity's Opus 5.5 |
+| `agy-trial` | Antigravity, the Samsung trial account, on M4 | the same, a separate quota |
 | `zen` | OpenCode CLI here, Zen free models (DeepSeek V4.1 Flash / GLM-5.3 Flash Free, zero retention) | cheap second opinions, reviews, small edits |
 | `zcode` | ZCode CLI on M4, Z.ai account | GLM in Z.ai's own client (needs a plan first) |
 | `frontier` | headless Claude Code on the gateway | GPT, Grok, Kimi, GLM, DeepSeek, Qwen with Claude Code's tools |

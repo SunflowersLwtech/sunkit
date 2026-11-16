@@ -4,8 +4,8 @@ Claude Code subagents that hand one task to another agent harness, each in its o
 
 | subagent | runs | on |
 |---|---|---|
-| `agy-pro` | Antigravity CLI (`agy -p`), weiliu0607, Google AI Pro | m2, in `~/.harness-jobs/<job>` |
-| `agy-trial` | Antigravity CLI, devweiliu0607, Samsung trial | M4, in `~/.harness-jobs/<job>` |
+| `agy-pro` | Antigravity CLI (`agy -p`), the Google AI Pro account | m2, in `~/.harness-jobs/<job>` |
+| `agy-trial` | Antigravity CLI, the Samsung trial account | M4, in `~/.harness-jobs/<job>` |
 | `zen` | OpenCode CLI (`opencode run`), Zen free models | this machine, in the current folder |
 | `zcode` | ZCode CLI bundled in ZCode.app (`zcode.cjs -p`) | M4, in `~/.harness-jobs/<job>` |
 | `frontier` | Claude Code headless on the magpie gateway (`claude --settings ~/.claude/magpie-settings.json -p`) | this machine, in the current folder |
