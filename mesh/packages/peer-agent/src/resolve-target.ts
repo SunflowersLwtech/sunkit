@@ -35,6 +35,9 @@ export function resolveTarget(to: string, rows: SessionRow[], selfId: string): R
   const byName = others.filter(r => r.name === trimmed)
   if (byName.length === 1) return { ok: true, target: byName[0]! }
   if (byName.length > 1) {
+    // Restarts leave stale reconnecting rows under the same name; prefer the one live session.
+    const live = byName.filter(r => r.status === 'idle' || r.status === 'busy')
+    if (live.length === 1) return { ok: true, target: live[0]! }
     return {
       ok: false,
       error: `"${trimmed}" matches ${byName.length} sessions; resend with one of: ${byName.map(formatAddress).join(', ')}`,
