@@ -9,7 +9,7 @@ import { CardPatchSchema } from '@claude-mesh/shared'
 import { CardWriter, initialCard, type CardFields } from './card.ts'
 import { TaskDriver } from './task-driver.ts'
 import { RelayClient } from './outbound.ts'
-import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.ts'
+import { createWorkerAllowed, registerTools, toolDescriptors } from './tools.ts'
 import { chooseJoinMode, Inbox } from './inbox.ts'
 import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
@@ -81,11 +81,12 @@ async function main(): Promise<void> {
 
   const inbox = pull ? new Inbox() : undefined
   const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
-  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox })
+  const createWorker = createWorkerAllowed({ mode: decision.mode, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER })
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox, createWorker })
 
   // Static tool list: never changes for the life of the process, so it never
   // invalidates the session's prompt cache.
-  const tools = pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS
+  const tools = toolDescriptors({ pull, createWorker })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...tools] }))
   server.setRequestHandler(CallToolRequestSchema, async req => {
     try { return await callTool(req.params.name, req.params.arguments ?? {}) }
