@@ -4343,7 +4343,7 @@ var init_zod = __esm({
 });
 
 // packages/shared/dist/envelope.js
-var AddressSchema, KindSchema, MetaSchema, ContentSchema, MessageIdSchema, SESSION_ID_REGEX, SessionIdSchema, LoginSchema, SessionNameSchema, EnvelopeSchema, OutboundMessageSchema;
+var AddressSchema, KindSchema, MetaSchema, ContentSchema, MessageIdSchema, SESSION_ID_REGEX, SessionIdSchema, LoginSchema, SessionNameSchema, TokenIdSchema, EnvelopeSchema, OutboundMessageSchema;
 var init_envelope = __esm({
   "packages/shared/dist/envelope.js"() {
     "use strict";
@@ -4366,6 +4366,7 @@ var init_envelope = __esm({
     SessionIdSchema = external_exports.string().regex(SESSION_ID_REGEX);
     LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
     SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
+    TokenIdSchema = external_exports.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
     EnvelopeSchema = external_exports.object({
       id: MessageIdSchema,
       v: external_exports.literal(PROTOCOL_VERSION),
@@ -4383,7 +4384,10 @@ var init_envelope = __esm({
       from_session: SessionIdSchema.nullable().default(null),
       from_name: SessionNameSchema.nullable().default(null),
       to_session: SessionIdSchema.nullable().default(null),
-      from_login: LoginSchema.nullable().default(null)
+      from_login: LoginSchema.nullable().default(null),
+      // The id of the token that sent it, looked up by the relay from the bearer hash. Another token
+      // of the same account cannot carry it, whatever name its session uses.
+      from_token: TokenIdSchema.nullable().default(null)
     }).superRefine((e, ctx) => {
       if (e.kind === "permission_verdict" && e.in_reply_to === null) {
         ctx.addIssue({
@@ -21586,6 +21590,7 @@ __export(bossai_exports, {
   injectionBody: () => injectionBody,
   letterShape: () => letterShape,
   parseApprovalCommand: () => parseApprovalCommand,
+  parseApprovers: () => parseApprovers,
   parseAttrs: () => parseAttrs,
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
@@ -21767,9 +21772,27 @@ function approverVerdict(letter, approvers, account) {
   if (f.has("sender")) return "send-only";
   const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get("from") ?? "");
   if (!m) return "send-only";
-  if (!approvers.includes(m[1])) return "not-an-approver";
+  const entries = approvers.map(splitPin).filter((a) => a.name === m[1]);
+  if (entries.length === 0) return "not-an-approver";
   if (!account) return "no-own-account";
-  return f.get("account") === account ? "ok" : "foreign-account";
+  if (f.get("account") !== account) return "foreign-account";
+  if (entries.some((a) => a.token === void 0)) return "ok";
+  const token = f.get("from_token");
+  if (!token) return "no-token";
+  return entries.some((a) => a.token === token) ? "ok" : "wrong-token";
+}
+function splitPin(entry) {
+  const i = entry.lastIndexOf("@");
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
+}
+function parseApprovers(raw) {
+  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`--approvers entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
 }
 function senderAllowed(from, allow) {
   if (!allow || allow.length === 0) return true;
@@ -22016,7 +22039,7 @@ function parseBossaiWake(args, env = process.env) {
     allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
     approvers: (() => {
       const a = flag5(args, "--approvers");
-      return a ? a.split(",").map((s) => s.trim()).filter(Boolean) : void 0;
+      return a ? parseApprovers(a) : void 0;
     })(),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3,
     runMode: (() => {
@@ -22132,7 +22155,7 @@ var init_bossai = __esm({
     init_sender_allow();
     BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,\u2026>] [--node <path>] [--peer <path>] [--write]
        mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]
-                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
+                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
 
 install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
          (pure config; the BossAI session itself joins the mesh in pull mode).
@@ -22150,15 +22173,19 @@ wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the
          --allow: only inject mail whose sender name starts with one of these prefixes.
          --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with
          APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).
-         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver
-         and whose account is the worker's own may settle; script labels never count.
+         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,
+         on the worker's own account, sent with that approver's device token may settle: each
+         entry is <session-name>@<token-id> (the id, not the token: GET /v1/admin/tokens lists
+         them by device label). The relay stamps every letter with its sender token's id, so a
+         session of the same name on another token of the account is refused, and so is a
+         letter from a relay too old to stamp it.
          --run-mode/--model: sent with every new turn wake starts (a turn without them falls to
          the session default, and a local first turn locks the session to local for good).
 wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
 --license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
-    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
+    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
 });
 

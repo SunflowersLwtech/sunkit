@@ -36624,6 +36624,7 @@ function sessionRef(sessionId) {
 }
 var LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
 var SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
+var TokenIdSchema = external_exports.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 var EnvelopeSchema = external_exports.object({
   id: MessageIdSchema,
   v: external_exports.literal(PROTOCOL_VERSION),
@@ -36641,7 +36642,10 @@ var EnvelopeSchema = external_exports.object({
   from_session: SessionIdSchema.nullable().default(null),
   from_name: SessionNameSchema.nullable().default(null),
   to_session: SessionIdSchema.nullable().default(null),
-  from_login: LoginSchema.nullable().default(null)
+  from_login: LoginSchema.nullable().default(null),
+  // The id of the token that sent it, looked up by the relay from the bearer hash. Another token
+  // of the same account cannot carry it, whatever name its session uses.
+  from_token: TokenIdSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === "permission_verdict" && e.in_reply_to === null) {
     ctx.addIssue({
@@ -36699,6 +36703,7 @@ function envelopeToChannelNotification(e) {
         from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from_name ?? e.from,
         ...!e.from_session && e.from_name ? { sender: "send-only" } : {},
         account: e.from,
+        ...e.from_token ? { from_token: e.from_token } : {},
         ...e.from_login ? { login: e.from_login } : {},
         msg_id: e.id,
         ...e.in_reply_to ? { in_reply_to: e.in_reply_to } : {},
@@ -36708,7 +36713,7 @@ function envelopeToChannelNotification(e) {
     }
   };
 }
-var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
+var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
 function withoutReserved(meta) {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)));
 }
