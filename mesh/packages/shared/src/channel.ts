@@ -55,6 +55,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
         from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : (e.from_name ?? e.from),
         ...(!e.from_session && e.from_name ? { sender: 'send-only' } : {}),
         account: e.from,
+        ...(e.from_token ? { from_token: e.from_token } : {}),
         ...(e.from_login ? { login: e.from_login } : {}),
         msg_id: e.id,
         ...(e.in_reply_to ? { in_reply_to: e.in_reply_to } : {}),
@@ -65,7 +66,7 @@ export function envelopeToChannelNotification(e: Envelope): ChannelNotification 
   }
 }
 
-const RESERVED_META_KEYS = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+const RESERVED_META_KEYS = new Set(['from', 'sender', 'account', 'from_token', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 function withoutReserved(meta: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)))

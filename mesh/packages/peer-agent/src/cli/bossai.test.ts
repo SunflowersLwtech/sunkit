@@ -426,9 +426,13 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
 })
 
 describe('parseBossaiWake approvers', () => {
-  it('parses --approvers list', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant, bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' })
-    expect(o.approvers).toEqual(['feishu-assistant', 'bossai-handoff'])
+  it('parses --approvers list of <name>@<token-id> pins', () => {
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant@tk_01AAA, bossai-handoff@tk_01BBB'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(o.approvers).toEqual(['feishu-assistant@tk_01AAA', 'bossai-handoff@tk_01BBB'])
+  })
+  it('refuses an --approvers entry without a token pin', () => {
+    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant@tk_01AAA,bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' }))
+      .toThrow('must be <session-name>@<token-id>')
   })
 })
 

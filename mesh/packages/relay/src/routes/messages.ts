@@ -69,7 +69,7 @@ export function messagesRoute(deps: Deps) {
     const route: Route = { from_wg: senderWg, scope: grant.visible }
     let envelope: Envelope
     try {
-      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data, sender, route, trace)
+      envelope = deps.store.insert(c.get('team_id'), c.get('human').handle, parsed.data, sender, route, trace, c.get('token').id)
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       return c.json({ error: 'invalid_message', message }, 400)
