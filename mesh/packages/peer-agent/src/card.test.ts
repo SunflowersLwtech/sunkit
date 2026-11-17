@@ -21,6 +21,10 @@ describe('initialCard', () => {
     expect(card).toEqual({ agent: 'grok' })
   })
 
+  it('knows BossAI as a host kind (MESH_HOST=bossai from `mesh bossai install`)', () => {
+    expect(initialCard({ env: {}, host: 'bossai', machine: undefined, git: () => undefined })).toEqual({ agent: 'bossai' })
+  })
+
   it('drops values that do not fit the relay\'s fixed fields', () => {
     const git = (args: string[]) => (args.includes('--show-toplevel') ? '/x/has space\n' : 'feat/x..y\n')
     const card = initialCard({ env: { MESH_MODEL: 'model with spaces' }, host: 'unknown-host', machine: 'M4!', git })

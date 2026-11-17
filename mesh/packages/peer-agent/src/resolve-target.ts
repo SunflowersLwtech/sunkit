@@ -9,6 +9,8 @@ export interface SessionRow {
   status: string
   /** Set by relays that know it; "pull" sessions read their inbox on their own schedule. */
   mode?: string
+  /** The host kind from the session card (claude, pi, agy, grok, devin, bossai); absent on old relays. */
+  agent?: string
   last_seen: string
 }
 
@@ -55,6 +57,8 @@ export function formatListing(rows: SessionRow[], selfId: string): string {
     const where = r.cwd ? ` · ${r.cwd}` : ''
     const who = r.login ? `${r.login} (mesh ${r.account}@${r.device})` : `${r.account}@${r.device}`
     const pull = r.mode === 'pull' ? ' · pull' : ''
-    return `${formatAddress(r)}${self} — ${who} · ${r.status}${pull}${where}`
+    // Claude Code is the default host; every other kind is named so a dispatcher can tell what it is talking to.
+    const kind = r.agent && r.agent !== 'claude' ? ` · ${r.agent}` : ''
+    return `${formatAddress(r)}${self} — ${who} · ${r.status}${pull}${kind}${where}`
   }).join('\n')
 }

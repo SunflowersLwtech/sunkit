@@ -4,7 +4,7 @@ import { Meshd, type MeshdOpts, type RunResult } from './daemon.ts'
 
 interface Call { url: string; method: string; body?: unknown; headers: Record<string, string> }
 
-function harness(opts: { run?: (file: string, args: string[]) => RunResult; streams?: string[][]; reportStatus?: number } = {}) {
+function harness(opts: { run?: (file: string, args: string[]) => RunResult; streams?: string[][]; reportStatus?: number; apps?: MeshdOpts['apps'] } = {}) {
   const calls: Call[] = []
   const runs: Array<{ file: string; args: string[] }> = []
   const logs: Array<{ event: string; fields?: Record<string, unknown> }> = []
@@ -41,6 +41,7 @@ function harness(opts: { run?: (file: string, args: string[]) => RunResult; stre
     roots: [{ path: '~/Developer/products', exists: () => true }],
     load: () => ({ load1: 0.5, cpus: 8 }),
     run: (f, a) => run(f, a), fetch, sleep: async () => {}, log: (_l, event, fields) => { logs.push({ event, ...(fields ? { fields } : {}) }) },
+    ...(opts.apps ? { apps: opts.apps } : {}),
   }
   meshd = new Meshd(o)
   return { meshd, calls, runs, logs }
@@ -58,6 +59,19 @@ describe('meshd reports', () => {
       herdr: { ok: true, version: '0.9.5' }, kinds: [{ kind: 'claude', version: '2.1.304 (Claude Code)' }],
       seats: [{ email: 'a@b.c', five_hour_pct: 12 }], active: 1, max_active: 3, agents: [{ name: 'w1', pane: 'w4:p1' }],
     })
+  })
+
+  it('reports BossAI from its install marker and never runs it for a version', async () => {
+    const on = harness({ apps: { bossai: () => true } })
+    await on.meshd.report()
+    const body = on.calls.find(c => c.url.endsWith('/v1/machines/self'))!.body as { kinds: Array<{ kind: string; version?: string }> }
+    expect(MachineReportSchema.safeParse(body).success).toBe(true)
+    expect(body.kinds).toContainEqual({ kind: 'bossai' })
+    expect(on.runs.some(r => r.file === 'bossai')).toBe(false)
+    const off = harness({ apps: { bossai: () => false } })
+    await off.meshd.report()
+    const offBody = off.calls.find(c => c.url.endsWith('/v1/machines/self'))!.body as { kinds: Array<{ kind: string }> }
+    expect(offBody.kinds.map(k => k.kind)).not.toContain('bossai')
   })
 
   it('caches the agent versions and seats between reports', async () => {

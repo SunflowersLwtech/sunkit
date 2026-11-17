@@ -36748,7 +36748,7 @@ var TASK_STATES = [
 var TaskStateSchema = external_exports.enum(TASK_STATES);
 var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 var RoleSchema2 = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
-var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin", "bossai"]);
 var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
 var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
@@ -37216,7 +37216,8 @@ function formatListing(rows, selfId) {
     const where = r.cwd ? ` \xB7 ${r.cwd}` : "";
     const who = r.login ? `${r.login} (mesh ${r.account}@${r.device})` : `${r.account}@${r.device}`;
     const pull = r.mode === "pull" ? " \xB7 pull" : "";
-    return `${formatAddress(r)}${self2} \u2014 ${who} \xB7 ${r.status}${pull}${where}`;
+    const kind = r.agent && r.agent !== "claude" ? ` \xB7 ${r.agent}` : "";
+    return `${formatAddress(r)}${self2} \u2014 ${who} \xB7 ${r.status}${pull}${kind}${where}`;
   }).join("\n");
 }
 
@@ -37321,7 +37322,7 @@ var CreateWorkerInput = external_exports.object({
 var TOOL_DESCRIPTORS = [
   {
     name: "list_agents",
-    description: 'List the live Claude Code sessions on the mesh \u2014 including sessions signed in to other accounts on other machines \u2014 that send_message can reach. Each row is "name [ref] \u2014 account@device \xB7 busy|idle \xB7 cwd". Rows marked "pull" are agents that read their messages when they check their inbox, so their replies can take a while.',
+    description: 'List the live Claude Code sessions on the mesh \u2014 including sessions signed in to other accounts on other machines \u2014 that send_message can reach. Each row is "name [ref] \u2014 account@device \xB7 busy|idle \xB7 cwd". Rows marked "pull" are agents that read their messages when they check their inbox, so their replies can take a while; a host other than Claude Code is named after that (pi, agy, grok, devin, bossai).',
     inputSchema: { type: "object", properties: {} }
   },
   {

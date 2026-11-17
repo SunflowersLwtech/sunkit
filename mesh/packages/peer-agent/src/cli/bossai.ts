@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { askHookSocket, hookSocketPath, type HookReply, type HookRequest } from '../hook-socket.ts'
@@ -9,6 +8,9 @@ import { loadConfig, loadToken } from '../config.ts'
 import { RelayClient } from '../outbound.ts'
 import { sayWith } from './say.ts'
 import { stableNode } from './devin.ts'
+import { bossaiPortFile } from './bossai-paths.ts'
+
+export { bossaiPortFile }
 
 export const BOSSAI_USAGE =
   'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n'
@@ -47,15 +49,6 @@ function flag(args: string[], name: string): string | undefined {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined
 }
 
-/** Electron userData of the desktop app, per platform (app name "@bossai/desktop"). */
-export function bossaiPortFile(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  const base = platform === 'darwin'
-    ? join(home, 'Library', 'Application Support')
-    : platform === 'win32'
-      ? (env.APPDATA ?? join(home, 'AppData', 'Roaming'))
-      : (env.XDG_CONFIG_HOME ?? join(home, '.config'))
-  return join(base, '@bossai', 'desktop', 'desktop-server-port.json')
-}
 
 /** Read the port file the desktop app writes; undefined when absent or malformed. */
 export function readBossaiPort(path: string, read: (p: string) => string = p => readFileSync(p, 'utf8')): number | undefined {

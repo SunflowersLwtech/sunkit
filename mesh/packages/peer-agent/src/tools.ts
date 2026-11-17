@@ -25,7 +25,7 @@ const CreateWorkerInput = z.object({
 export const TOOL_DESCRIPTORS = [
   {
     name: 'list_agents',
-    description: 'List the live Claude Code sessions on the mesh — including sessions signed in to other accounts on other machines — that send_message can reach. Each row is "name [ref] — account@device · busy|idle · cwd". Rows marked "pull" are agents that read their messages when they check their inbox, so their replies can take a while.',
+    description: 'List the live Claude Code sessions on the mesh — including sessions signed in to other accounts on other machines — that send_message can reach. Each row is "name [ref] — account@device · busy|idle · cwd". Rows marked "pull" are agents that read their messages when they check their inbox, so their replies can take a while; a host other than Claude Code is named after that (pi, agy, grok, devin, bossai).',
     inputSchema: { type: 'object', properties: {} },
   },
   {

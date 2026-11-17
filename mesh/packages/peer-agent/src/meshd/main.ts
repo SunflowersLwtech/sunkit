@@ -6,6 +6,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertTokenNotInRepo, loadConfig, loadToken } from '../config.ts'
 import { Meshd, type Log, type Runner } from './daemon.ts'
+import { bossaiPortFile } from '../cli/bossai-paths.ts'
 
 // Entry point of meshd (bundled as plugins/mesh/server/meshd.mjs). It runs under the
 // machine's service manager with its own MESH_HOME holding an executor token, never the
@@ -57,6 +58,8 @@ export async function main(): Promise<void> {
     ccQuotaArgs: platform() === 'darwin' ? ['--json', '--cache-only'] : ['--json'],
     ...(Number.isInteger(maxActive) && maxActive > 0 && maxActive <= 1000 ? { maxActive } : {}),
     roots: roots.map(p => ({ path: p, exists: () => existsSync(join(home, p.slice(2))) })),
+    // BossAI has no CLI: the desktop app's userData directory marks it as installed and run here.
+    apps: { bossai: () => existsSync(dirname(bossaiPortFile(platform()))) },
     load: () => ({ load1: loadavg()[0] ?? 0, cpus: cpus().length || 1, memUsedPct: (1 - freemem() / totalmem()) * 100 }),
     run,
     fetch: globalThis.fetch,

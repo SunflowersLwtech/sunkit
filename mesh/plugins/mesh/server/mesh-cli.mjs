@@ -4488,7 +4488,7 @@ var init_ledger = __esm({
     TaskStateSchema = external_exports.enum(TASK_STATES);
     WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
     RoleSchema = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
-    AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+    AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin", "bossai"]);
     MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
     HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
     HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
@@ -6321,6 +6321,19 @@ var init_pi_extension = __esm({
     init_instructions();
     plural4 = (n, one, many) => n === 1 ? one : many;
     readTool = (name) => `mcp__${name}__read_messages`;
+  }
+});
+
+// packages/peer-agent/src/cli/bossai-paths.ts
+import { homedir as homedir7 } from "node:os";
+import { join as join17 } from "node:path";
+function bossaiPortFile(platform, env = process.env, home = homedir7()) {
+  const base = platform === "darwin" ? join17(home, "Library", "Application Support") : platform === "win32" ? env.APPDATA ?? join17(home, "AppData", "Roaming") : env.XDG_CONFIG_HOME ?? join17(home, ".config");
+  return join17(base, "@bossai", "desktop", "desktop-server-port.json");
+}
+var init_bossai_paths = __esm({
+  "packages/peer-agent/src/cli/bossai-paths.ts"() {
+    "use strict";
   }
 });
 
@@ -21566,16 +21579,11 @@ __export(bossai_exports, {
   startMcpBridge: () => startMcpBridge
 });
 import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync2 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 function flag5(args, name) {
   const i = args.indexOf(name);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : void 0;
-}
-function bossaiPortFile(platform, env = process.env, home = homedir7()) {
-  const base = platform === "darwin" ? join17(home, "Library", "Application Support") : platform === "win32" ? env.APPDATA ?? join17(home, "AppData", "Roaming") : env.XDG_CONFIG_HOME ?? join17(home, ".config");
-  return join17(base, "@bossai", "desktop", "desktop-server-port.json");
 }
 function readBossaiPort(path, read = (p) => readFileSync14(p, "utf8")) {
   try {
@@ -21807,13 +21815,13 @@ function createWaker(o, d) {
   };
 }
 async function discoverBossaiSockets(dir = meshDir()) {
-  const hooks = join17(dir, "hooks");
+  const hooks = join18(dir, "hooks");
   if (!existsSync13(hooks)) return [];
   const own = hookSocketPath(process.pid, dir);
   const out = [];
   for (const f of readdirSync2(hooks)) {
     if (!f.endsWith(".sock")) continue;
-    const path = join17(hooks, f);
+    const path = join18(hooks, f);
     if (path === own) continue;
     const r = await askHookSocket(path, { op: "whoami" }, 800);
     if (r?.name) out.push({ path, name: r.name });
@@ -21946,6 +21954,7 @@ var init_bossai = __esm({
     init_outbound();
     init_say();
     init_devin();
+    init_bossai_paths();
     BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\nCloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).";
   }
 });
