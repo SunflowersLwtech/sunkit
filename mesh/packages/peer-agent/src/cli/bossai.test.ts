@@ -209,14 +209,14 @@ describe('createWaker', () => {
 describe('parseBossaiWake', () => {
   it('requires --chat and a token', () => {
     expect(() => parseBossaiWake([], {})).toThrow(/usage/)
-    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://x'], {})).toThrow(/token/)
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], {})).toThrow(/token/)
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.chat).toBe('c')
     expect(o.token).toBe('t')
     expect(o.pollMs).toBe(3000)
   })
   it('clamps a too-small poll interval', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--poll-ms', '10'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--poll-ms', '10'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.pollMs).toBe(3000)
   })
 })
@@ -311,7 +311,7 @@ describe('createWaker --bridge', () => {
 
 describe('parseBossaiWake v2 flags', () => {
   it('parses bridge, allow and grace', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--bridge', '--allow', 'feishu-assistant, m4-', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--bridge', '--allow', 'feishu-assistant, m4-', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.bridge).toBe(true)
     expect(o.allow).toEqual(['feishu-assistant', 'm4-'])
     expect(o.graceMs).toBe(5000)
@@ -320,9 +320,9 @@ describe('parseBossaiWake v2 flags', () => {
 
 describe('parseBossaiWake license', () => {
   it('reads the license from env or file and attaches nothing when absent', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'lic' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'lic' })
     expect(o.license).toBe('lic')
-    const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o2.license).toBeUndefined()
   })
 })
@@ -374,7 +374,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     })
     return { d, settled, logs }
   }
-  const aopts = { ...opts, approvers: ['feishu-assistant'] }
+  const aopts = { ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }
   it('settles an APPROVE from an allowed approver, scope once', async () => {
     const { d, settled } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
@@ -384,7 +384,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('stranger [x]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('non-approver')
+    expect(logs.join('\n')).toContain('not-an-approver')
   })
   it('discards non-command mail on the ctl session', async () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', '随便聊聊')])
@@ -403,7 +403,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
 
 describe('parseBossaiWake approvers', () => {
   it('parses --approvers list', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--approvers', 'feishu-assistant, bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant, bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.approvers).toEqual(['feishu-assistant', 'bossai-handoff'])
   })
 })
@@ -420,7 +420,7 @@ describe('createWaker approval account fence', () => {
     })
     await createWaker({ ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('foreign account')
+    expect(logs.join('\n')).toContain('foreign-account')
   })
 })
 
