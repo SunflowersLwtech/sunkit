@@ -21603,7 +21603,7 @@ function resolveBossaiServer(o, platform = process.platform, env = process.env) 
   return `http://127.0.0.1:${port}`;
 }
 function bossaiServerBody(o) {
-  const env = { MESH_JOIN: "pull", MESH_HOST: "bossai", MESH_WAKE: "" };
+  const env = { MESH_JOIN: "never", MESH_HOST: "bossai", MESH_WAKE: "" };
   if (o.session) env.MESH_SESSION_NAME = o.session;
   return {
     id: o.id,
@@ -21848,7 +21848,11 @@ function createWaker(o, d) {
     },
     async run() {
       for (; ; ) {
-        await this.tick();
+        try {
+          await this.tick();
+        } catch (e) {
+          d.log(`tick error (kept alive): ${e.message}`);
+        }
         await d.sleep(o.pollMs);
       }
     },

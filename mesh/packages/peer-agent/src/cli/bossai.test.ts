@@ -39,7 +39,7 @@ describe('readBossaiPort / resolveBossaiServer', () => {
 })
 
 describe('bossaiServerBody', () => {
-  it('registers the peer as stdio MCP in pull mode with the session name', () => {
+  it('registers the peer as send-only stdio MCP (wake bridge holds the pull session)', () => {
     const body = bossaiServerBody({ id: 'mesh', session: 'bossai-m2', node: '/n', peer: '/p.mjs' })
     expect(body.id).toBe('mesh')
     expect(body.enabled).toBe(true)
@@ -47,7 +47,7 @@ describe('bossaiServerBody', () => {
     expect(t.type).toBe('stdio')
     expect(t.command).toBe('/n')
     expect(t.args).toEqual(['/p.mjs'])
-    expect(t.env).toEqual({ MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
+    expect(t.env).toEqual({ MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
   })
   it('omits MESH_SESSION_NAME when unnamed', () => {
     const body = bossaiServerBody({ id: 'mesh', node: '/n', peer: '/p' })
@@ -439,5 +439,20 @@ describe('bridgeEnv / ensureCtlHome (hook-socket collision fix)', () => {
     expect(ctl).toBe(`${main}-ctl`)
     expect(readFileSync(join(ctl, 'token'), 'utf8')).toBe('tok')
     expect(existsSync(join(ctl, 'config.json'))).toBe(true)
+  })
+})
+
+describe('createWaker run-loop resilience', () => {
+  it('survives a tick that throws (e.g. app restart mid-poll)', async () => {
+    let n = 0
+    const d = deps({ discover: async () => { if (n++ === 0) throw new Error('fetch failed'); return [] } })
+    let sleeps = 0
+    d.sleep = async () => { if (++sleeps >= 3) throw new Error('stop-test') }
+    const w = createWaker(opts, d)
+    const logs: string[] = []
+    d.log = s => logs.push(s)
+    await expect(w.run()).rejects.toThrow('stop-test')
+    expect(logs.join('\n')).toContain('tick error (kept alive)')
+    expect(n).toBeGreaterThan(1)
   })
 })

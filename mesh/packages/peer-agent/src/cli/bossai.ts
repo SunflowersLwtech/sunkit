@@ -67,9 +67,11 @@ export function resolveBossaiServer(o: { server?: string | undefined; portFile?:
   return `http://127.0.0.1:${port}`
 }
 
-/** POST /api/mcp/servers body: the peer as a stdio MCP server, pull mode, named session. */
+/** POST /api/mcp/servers body: the peer as a stdio MCP server. Send-only (MESH_JOIN=never):
+ * the wake bridge holds the pull session under the same name; a second pull peer inside the
+ * app would take over the relay stream and starve the bridge. Tools still work for replies. */
 export function bossaiServerBody(o: BossaiInstallOpts): Record<string, unknown> {
-  const env: Record<string, string> = { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_WAKE: '' }
+  const env: Record<string, string> = { MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_WAKE: '' }
   if (o.session) env.MESH_SESSION_NAME = o.session
   return {
     id: o.id,
@@ -362,7 +364,10 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
       }
     },
     async run(): Promise<void> {
-      for (;;) { await this.tick(); await d.sleep(o.pollMs) }
+      for (;;) {
+        try { await this.tick() } catch (e) { d.log(`tick error (kept alive): ${(e as Error).message}`) }
+        await d.sleep(o.pollMs)
+      }
     },
     async shutdown(): Promise<void> { await stopBridge() },
   }
