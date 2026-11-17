@@ -210,6 +210,24 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(await optedIn.tools()).toContain('create_worker')
   })
 
+  it('create_worker: a send-only peer and a peer with a host label go without it, even forced to push; a joined Claude Code session keeps it', async () => {
+    const without: Record<string, string>[] = [
+      { MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-app' },
+      { MESH_JOIN: 'never', MESH_HOST: 'BossAI' },
+      { MESH_JOIN: 'never', MESH_HOST: 'devin' },
+      { MESH_JOIN: 'never' },
+      { MESH_JOIN: 'always', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-forced' },
+    ]
+    for (const env of without) {
+      const p = await peer('alice', env)
+      expect(await p.tools(), JSON.stringify(env)).not.toContain('create_worker')
+      // The target never resolves, so a regression that let the call through still dials nowhere.
+      await expect(p.call('create_worker', { machine: 'nowhere-e2e', name: 'w1', cwd: '/x', prompt: 'p' }), JSON.stringify(env)).rejects.toThrow(/MESH_CREATE_WORKER=1/)
+    }
+    const claude = await peer('alice', { MESH_JOIN: 'always', MESH_SESSION_NAME: 'claude-push' })
+    expect(await claude.tools()).toContain('create_worker')
+  })
+
   it('an unnamed pull peer is named after its directory with the host prefix, not after a Claude session in that directory', async () => {
     let cwd = ''
     // A live Claude Code session (this test process) registered in the same directory as the host.

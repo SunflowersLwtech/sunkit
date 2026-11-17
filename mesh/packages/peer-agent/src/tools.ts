@@ -3,7 +3,7 @@ import type { OutboundMessage, MessageId } from '@claude-mesh/shared'
 import type { RelayClient } from './outbound.ts'
 import type { ReplyLimiter } from './reply-limiter.ts'
 import { resolveTarget, formatListing, formatAddress } from './resolve-target.ts'
-import { formatInbox, type Inbox } from './inbox.ts'
+import { formatInbox, type Inbox, type JoinMode } from './inbox.ts'
 import { spawnWorker, sshRunner, type SpawnRunner } from './spawn-worker.ts'
 
 const ListInput = z.object({}).strict()
@@ -73,14 +73,16 @@ export const PULL_TOOL_DESCRIPTORS = [
 ] as const
 
 /**
- * create_worker spawns an agent over ssh with a caller-chosen prompt and argv. A pull host
- * (BossAI, agy, Devin CLI, …) may approve its MCP tools by wildcard, which would turn that into an
- * approval-free way out of the host's sandbox, so pull peers and BossAI offer it only when
- * MESH_CREATE_WORKER=1 is set. Push-mode Claude Code sessions keep it.
+ * create_worker spawns an agent over ssh with a caller-chosen prompt and argv. A non-Claude host
+ * (BossAI, agy, Devin CLI, …) may approve its MCP tools by wildcard, often in an unattended
+ * one-shot run, which would turn that into an approval-free way out of the host's sandbox. So it
+ * is offered only to a push-mode Claude Code session (the channel opt-in; MESH_HOST is set only
+ * by the non-Claude installs) or with MESH_CREATE_WORKER=1. Pull, one-shot and send-only peers,
+ * and any peer with a host label, go without it.
  */
-export function createWorkerAllowed(o: { pull: boolean; host?: string | undefined; optIn?: string | undefined }): boolean {
+export function createWorkerAllowed(o: { mode: JoinMode; host?: string | undefined; optIn?: string | undefined }): boolean {
   if (o.optIn?.trim() === '1') return true
-  return !o.pull && o.host?.trim() !== 'bossai'
+  return o.mode === 'push' && !o.host?.trim()
 }
 
 /** The tools this peer lists: read_messages in pull mode, create_worker only when allowed. */
@@ -136,7 +138,7 @@ export function registerTools(client: RelayClient, opts: ToolOpts) {
     }
     if (name === 'create_worker') {
       // Refused here too, not only left out of the list: a host can call a tool it was never shown.
-      if (!createWorker) throw new Error('create_worker is not offered by this peer (a pull or bossai peer needs MESH_CREATE_WORKER=1)')
+      if (!createWorker) throw new Error('create_worker is not offered by this peer (only a push-mode Claude Code session has it; elsewhere it needs MESH_CREATE_WORKER=1)')
       const input = CreateWorkerInput.parse(args)
       const text = await spawnWorker({ ...input, agentArgs: input.agent_args }, spawnRunner)
       return { content: [{ type: 'text', text }] }

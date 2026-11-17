@@ -27,15 +27,21 @@ describe('tools', () => {
     expect(TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker'])
   })
 
-  it('create_worker is a push-mode Claude Code tool: pull and bossai peers get it only with MESH_CREATE_WORKER=1', () => {
-    expect(createWorkerAllowed({ pull: false })).toBe(true)
-    expect(createWorkerAllowed({ pull: true, host: 'devin' })).toBe(false)
-    // A bossai host is refused on the host alone, whatever the join mode.
-    expect(createWorkerAllowed({ pull: false, host: 'bossai' })).toBe(false)
-    expect(createWorkerAllowed({ pull: true, host: 'bossai', optIn: '1' })).toBe(true)
-    expect(createWorkerAllowed({ pull: false, host: 'bossai', optIn: '1' })).toBe(true)
-    expect(createWorkerAllowed({ pull: true, optIn: '0' })).toBe(false)
-    expect(createWorkerAllowed({ pull: true, optIn: 'yes' })).toBe(false)
+  it('create_worker is a push-mode Claude Code tool: every other peer gets it only with MESH_CREATE_WORKER=1', () => {
+    expect(createWorkerAllowed({ mode: 'push' })).toBe(true)
+    expect(createWorkerAllowed({ mode: 'pull', host: 'devin' })).toBe(false)
+    // One-shot pull runs (devin -p, agy -p) and MESH_JOIN=never come out as send.
+    expect(createWorkerAllowed({ mode: 'send', host: 'devin' })).toBe(false)
+    expect(createWorkerAllowed({ mode: 'send', host: 'bossai' })).toBe(false)
+    expect(createWorkerAllowed({ mode: 'send' })).toBe(false)
+    // A host label is a non-Claude install, even when MESH_JOIN=always forces push; any spelling.
+    expect(createWorkerAllowed({ mode: 'push', host: 'bossai' })).toBe(false)
+    expect(createWorkerAllowed({ mode: 'push', host: 'BossAI' })).toBe(false)
+    expect(createWorkerAllowed({ mode: 'push', host: ' ' })).toBe(true)
+    expect(createWorkerAllowed({ mode: 'pull', host: 'bossai', optIn: '1' })).toBe(true)
+    expect(createWorkerAllowed({ mode: 'send', host: 'bossai', optIn: '1' })).toBe(true)
+    expect(createWorkerAllowed({ mode: 'pull', optIn: '0' })).toBe(false)
+    expect(createWorkerAllowed({ mode: 'pull', optIn: 'yes' })).toBe(false)
   })
 
   it('a peer without create_worker neither lists it nor runs it', async () => {

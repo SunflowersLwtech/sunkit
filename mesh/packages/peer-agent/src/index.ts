@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
   const inbox = pull ? new Inbox() : undefined
   const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
-  const createWorker = createWorkerAllowed({ pull, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER })
+  const createWorker = createWorkerAllowed({ mode: decision.mode, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER })
   const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox, createWorker })
 
   // Static tool list: never changes for the life of the process, so it never
