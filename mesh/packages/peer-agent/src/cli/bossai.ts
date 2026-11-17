@@ -15,7 +15,7 @@ export { bossaiPortFile }
 export const BOSSAI_USAGE =
   'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n'
   + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
-  + '                        [--bridge] [--allow <name-prefix,…>] [--grace-ms <n>]\n'
+  + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name-prefix,…>] [--grace-ms <n>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
@@ -27,6 +27,8 @@ export const BOSSAI_USAGE =
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
   + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
+  + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
+  + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
   + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\n'
   + 'Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n'
   + '--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).'
@@ -144,6 +146,8 @@ export interface WakeOpts {
   bridge?: boolean | undefined
   /** Sender name prefixes allowed to wake the worker; undefined = all. */
   allow?: string[] | undefined
+  /** Sender prefixes allowed to settle approval asks via the control session; undefined = notify only. */
+  approvers?: string[] | undefined
   /** After the bridge stops, wait this long before restarting it (let BossAI's turn bind). */
   graceMs?: number | undefined
 }
@@ -160,8 +164,25 @@ export function injectionBody(notice: string, activeRun: boolean): Record<string
   return activeRun ? { text: notice, deliverAs: 'steer' } : { text: notice }
 }
 
-export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string): string {
-  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${ask.subtitle}` : ''} — 会话 ${chat}，请到 BossAI 桌面端处理（默认 5 分钟超时自动拒）。mesh 不会代为批准。`
+export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string, ctlSession?: string): string {
+  const how = ctlSession
+    ? `批准/拒绝：给 mesh 会话 ${ctlSession} 发「APPROVE ${ask.toolCallId}」或「DENY ${ask.toolCallId} <理由>」（仅白名单批准人有效，一次性放行）。`
+    : '请到 BossAI 桌面端处理。'
+  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${ask.subtitle}` : ''} — 会话 ${chat}。${how}默认 5 分钟超时自动拒；mesh 不会代为批准。`
+}
+
+export type ApprovalCommand = { action: 'allow' | 'deny'; toolCallId: string; reason?: string }
+
+/** APPROVE <id> / DENY <id> [reason] — the mesh-side approval reply format. */
+export function parseApprovalCommand(body: string): ApprovalCommand | undefined {
+  const m = /^\s*(APPROVE|DENY)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(body.trim())
+  if (!m) return undefined
+  const reason = m[3]?.trim()
+  return {
+    action: m[1]!.toUpperCase() === 'APPROVE' ? 'allow' : 'deny',
+    toolCallId: m[2]!,
+    ...(reason ? { reason: reason.slice(0, 500) } : {}),
+  }
 }
 
 export interface BridgeHandle {
@@ -182,6 +203,10 @@ export interface WakeDeps {
   notify: (text: string) => Promise<void>
   /** Start/stop the idle-session bridge peer (--bridge). */
   startBridge?: (() => Promise<BridgeHandle>) | undefined
+  /** Permanent control-session peer reading approval replies (--approvers). */
+  startCtl?: (() => Promise<{ read: () => Promise<string> }>) | undefined
+  /** Settle a pending approval ask (scope once, never memorized). */
+  resolveAsk?: ((toolCallId: string, action: 'allow' | 'deny', reason?: string) => Promise<{ ok: boolean; status: number }>) | undefined
   log: (s: string) => void
   sleep: (ms: number) => Promise<void>
   now?: (() => number) | undefined
@@ -239,6 +264,8 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
   let bridge: BridgeHandle | undefined
   let bridgeStoppedAt = 0
   let pendingLetters: string | undefined
+  let ctl: { read: () => Promise<string> } | undefined
+  const ctlSession = o.session ? `${o.session}-ctl` : undefined
   const now = d.now ?? Date.now
   const graceMs = o.graceMs ?? 15_000
   const stopBridge = async () => {
@@ -312,9 +339,22 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
         const ask = await d.pendingAsk()
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId
-          await d.notify(approvalNotice(ask, o.chat)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : undefined)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
         }
         if (!ask) lastAskNotified = undefined
+      }
+      if (o.approvers?.length && d.startCtl && d.resolveAsk && ctlSession) {
+        if (!ctl) ctl = await d.startCtl().catch(e => { d.log(`ctl peer start failed: ${(e as Error).message}`); return undefined })
+        if (ctl) {
+          const text = await ctl.read().catch(() => '')
+          for (const letter of parseChannels(text)) {
+            const cmd = parseApprovalCommand(letter.body)
+            if (!cmd) { d.log(`ctl: non-command mail from ${letter.from} discarded`); continue }
+            if (!senderAllowed(letter.from, o.approvers)) { d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`); continue }
+            const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason)
+            d.log(res.ok ? `ctl: ${cmd.action} ${cmd.toolCallId} settled via mesh (by ${letter.from})` : `ctl: settle ${cmd.toolCallId} failed HTTP ${res.status} (already settled or expired?)`)
+          }
+        }
       }
     },
     async run(): Promise<void> {
@@ -387,6 +427,7 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
     allow: allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    approvers: (() => { const a = flag(args, '--approvers'); return a ? a.split(',').map(s => s.trim()).filter(Boolean) : undefined })(),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15_000,
   }
 }
@@ -414,6 +455,25 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
         session: o.session ?? `bossai-${o.chat}`,
       })
       : undefined,
+    startCtl: o.approvers?.length && o.session
+      ? async () => {
+        const h = await startMcpBridge({
+          node: stableNode(process.env.PATH, process.execPath),
+          peer: fileURLToPath(new URL('./mesh-peer.mjs', import.meta.url)),
+          session: `${o.session}-ctl`,
+        })
+        return { read: h.read }
+      }
+      : undefined,
+    resolveAsk: async (toolCallId, action, reason) => {
+      const res = await fetchImpl(api(`/sessions/${o.chat}/permission-ask`), {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ toolCallId, action, scope: 'once', ...(reason ? { reason } : {}) }),
+        signal: AbortSignal.timeout(8_000),
+      })
+      return { ok: res.ok, status: res.status }
+    },
     activeRun: async () => {
       const res = await fetchImpl(api(`/pi/sessions/${o.chat}/runs/active`), { headers: auth, signal: AbortSignal.timeout(5_000) })
       if (!res.ok) return false

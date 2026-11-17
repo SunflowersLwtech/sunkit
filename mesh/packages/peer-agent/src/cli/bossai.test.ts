@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
   filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
-  discoverBossaiSockets, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
+  approvalNotice, discoverBossaiSockets, parseApprovalCommand, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
 import type { HookReply, HookRequest } from '../hook-socket.ts'
 
@@ -342,5 +342,68 @@ describe('discoverBossaiSockets', () => {
       const found = await discoverBossaiSockets(dir)
       expect(found.map(f => f.path)).toEqual([join(dir, 'hooks', '999999.sock')])
     } finally { own.close(); other.close() }
+  })
+})
+
+describe('parseApprovalCommand / approvalNotice v3', () => {
+  it('parses APPROVE and DENY with reason', () => {
+    expect(parseApprovalCommand('APPROVE call_1')).toEqual({ action: 'allow', toolCallId: 'call_1' })
+    expect(parseApprovalCommand('deny call_2 太危险')).toEqual({ action: 'deny', toolCallId: 'call_2', reason: '太危险' })
+    expect(parseApprovalCommand('你好')).toBeUndefined()
+    expect(parseApprovalCommand('APPROVE')).toBeUndefined()
+  })
+  it('notice tells approvers the ctl session and command format', () => {
+    const s = approvalNotice({ toolCallId: 'call_1', toolName: 'shell_command' }, 'chat-1', 'bossai-devdesk-ctl')
+    expect(s).toContain('bossai-devdesk-ctl')
+    expect(s).toContain('APPROVE call_1')
+    expect(s).toContain('不会代为批准')
+  })
+})
+
+describe('createWaker --approvers (mesh-side approval settlement)', () => {
+  const ctlLetter = (from: string, body: string) => `<channel from="${from}" account="weiliu" msg_id="m">\n${body}\n</channel>`
+  function ctlDeps(reads: string[], over: Partial<WakeDeps> = {}) {
+    const settled: { id: string; action: string; reason?: string }[] = []
+    const logs: string[] = []
+    const d = deps({
+      discover: async () => [],
+      startCtl: async () => ({ read: async () => reads.shift() ?? '' }),
+      resolveAsk: async (id, action, reason) => { settled.push({ id, action, ...(reason ? { reason } : {}) }); return { ok: true, status: 200 } },
+      log: s => logs.push(s),
+      ...over,
+    })
+    return { d, settled, logs }
+  }
+  const aopts = { ...opts, approvers: ['feishu-assistant'] }
+  it('settles an APPROVE from an allowed approver, scope once', async () => {
+    const { d, settled } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', 'APPROVE call_1')])
+    await createWaker(aopts, d).tick()
+    expect(settled).toEqual([{ id: 'call_1', action: 'allow' }])
+  })
+  it('ignores approval attempts from non-approvers', async () => {
+    const { d, settled, logs } = ctlDeps([ctlLetter('stranger [x]', 'APPROVE call_1')])
+    await createWaker(aopts, d).tick()
+    expect(settled).toHaveLength(0)
+    expect(logs.join('\n')).toContain('non-approver')
+  })
+  it('discards non-command mail on the ctl session', async () => {
+    const { d, settled, logs } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', '随便聊聊')])
+    await createWaker(aopts, d).tick()
+    expect(settled).toHaveLength(0)
+    expect(logs.join('\n')).toContain('non-command')
+  })
+  it('without --approvers no ctl peer is started', async () => {
+    const { d } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', 'APPROVE call_1')])
+    let started = false
+    d.startCtl = async () => { started = true; return { read: async () => '' } }
+    await createWaker(opts, d).tick()
+    expect(started).toBe(false)
+  })
+})
+
+describe('parseBossaiWake approvers', () => {
+  it('parses --approvers list', () => {
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--approvers', 'feishu-assistant, bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(o.approvers).toEqual(['feishu-assistant', 'bossai-handoff'])
   })
 })
