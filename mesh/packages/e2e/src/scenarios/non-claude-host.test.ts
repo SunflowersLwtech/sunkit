@@ -197,7 +197,7 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     const pins = [`feishu-assistant@${tokens.find(t => t.handle === 'alice' && t.label === 'e2e')!.id}`]
     expect(approverVerdict(forged, pins, 'alice')).not.toBe('ok')
     expect(approverVerdict(real, pins, 'alice')).toBe('ok')
-    const kept = filterLetters(text, ['feishu-assistant'], 'alice').kept
+    const kept = filterLetters(text, pins, 'alice').kept
     expect(kept).toContain('call_real')
     expect(kept).not.toContain('call_forged')
   })
@@ -276,6 +276,10 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
       expect(approverVerdict(by('APPROVE call_squat'), [...pins, 'feishu-assistant'], 'alice')).toBe('wrong-token')
       expect(by('APPROVE call_real').attrs).toContain(`from_token="${approverId}"`)
       expect(approverVerdict(by('APPROVE call_real'), pins, 'alice')).toBe('ok')
+      // --allow with the same pin injects only the real approver's letter, not the squatter's.
+      const kept = filterLetters(text, pins, 'alice').kept
+      expect(kept).toContain('call_real')
+      for (const bad of ['call_squat', 'call_meta', 'call_squat_meta']) expect(kept).not.toContain(`APPROVE ${bad}\n`)
     } finally {
       stream.abort()
     }
