@@ -16,7 +16,7 @@ export { bossaiPortFile }
 export const BOSSAI_USAGE =
   'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,…>] [--node <path>] [--peer <path>] [--write]\n'
   + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
-  + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
+  + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name@token-id,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
@@ -34,8 +34,12 @@ export const BOSSAI_USAGE =
   + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
-  + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver\n'
-  + '         and whose account is the worker\'s own may settle; script labels never count.\n'
+  + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,\n'
+  + '         on the worker\'s own account, sent with that approver\'s device token may settle: each\n'
+  + '         entry is <session-name>@<token-id> (the id, not the token: GET /v1/admin/tokens lists\n'
+  + '         them by device label). The relay stamps every letter with its sender token\'s id, so a\n'
+  + '         session of the same name on another token of the account is refused, and so is a\n'
+  + '         letter from a relay too old to stamp it.\n'
   + '         --run-mode/--model: sent with every new turn wake starts (a turn without them falls to\n'
   + '         the session default, and a local first turn locks the session to local for good).\n'
   + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)\n'
@@ -169,7 +173,7 @@ export interface WakeOpts {
   bridge?: boolean | undefined
   /** Sender name prefixes allowed to wake the worker; undefined = all. */
   allow?: string[] | undefined
-  /** Sender prefixes allowed to settle approval asks via the control session; undefined = notify only. */
+  /** `<name>@<token-id>` pins allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined
   /** The worker's own mesh account; approval replies must come from this account (names alone are spoofable). */
   account?: string | undefined
@@ -257,8 +261,9 @@ export interface ChannelLetter { attrs: string; from: string; body: string }
  * first and can add any other key (`x_from`, `reply_from`, …), so a key is read by its exact name,
  * never by a substring search, and a letter with a key outside this set is not trusted. It must
  * equal the keys shared's envelopeToChannelNotification reserves, or a real approval is refused.
+ * `from_token` is the relay-stamped id of the sending token; shared drops a sender's own.
  */
-export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'from_token', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 /**
  * Parse ` key="value" …` exactly: every byte belongs to an attribute and no key appears twice.
@@ -302,19 +307,46 @@ export function parseChannels(text: string): ChannelLetter[] {
 /**
  * Who may settle an approval. A send-only sender's name is a label any script on the account
  * picks, so only a live session counts (`from` carries `[ref]`, no `sender` attr), its name must
- * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), and the
- * relay-verified account must be the worker's own. Unknown own account fails closed.
+ * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), the
+ * relay-verified account must be the worker's own, and the letter must carry the relay-stamped
+ * token id an entry `<name>@<token-id>` pins. A bare `<name>` entry is `unpinned` and never settles.
+ * Unknown own account fails closed.
  */
-export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' {
+export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' | 'unpinned' | 'no-token' | 'wrong-token' {
   const shape = letterShape(letter)
   if (shape !== 'ok') return shape
   const f = parseAttrs(letter.attrs)!
   if (f.has('sender')) return 'send-only'
   const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get('from') ?? '')
   if (!m) return 'send-only'
-  if (!approvers.includes(m[1]!)) return 'not-an-approver'
+  const entries = approvers.map(splitPin).filter(a => a.name === m[1])
+  if (entries.length === 0) return 'not-an-approver'
   if (!account) return 'no-own-account'
-  return f.get('account') === account ? 'ok' : 'foreign-account'
+  if (f.get('account') !== account) return 'foreign-account'
+  // A name is any session's choice, even across one account's devices: only a pinned entry can
+  // settle, and only with the relay-stamped id of the token that sent the letter. A bare name never
+  // does, even next to a pin for the same name. No stamp (an older relay) fails closed.
+  const pins = entries.filter(a => a.token)
+  if (pins.length === 0) return 'unpinned'
+  const token = f.get('from_token')
+  if (!token) return 'no-token'
+  return pins.some(a => a.token === token) ? 'ok' : 'wrong-token'
+}
+
+function splitPin(entry: string): { name: string; token?: string } {
+  const i = entry.lastIndexOf('@')
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) }
+}
+
+/** --approvers: every entry must pin a token, `<session-name>@<token-id>`; a bare name is refused. */
+export function parseApprovers(raw: string): string[] {
+  const entries = raw.split(',').map(s => s.trim()).filter(Boolean)
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`--approvers entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`)
+    }
+  }
+  return entries
 }
 
 /** A sender is allowed when its name (before any [ref]) starts with an allowed prefix. */
@@ -564,7 +596,7 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
     allow: allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    approvers: (() => { const a = flag(args, '--approvers'); return a ? a.split(',').map(s => s.trim()).filter(Boolean) : undefined })(),
+    approvers: (() => { const a = flag(args, '--approvers'); return a ? parseApprovers(a) : undefined })(),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15_000,
     runMode: (() => {
       const m = flag(args, '--run-mode')

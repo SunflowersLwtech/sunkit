@@ -37,6 +37,8 @@ export function sessionRef(sessionId: string): string {
 /** Self-reported Claude login of the sending machine (display only; never an identity). */
 export const LoginSchema = z.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/)
 export const SessionNameSchema = z.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/)
+/** The relay's id for one device token (`tk_<ulid>`): its primary key, never a credential. */
+export const TokenIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 
 export const EnvelopeSchema = z.object({
   id: MessageIdSchema,
@@ -55,7 +57,10 @@ export const EnvelopeSchema = z.object({
   from_session: SessionIdSchema.nullable().default(null),
   from_name: SessionNameSchema.nullable().default(null),
   to_session: SessionIdSchema.nullable().default(null),
-  from_login: LoginSchema.nullable().default(null)
+  from_login: LoginSchema.nullable().default(null),
+  // The id of the token that sent it, looked up by the relay from the bearer hash. Another token
+  // of the same account cannot carry it, whatever name its session uses.
+  from_token: TokenIdSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === 'permission_verdict' && e.in_reply_to === null) {
     ctx.addIssue({
@@ -94,6 +99,7 @@ export interface EnvelopeRow {
   from_name?: string | null
   to_session?: string | null
   from_login?: string | null
+  from_token?: string | null
 }
 
 export function envelopeToRow(e: Envelope): EnvelopeRow {
@@ -105,7 +111,7 @@ export function envelopeToRow(e: Envelope): EnvelopeRow {
     meta_json: JSON.stringify(e.meta),
     sent_at: e.sent_at, delivered_at: e.delivered_at,
     from_session: e.from_session, from_name: e.from_name, to_session: e.to_session,
-    from_login: e.from_login
+    from_login: e.from_login, from_token: e.from_token
   }
 }
 
@@ -119,6 +125,7 @@ export function envelopeFromRow(row: EnvelopeRow): Envelope {
     sent_at: row.sent_at, delivered_at: row.delivered_at,
     from_session: row.from_session ?? null, from_name: row.from_name ?? null,
     to_session: row.to_session ?? null,
-    from_login: row.from_login ?? null
+    from_login: row.from_login ?? null,
+    from_token: row.from_token ?? null
   })
 }

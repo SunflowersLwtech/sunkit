@@ -46,6 +46,15 @@ describe('POST /v1/messages', () => {
     expect(e.from).toBe('alice')
   })
 
+  it('stamps the sending token id as from_token, kept on the stored row; sender meta cannot set it', async () => {
+    const res = await post({ to: 'bob', kind: 'chat', content: 'hi', meta: { from_token: 'tk_forged' } })
+    expect(res.status).toBe(201)
+    const e = await res.json() as any
+    expect(e.from_token).toBe('tk_alice')
+    const [stored] = new MessageStore(db).fetchPendingFor('t1', 'bob')
+    expect(stored!.from_token).toBe('tk_alice')
+  })
+
   it('400 on unknown kind', async () => {
     const res = await post({ to: 'bob', kind: 'surprise', content: 'x' })
     expect(res.status).toBe(400)

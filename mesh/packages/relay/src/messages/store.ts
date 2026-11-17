@@ -90,6 +90,7 @@ export class MessageStore {
     sender: { session?: string; name: string; login?: string } | null = null,
     route?: Route,
     trace?: SendTrace,
+    fromToken: string | null = null,
   ): Envelope {
     if (msg.to !== TEAM_BROADCAST_HANDLE) {
       const rcpt = this.db.prepare(
@@ -124,17 +125,18 @@ export class MessageStore {
       from_name: sender?.name ?? null,
       to_session: msg.to_session ?? null,
       from_login: sender?.login ?? null,
+      from_token: fromToken,
     })
 
     this.db.transaction(() => {
       this.db.prepare(`
-        INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at,from_session,from_name,to_session,from_login,from_wg,scope_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO message(id,v,team_id,from_handle,to_handle,in_reply_to,thread_root,kind,content,meta_json,sent_at,delivered_at,from_session,from_name,to_session,from_login,from_token,from_wg,scope_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         envelope.id, envelope.v, envelope.team, envelope.from, envelope.to,
         envelope.in_reply_to, envelope.thread_root, envelope.kind, envelope.content,
         JSON.stringify(envelope.meta), envelope.sent_at, envelope.delivered_at,
-        envelope.from_session, envelope.from_name, envelope.to_session, envelope.from_login,
+        envelope.from_session, envelope.from_name, envelope.to_session, envelope.from_login, envelope.from_token,
         route?.from_wg ?? null, route ? JSON.stringify(route.scope) : null
       )
       // Only conversation is logged; presence and permission traffic would drown it.
@@ -156,7 +158,7 @@ export class MessageStore {
   fetchSince(team_id: string, to_handle: string, since_id: string, session: string | null = null, viewer?: Viewer): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login, from_token
       FROM message
       WHERE team_id=@team AND id > @since
         AND (to_handle=@handle OR (to_handle='@team' AND from_handle != @handle))
@@ -170,7 +172,7 @@ export class MessageStore {
   fetchPendingFor(team_id: string, to_handle: string, session: string | null = null, viewer?: Viewer): Envelope[] {
     const rows = this.db.prepare(`
       SELECT id, v, team_id, from_handle, to_handle, in_reply_to, thread_root,
-             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login
+             kind, content, meta_json, sent_at, delivered_at, from_session, from_name, to_session, from_login, from_token
       FROM message
       WHERE team_id=@team AND delivered_at IS NULL
         AND (to_handle=@handle OR (to_handle='@team' AND from_handle != @handle))

@@ -58,6 +58,14 @@ function migrateV3ToV4(db: Db): void {
 /** v5: the delivery log (`delivery_event`, created by schema.sql). Nothing to rewrite in older tables. */
 function migrateV4ToV5(db: Db): void {
   db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (5)')
+  migrateV5ToV6(db)
+}
+
+/** v6: `message.from_token`, the id of the token that sent it (NULL on older rows). */
+function migrateV5ToV6(db: Db): void {
+  const cols = db.pragma('table_info(message)') as Array<{ name: string }>
+  if (!cols.some(c => c.name === 'from_token')) db.exec('ALTER TABLE message ADD COLUMN from_token TEXT')
+  db.exec('INSERT OR IGNORE INTO schema_version(version) VALUES (6)')
 }
 
 export function getSchemaVersion(db: Db): number {
