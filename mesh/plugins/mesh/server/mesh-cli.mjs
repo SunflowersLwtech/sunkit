@@ -21833,6 +21833,11 @@ function createWaker(o, d) {
               d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`);
               continue;
             }
+            const acct = /account="([^"]*)"/.exec(letter.attrs)?.[1];
+            if (o.account && acct !== o.account) {
+              d.log(`ctl: approval from foreign account ${acct ?? "?"} ignored (approvals stay within ${o.account})`);
+              continue;
+            }
             const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason);
             d.log(res.ok ? `ctl: ${cmd.action} ${cmd.toolCallId} settled via mesh (by ${letter.from})` : `ctl: settle ${cmd.toolCallId} failed HTTP ${res.status} (already settled or expired?)`);
           }
@@ -21904,6 +21909,13 @@ function parseBossaiWake(args, env = process.env) {
     token,
     license,
     notify: flag5(args, "--notify"),
+    account: (() => {
+      try {
+        return loadConfig().self_handle;
+      } catch {
+        return void 0;
+      }
+    })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
     allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,

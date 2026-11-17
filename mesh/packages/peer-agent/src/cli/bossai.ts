@@ -148,6 +148,8 @@ export interface WakeOpts {
   allow?: string[] | undefined
   /** Sender prefixes allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined
+  /** The worker's own mesh account; approval replies must come from this account (names alone are spoofable). */
+  account?: string | undefined
   /** After the bridge stops, wait this long before restarting it (let BossAI's turn bind). */
   graceMs?: number | undefined
 }
@@ -351,6 +353,8 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
             const cmd = parseApprovalCommand(letter.body)
             if (!cmd) { d.log(`ctl: non-command mail from ${letter.from} discarded`); continue }
             if (!senderAllowed(letter.from, o.approvers)) { d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`); continue }
+            const acct = /account="([^"]*)"/.exec(letter.attrs)?.[1]
+            if (o.account && acct !== o.account) { d.log(`ctl: approval from foreign account ${acct ?? '?'} ignored (approvals stay within ${o.account})`); continue }
             const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason)
             d.log(res.ok ? `ctl: ${cmd.action} ${cmd.toolCallId} settled via mesh (by ${letter.from})` : `ctl: settle ${cmd.toolCallId} failed HTTP ${res.status} (already settled or expired?)`)
           }
@@ -424,6 +428,7 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
     token,
     license,
     notify: flag(args, '--notify'),
+    account: (() => { try { return loadConfig().self_handle } catch { return undefined } })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
     allow: allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined,
