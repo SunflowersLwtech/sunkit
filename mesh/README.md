@@ -533,8 +533,9 @@ while no BossAI peer answers, wake holds the mesh session with its own peer chil
 name), reads the mail, stops the child so BossAI's turn can take the session over, and injects
 the full letters (`<channel>` blocks plus a reply hint). Letters are held and retried if the
 injection hits the concurrency slot; a grace window (`--grace-ms`, default 15s) prevents flapping
-against short turns. `--allow <prefix,…>` whitelists senders by name prefix — mail from anyone
-else is read, discarded and logged, never injected. Without `--bridge`, idle mail queues on the
+against short turns. `--allow <name,…>` admits mail only from a live session with one of these
+exact names on the worker's own account (not a send-only label, not a prefix) — mail from anyone
+else is read, discarded and logged, never injected. It matches names only, with no token pin. Without `--bridge`, idle mail queues on the
 relay until the next turn (the original v1 behavior).
 
 `--approvers <name@token-id,…>` lets named sessions settle those cards: wake holds a

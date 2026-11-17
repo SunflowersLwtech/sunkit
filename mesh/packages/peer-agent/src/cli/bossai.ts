@@ -32,7 +32,7 @@ export const BOSSAI_USAGE =
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
   + '         --allow: only inject mail from a live session ("<name> [ref]", not send-only) whose name\n'
-  + '         equals one of these, on the worker\'s own mesh account (same rule as --approvers).\n'
+  + '         equals one of these, on the worker\'s own mesh account. Names only, no token pin.\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
   + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,\n'
@@ -358,14 +358,29 @@ export function senderAllowed(from: string, allow?: string[]): boolean {
 }
 
 /**
- * --allow uses the approvers' rule: a live session (`<name> [ref]`, not send-only) whose name equals
- * an allowed name, on the worker's own account. A send-only label is any script's choice, and a
- * prefix lets `feishu-assistant-x` through. No --allow keeps every letter (as before).
+ * Who may put mail into the worker (--allow): an exactly readable tag from a live session
+ * (`<name> [ref]`, not send-only) whose name equals an allowed name, on the worker's own account.
+ * A send-only label is any script's choice, and a prefix lets `feishu-assistant-x` through. Names
+ * only: unlike approverVerdict there is no token pin, so this stays its own function and never
+ * reads an approver list. Unknown own account fails closed.
  */
+export function allowLetterVerdict(letter: ChannelLetter, allow: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-listed' | 'foreign-account' | 'no-own-account' {
+  const shape = letterShape(letter)
+  if (shape !== 'ok') return shape
+  const f = parseAttrs(letter.attrs)!
+  if (f.has('sender')) return 'send-only'
+  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get('from') ?? '')
+  if (!m) return 'send-only'
+  if (!allow.includes(m[1]!)) return 'not-listed'
+  if (!account) return 'no-own-account'
+  return f.get('account') === account ? 'ok' : 'foreign-account'
+}
+
+/** --allow filter (allowLetterVerdict). No --allow keeps every letter (as before). */
 export function filterLetters(text: string, allow?: string[], account?: string): { kept: string; dropped: string[] } {
   const letters = parseChannels(text)
-  // With an allow-list, the approvers' verdict decides; that includes dropping a tag that cannot be read exactly.
-  const verdict = (l: ChannelLetter) => (allow?.length ? approverVerdict(l, allow, account) : 'ok')
+  // With an allow-list, a letter whose tag cannot be read exactly is dropped, whatever it names.
+  const verdict = (l: ChannelLetter) => (allow?.length ? allowLetterVerdict(l, allow, account) : 'ok')
   const kept = letters.filter(l => verdict(l) === 'ok')
   const dropped = letters.filter(l => verdict(l) !== 'ok').map(l => `${l.from || '(unreadable tag)'} (${verdict(l)})`)
   const lines = kept.map(l => `<channel${l.attrs}>\n${l.body}\n</channel>`)

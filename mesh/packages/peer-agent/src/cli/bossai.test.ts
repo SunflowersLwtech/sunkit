@@ -408,7 +408,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('stranger [x]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('not-listed')
+    expect(logs.join('\n')).toContain('not-an-approver')
   })
   it('discards non-command mail on the ctl session', async () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', '随便聊聊')])
