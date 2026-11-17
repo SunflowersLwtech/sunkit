@@ -13,6 +13,7 @@ import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.
 import { chooseJoinMode, Inbox } from './inbox.ts'
 import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
+import { parseAllow } from './sender-allow.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
@@ -96,9 +97,14 @@ async function main(): Promise<void> {
 
   server.onerror = err => { logJson('error', 'peer.mcp.error', describeError(err)) }
 
+  // MESH_ALLOW: only these live sessions on this account are surfaced (a pull host reads its own
+  // mail with read_messages, past any filter its waker applies).
+  const allow = parseAllow(process.env.MESH_ALLOW)
   logJson('info', 'peer.startup', {
     relay_url: cfg.relay_url, session: sessionId, name: identity.name, join: joins, mode: decision.mode, reason: decision.reason,
+    ...(allow ? { allow } : {}),
   })
+  if (allow && !cfg.self_handle) logJson('warn', 'peer.allow.no_own_account', { note: 'MESH_ALLOW set but config has no self_handle: every letter is dropped' })
   await server.connect(new StdioServerTransport())
   // Send-only: tools work, but this session is not listed and receives nothing.
   if (!joins) return
@@ -188,6 +194,7 @@ async function main(): Promise<void> {
     gate,
     sessionId,
     chatOnly: true,
+    allow: allow ? { names: allow, ownAccount: cfg.self_handle } : undefined,
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: n => {
       if (inbox) {

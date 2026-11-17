@@ -4,6 +4,7 @@ import { SenderGate } from './gate.ts'
 import type { PermissionTracker } from './permission.ts'
 import type { ReplyLimiter } from './reply-limiter.ts'
 import { logJson } from './logger.ts'
+import { allowVerdict } from './sender-allow.ts'
 
 export interface InboundDispatcherOpts {
   gate: SenderGate
@@ -17,6 +18,8 @@ export interface InboundDispatcherOpts {
   replyLimiter?: ReplyLimiter | undefined
   /** Called for gated inbound chats so approval routing sees both directions of a thread (spec §5). */
   recordDm?: ((handle: string) => void) | undefined
+  /** MESH_ALLOW: only these live sessions on the peer's own account are surfaced. */
+  allow?: { names: string[]; ownAccount: string | undefined } | undefined
 }
 
 export class InboundDispatcher {
@@ -36,6 +39,14 @@ export class InboundDispatcher {
       logJson('warn', 'peer.inbound.wrong_session_drop', { msg_id: e.id })
       this.opts.setCursor(e.id)
       return
+    }
+    if (this.opts.allow) {
+      const verdict = allowVerdict(e, this.opts.allow.names, this.opts.allow.ownAccount)
+      if (verdict !== 'ok') {
+        logJson('warn', 'peer.inbound.allow_drop', { from: e.from_name ?? e.from, verdict, msg_id: e.id })
+        this.opts.setCursor(e.id)
+        return
+      }
     }
     if (e.kind === 'chat') this.opts.recordDm?.(e.from)
     if (e.kind === 'permission_request' && this.opts.permissionTracker) {

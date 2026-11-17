@@ -6339,6 +6339,17 @@ var init_bossai_paths = __esm({
   }
 });
 
+// packages/peer-agent/src/sender-allow.ts
+function parseAllow(value) {
+  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return names.length > 0 ? names : void 0;
+}
+var init_sender_allow = __esm({
+  "packages/peer-agent/src/sender-allow.ts"() {
+    "use strict";
+  }
+});
+
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v4/core/core.js
 // @__NO_SIDE_EFFECTS__
 function $constructor(name, initializer3, params) {
@@ -21622,6 +21633,7 @@ function resolveBossaiServer(o, platform = process.platform, env = process.env) 
 function bossaiServerBody(o) {
   const env = { MESH_JOIN: "pull", MESH_HOST: "bossai", MESH_WAKE: "" };
   if (o.session) env.MESH_SESSION_NAME = o.session;
+  if (o.allow?.length) env.MESH_ALLOW = o.allow.join(",");
   return {
     id: o.id,
     label: `mesh (${o.session ?? o.id})`,
@@ -21635,6 +21647,7 @@ function parseBossaiInstall(args, defaults2) {
     portFile: flag5(args, "--port-file") ?? defaults2.portFile,
     id: flag5(args, "--id") ?? defaults2.id,
     session: flag5(args, "--session") ?? defaults2.session,
+    allow: parseAllow(flag5(args, "--allow")) ?? defaults2.allow,
     node: flag5(args, "--node") ?? defaults2.node,
     peer: flag5(args, "--peer") ?? defaults2.peer
   };
@@ -22090,12 +22103,17 @@ var init_bossai = __esm({
     init_say();
     init_devin();
     init_bossai_paths();
-    BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]
+    init_sender_allow();
+    BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,\u2026>] [--node <path>] [--peer <path>] [--write]
        mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]
                         [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
 
 install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
          (pure config; the BossAI session itself joins the mesh in pull mode).
+         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not
+         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use
+         the same names as wake --allow: mid-turn BossAI reads its mail with read_messages,
+         which wake never sees.
 wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:
          poll the peer's hook socket, inject a mail notice via the local HTTP chat API
          (steer into an active run, else start a turn), report busy/idle, and optionally

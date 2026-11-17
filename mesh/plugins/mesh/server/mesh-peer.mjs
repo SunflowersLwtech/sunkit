@@ -37441,6 +37441,18 @@ function logJson(level, event, fields = {}) {
   process.stderr.write(JSON.stringify({ level, event, at: (/* @__PURE__ */ new Date()).toISOString(), ...safe }) + "\n");
 }
 
+// packages/peer-agent/src/sender-allow.ts
+function parseAllow(value) {
+  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return names.length > 0 ? names : void 0;
+}
+function allowVerdict(e, allow, ownAccount) {
+  if (!e.from_session || !e.from_name) return "send-only";
+  if (!allow.includes(e.from_name)) return "not-listed";
+  if (!ownAccount) return "no-own-account";
+  return e.from === ownAccount ? "ok" : "foreign-account";
+}
+
 // packages/peer-agent/src/inbound.ts
 var InboundDispatcher = class {
   constructor(opts) {
@@ -37461,6 +37473,14 @@ var InboundDispatcher = class {
       logJson("warn", "peer.inbound.wrong_session_drop", { msg_id: e.id });
       this.opts.setCursor(e.id);
       return;
+    }
+    if (this.opts.allow) {
+      const verdict = allowVerdict(e, this.opts.allow.names, this.opts.allow.ownAccount);
+      if (verdict !== "ok") {
+        logJson("warn", "peer.inbound.allow_drop", { from: e.from_name ?? e.from, verdict, msg_id: e.id });
+        this.opts.setCursor(e.id);
+        return;
+      }
     }
     if (e.kind === "chat") this.opts.recordDm?.(e.from);
     if (e.kind === "permission_request" && this.opts.permissionTracker) {
@@ -38317,14 +38337,17 @@ async function main() {
   server.onerror = (err) => {
     logJson("error", "peer.mcp.error", describeError(err));
   };
+  const allow = parseAllow(process.env.MESH_ALLOW);
   logJson("info", "peer.startup", {
     relay_url: cfg.relay_url,
     session: sessionId,
     name: identity.name,
     join: joins,
     mode: decision.mode,
-    reason: decision.reason
+    reason: decision.reason,
+    ...allow ? { allow } : {}
   });
+  if (allow && !cfg.self_handle) logJson("warn", "peer.allow.no_own_account", { note: "MESH_ALLOW set but config has no self_handle: every letter is dropped" });
   await server.connect(new StdioServerTransport());
   if (!joins) return;
   const gate = new SenderGate([]);
@@ -38405,6 +38428,7 @@ async function main() {
     gate,
     sessionId,
     chatOnly: true,
+    allow: allow ? { names: allow, ownAccount: cfg.self_handle } : void 0,
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: (n) => {
       if (inbox) {

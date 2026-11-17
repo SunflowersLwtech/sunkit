@@ -140,6 +140,30 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(await devin.call('read_messages')).toBe('No new messages.')
   })
 
+  it('MESH_ALLOW: a pull peer reads only an allowed live session on its own account; a send-only label, a prefix and another account never reach read_messages', async () => {
+    const worker = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-e2e', MESH_ALLOW: 'boss' })
+    const spoofLabel = await peer('alice', { MESH_JOIN: 'never', MESH_SESSION_NAME: 'boss' })
+    const prefix = await peer('alice', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss-x' })
+    const foreign = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss' })
+    const boss = await peer('alice', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss' })
+    for (const p of [spoofLabel, prefix, foreign, boss]) {
+      await until(async () => ((await p.call('list_agents')).includes('bossai-e2e') ? true : undefined), 'bossai-e2e listed')
+    }
+
+    // The refused letters go first: had any got through, it would be read before the allowed one.
+    await spoofLabel.call('send_message', { to: 'bossai-e2e', message: 'from a send-only label' })
+    await prefix.call('send_message', { to: 'bossai-e2e', message: 'from a prefix' })
+    await foreign.call('send_message', { to: 'bossai-e2e', message: 'from another account' })
+    await boss.call('send_message', { to: 'bossai-e2e', message: 'from the allowed session' })
+
+    const got = await nextMessage(worker)
+    expect(got.body).toBe('from the allowed session')
+    expect(got.attrs.from).toMatch(/^boss \[[0-9a-z]{6}\]$/)
+    expect(got.attrs.account).toBe('alice')
+    await new Promise(r => setTimeout(r, 500))
+    expect(await worker.call('read_messages')).toBe('No new messages.')
+  })
+
   it('an unnamed pull peer is named after its directory with the host prefix, not after a Claude session in that directory', async () => {
     let cwd = ''
     // A live Claude Code session (this test process) registered in the same directory as the host.
