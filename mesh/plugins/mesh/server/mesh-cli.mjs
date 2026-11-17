@@ -21809,10 +21809,12 @@ function createWaker(o, d) {
 async function discoverBossaiSockets(dir = meshDir()) {
   const hooks = join17(dir, "hooks");
   if (!existsSync13(hooks)) return [];
+  const own = hookSocketPath(process.pid, dir);
   const out = [];
   for (const f of readdirSync2(hooks)) {
     if (!f.endsWith(".sock")) continue;
     const path = join17(hooks, f);
+    if (path === own) continue;
     const r = await askHookSocket(path, { op: "whoami" }, 800);
     if (r?.name) out.push({ path, name: r.name });
   }

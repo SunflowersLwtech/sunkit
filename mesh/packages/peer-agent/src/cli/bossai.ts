@@ -331,14 +331,16 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
   }
 }
 
-/** Scan MESH_HOME/hooks/*.sock and whoami each live peer. */
+/** Scan MESH_HOME/hooks/*.sock and whoami each live peer. Skips wake's own bridge socket. */
 export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ path: string; name?: string }[]> {
   const hooks = join(dir, 'hooks')
   if (!existsSync(hooks)) return []
+  const own = hookSocketPath(process.pid, dir)
   const out: { path: string; name?: string }[] = []
   for (const f of readdirSync(hooks)) {
     if (!f.endsWith('.sock')) continue
     const path = join(hooks, f)
+    if (path === own) continue
     const r = await askHookSocket(path, { op: 'whoami' }, 800)
     if (r?.name) out.push({ path, name: r.name })
   }
