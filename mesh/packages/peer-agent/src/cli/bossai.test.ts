@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
   filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
-  approvalNotice, discoverBossaiSockets, parseApprovalCommand, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
+  approvalNotice, bridgeEnv, discoverBossaiSockets, ensureCtlHome, parseApprovalCommand, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
 import type { HookReply, HookRequest } from '../hook-socket.ts'
 
@@ -421,5 +421,23 @@ describe('createWaker approval account fence', () => {
     await createWaker({ ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }, d).tick()
     expect(settled).toHaveLength(0)
     expect(logs.join('\n')).toContain('foreign account')
+  })
+})
+
+describe('bridgeEnv / ensureCtlHome (hook-socket collision fix)', () => {
+  it('ctl peer gets a distinct MESH_HOME so its hook socket cannot steal the bridge socket', async () => {
+    const { bridgeEnv, ensureCtlHome } = await import('./bossai.ts')
+    expect(bridgeEnv({ session: 's' }).MESH_HOME).toBeUndefined()
+    expect(bridgeEnv({ session: 's', meshHome: '/x-ctl' }).MESH_HOME).toBe('/x-ctl')
+    const { mkdtempSync, writeFileSync, readFileSync, existsSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const main = mkdtempSync(join(tmpdir(), 'mesh-main-'))
+    writeFileSync(join(main, 'config.json'), '{"relay_url":"http://r"}')
+    writeFileSync(join(main, 'token'), 'tok')
+    const ctl = ensureCtlHome(main)
+    expect(ctl).toBe(`${main}-ctl`)
+    expect(readFileSync(join(ctl, 'token'), 'utf8')).toBe('tok')
+    expect(existsSync(join(ctl, 'config.json'))).toBe(true)
   })
 })
