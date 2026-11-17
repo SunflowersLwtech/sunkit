@@ -182,6 +182,8 @@ export interface WakeOpts {
   /** Sent with every new turn wake starts; without it a turn falls to the session default. */
   runMode?: 'cloud' | 'hybrid' | 'local' | undefined
   model?: string | undefined
+  /** BossAI's approval-card timeout (askTimeoutMs), stated in the --notify card. */
+  askTimeoutMs?: number | undefined
 }
 
 /** Choose the peer socket whose whoami name matches; with no --session, a unique bossai-* peer. */
@@ -206,11 +208,31 @@ export function redactSubtitle(s: string, max = 160): string {
   return r.length > max ? `${r.slice(0, max)}…` : r
 }
 
-export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string, ctlSession?: string): string {
+/**
+ * BossAI bounds one approval card with BOSSAI_PERMISSION_ASK_TIMEOUT_MS (default 5 minutes, 0 waits
+ * forever) and settles an expired card as a deny, never an allow. The pending-ask API does not
+ * carry the value, so wake reads the same variable, parsed the way BossAI parses it (`Number()`:
+ * unset or not a number is the default, an empty value is 0); start wake with the app's value.
+ */
+export const DEFAULT_ASK_TIMEOUT_MS = 5 * 60_000
+
+export function askTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.BOSSAI_PERMISSION_ASK_TIMEOUT_MS)
+  return Math.max(0, Number.isFinite(v) ? v : DEFAULT_ASK_TIMEOUT_MS)
+}
+
+/** The timeout as the card states it: whole minutes when it divides, else seconds (rounded up). */
+export function askTimeoutText(ms: number): string {
+  if (ms === 0) return 'BossAI 设为不超时，会一直等到有人处理'
+  const s = Math.ceil(ms / 1000)
+  return `${s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`}内没人处理会自动拒`
+}
+
+export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string, ctlSession?: string, timeoutMs = DEFAULT_ASK_TIMEOUT_MS): string {
   const how = ctlSession
     ? `批准/拒绝：给 mesh 会话 ${ctlSession} 发「APPROVE ${ask.toolCallId}」或「DENY ${ask.toolCallId} <理由>」（仅白名单批准人有效，一次性放行）。`
     : '请到 BossAI 桌面端处理。'
-  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ''} — 会话 ${chat}。${how}默认 5 分钟超时自动拒；mesh 不会代为批准。`
+  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ''} — 会话 ${chat}。${how}${askTimeoutText(timeoutMs)}；mesh 不会代为批准。`
 }
 
 export type ApprovalCommand = { action: 'allow' | 'deny'; toolCallId: string; reason?: string }
@@ -470,7 +492,7 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
         const ask = await d.pendingAsk()
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId
-          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : undefined)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : undefined, o.askTimeoutMs)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
         }
         if (!ask) lastAskNotified = undefined
       }
@@ -605,6 +627,7 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
       return m
     })(),
     model: flag(args, '--model'),
+    askTimeoutMs: askTimeoutMs(env),
   }
 }
 
@@ -675,7 +698,7 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
     log,
     sleep: ms => new Promise(r => setTimeout(r, ms)),
   })
-  log(`bossai wake: chat=${o.chat} session=${o.session ?? '(unique bossai-* peer)'} server=${o.server}${o.notify ? ` notify=${o.notify}` : ''}${o.bridge ? ' bridge=on' : ''}${o.allow ? ` allow=${o.allow.join(',')}` : ''}`)
+  log(`bossai wake: chat=${o.chat} session=${o.session ?? '(unique bossai-* peer)'} server=${o.server}${o.notify ? ` notify=${o.notify}` : ''}${o.bridge ? ' bridge=on' : ''}${o.allow ? ` allow=${o.allow.join(',')}` : ''}${o.notify ? ` ask-timeout=${o.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS}ms (BOSSAI_PERMISSION_ASK_TIMEOUT_MS; must match the app's)` : ''}`)
   if (io.once || args.includes('--once')) { await waker.tick(); await waker.shutdown(); return 0 }
   process.on('SIGINT', () => { void waker.shutdown().then(() => process.exit(0)) })
   process.on('SIGTERM', () => { void waker.shutdown().then(() => process.exit(0)) })
