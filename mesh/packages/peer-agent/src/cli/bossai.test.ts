@@ -468,3 +468,16 @@ describe('createWaker ignores send-only peers', () => {
     expect(events).toEqual(['start'])
   })
 })
+
+describe('createWaker permanent bridge', () => {
+  it('starts the bridge even while a run is active (app peer is send-only; sweeps reap offline names)', async () => {
+    const events: string[] = []
+    const d = deps({
+      discover: async () => [],
+      activeRun: async () => true,
+      startBridge: async () => { events.push('start'); return { ask: async () => ({ unread: 0, from: [] }), read: async () => '', stop: async () => {} } },
+    })
+    await createWaker({ ...opts, bridge: true, graceMs: 0 }, d).tick()
+    expect(events).toEqual(['start'])
+  })
+})

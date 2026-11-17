@@ -362,7 +362,9 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
           if (res.ok) { d.log('injected bridged letters (retry)'); pendingLetters = undefined; busy = true }
           else d.log(`bridge injection still failing: HTTP ${res.status}`)
         }
-        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs && !(await d.activeRun())) {
+        // The bridge holds the session permanently: the app peer is send-only and never
+        // takes over the stream, and fleet sweeps reap processes whose mesh name is offline.
+        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs) {
           bridge = await d.startBridge().catch(e => { d.log(`bridge start failed: ${(e as Error).message}`); return undefined })
           if (bridge) d.log('bridge peer holding the session while BossAI is idle')
         }

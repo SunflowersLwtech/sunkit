@@ -21811,7 +21811,7 @@ function createWaker(o, d) {
             busy = true;
           } else d.log(`bridge injection still failing: HTTP ${res.status}`);
         }
-        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs && !await d.activeRun()) {
+        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs) {
           bridge = await d.startBridge().catch((e) => {
             d.log(`bridge start failed: ${e.message}`);
             return void 0;
