@@ -21776,10 +21776,11 @@ function approverVerdict(letter, approvers, account) {
   if (entries.length === 0) return "not-an-approver";
   if (!account) return "no-own-account";
   if (f.get("account") !== account) return "foreign-account";
-  if (entries.some((a) => a.token === void 0)) return "ok";
+  const pins = entries.filter((a) => a.token);
+  if (pins.length === 0) return "unpinned";
   const token = f.get("from_token");
   if (!token) return "no-token";
-  return entries.some((a) => a.token === token) ? "ok" : "wrong-token";
+  return pins.some((a) => a.token === token) ? "ok" : "wrong-token";
 }
 function splitPin(entry) {
   const i = entry.lastIndexOf("@");
