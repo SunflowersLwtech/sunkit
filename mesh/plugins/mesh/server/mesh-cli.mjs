@@ -21566,6 +21566,7 @@ __export(bossai_exports, {
   discoverBossaiSockets: () => discoverBossaiSockets,
   filterLetters: () => filterLetters,
   injectionBody: () => injectionBody,
+  parseApprovalCommand: () => parseApprovalCommand,
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
   parseChannels: () => parseChannels,
@@ -21675,8 +21676,19 @@ function pickHookSocket(entries, session) {
 function injectionBody(notice, activeRun) {
   return activeRun ? { text: notice, deliverAs: "steer" } : { text: notice };
 }
-function approvalNotice(ask, chat) {
-  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${ask.subtitle}` : ""} \u2014 \u4F1A\u8BDD ${chat}\uFF0C\u8BF7\u5230 BossAI \u684C\u9762\u7AEF\u5904\u7406\uFF08\u9ED8\u8BA4 5 \u5206\u949F\u8D85\u65F6\u81EA\u52A8\u62D2\uFF09\u3002mesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
+function approvalNotice(ask, chat, ctlSession) {
+  const how = ctlSession ? `\u6279\u51C6/\u62D2\u7EDD\uFF1A\u7ED9 mesh \u4F1A\u8BDD ${ctlSession} \u53D1\u300CAPPROVE ${ask.toolCallId}\u300D\u6216\u300CDENY ${ask.toolCallId} <\u7406\u7531>\u300D\uFF08\u4EC5\u767D\u540D\u5355\u6279\u51C6\u4EBA\u6709\u6548\uFF0C\u4E00\u6B21\u6027\u653E\u884C\uFF09\u3002` : "\u8BF7\u5230 BossAI \u684C\u9762\u7AEF\u5904\u7406\u3002";
+  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${ask.subtitle}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}\u9ED8\u8BA4 5 \u5206\u949F\u8D85\u65F6\u81EA\u52A8\u62D2\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
+}
+function parseApprovalCommand(body) {
+  const m = /^\s*(APPROVE|DENY)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(body.trim());
+  if (!m) return void 0;
+  const reason = m[3]?.trim();
+  return {
+    action: m[1].toUpperCase() === "APPROVE" ? "allow" : "deny",
+    toolCallId: m[2],
+    ...reason ? { reason: reason.slice(0, 500) } : {}
+  };
 }
 function parseChannels(text) {
   const out = [];
@@ -21714,6 +21726,8 @@ function createWaker(o, d) {
   let bridge;
   let bridgeStoppedAt = 0;
   let pendingLetters;
+  let ctl;
+  const ctlSession = o.session ? `${o.session}-ctl` : void 0;
   const now = d.now ?? Date.now;
   const graceMs = o.graceMs ?? 15e3;
   const stopBridge = async () => {
@@ -21798,9 +21812,36 @@ function createWaker(o, d) {
         const ask = await d.pendingAsk();
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId;
-          await d.notify(approvalNotice(ask, o.chat)).catch((e) => d.log(`approval notify failed: ${e.message}`));
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0)).catch((e) => d.log(`approval notify failed: ${e.message}`));
         }
         if (!ask) lastAskNotified = void 0;
+      }
+      if (o.approvers?.length && d.startCtl && d.resolveAsk && ctlSession) {
+        if (!ctl) ctl = await d.startCtl().catch((e) => {
+          d.log(`ctl peer start failed: ${e.message}`);
+          return void 0;
+        });
+        if (ctl) {
+          const text = await ctl.read().catch(() => "");
+          for (const letter of parseChannels(text)) {
+            const cmd = parseApprovalCommand(letter.body);
+            if (!cmd) {
+              d.log(`ctl: non-command mail from ${letter.from} discarded`);
+              continue;
+            }
+            if (!senderAllowed(letter.from, o.approvers)) {
+              d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`);
+              continue;
+            }
+            const acct = /account="([^"]*)"/.exec(letter.attrs)?.[1];
+            if (o.account && acct !== o.account) {
+              d.log(`ctl: approval from foreign account ${acct ?? "?"} ignored (approvals stay within ${o.account})`);
+              continue;
+            }
+            const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason);
+            d.log(res.ok ? `ctl: ${cmd.action} ${cmd.toolCallId} settled via mesh (by ${letter.from})` : `ctl: settle ${cmd.toolCallId} failed HTTP ${res.status} (already settled or expired?)`);
+          }
+        }
       }
     },
     async run() {
@@ -21868,9 +21909,20 @@ function parseBossaiWake(args, env = process.env) {
     token,
     license,
     notify: flag5(args, "--notify"),
+    account: (() => {
+      try {
+        return loadConfig().self_handle;
+      } catch {
+        return void 0;
+      }
+    })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
     allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
+    approvers: (() => {
+      const a = flag5(args, "--approvers");
+      return a ? a.split(",").map((s) => s.trim()).filter(Boolean) : void 0;
+    })(),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3
   };
 }
@@ -21900,6 +21952,23 @@ async function runBossaiWake(args, io = {}) {
       peer: fileURLToPath6(new URL("./mesh-peer.mjs", import.meta.url)),
       session: o.session ?? `bossai-${o.chat}`
     }) : void 0,
+    startCtl: o.approvers?.length && o.session ? async () => {
+      const h = await startMcpBridge({
+        node: stableNode(process.env.PATH, process.execPath),
+        peer: fileURLToPath6(new URL("./mesh-peer.mjs", import.meta.url)),
+        session: `${o.session}-ctl`
+      });
+      return { read: h.read };
+    } : void 0,
+    resolveAsk: async (toolCallId, action, reason) => {
+      const res = await fetchImpl(api(`/sessions/${o.chat}/permission-ask`), {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ toolCallId, action, scope: "once", ...reason ? { reason } : {} }),
+        signal: AbortSignal.timeout(8e3)
+      });
+      return { ok: res.ok, status: res.status };
+    },
     activeRun: async () => {
       const res = await fetchImpl(api(`/pi/sessions/${o.chat}/runs/active`), { headers: auth, signal: AbortSignal.timeout(5e3) });
       if (!res.ok) return false;
@@ -21955,7 +22024,7 @@ var init_bossai = __esm({
     init_say();
     init_devin();
     init_bossai_paths();
-    BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\nCloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).";
+    BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\n         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\nCloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).";
   }
 });
 
