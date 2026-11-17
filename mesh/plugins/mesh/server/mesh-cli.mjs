@@ -22158,7 +22158,7 @@ wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secr
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
 --license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
-    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source", "from_token"]);
+    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
 });
 

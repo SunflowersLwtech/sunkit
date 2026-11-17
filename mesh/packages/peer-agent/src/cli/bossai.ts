@@ -255,10 +255,10 @@ export interface ChannelLetter { attrs: string; from: string; body: string }
 /**
  * The keys a <channel> tag carries when nothing but the relay wrote it. Sender meta is rendered
  * first and can add any other key (`x_from`, `reply_from`, …), so a key is read by its exact name,
- * never by a substring search, and a letter with a key outside this set is not trusted.
- * `from_token` is reserved for the relay-assigned token id.
+ * never by a substring search, and a letter with a key outside this set is not trusted. It must
+ * equal the keys shared's envelopeToChannelNotification reserves, or a real approval is refused.
  */
-export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source', 'from_token'])
+export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
 
 /**
  * Parse ` key="value" …` exactly: every byte belongs to an attribute and no key appears twice.
