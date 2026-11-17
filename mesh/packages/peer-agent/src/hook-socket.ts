@@ -30,7 +30,7 @@ export type HookRequest = (
   /** Card fields a hook knows and the peer does not (e.g. Claude Code's model); validated by the peer. */
   | { op: 'card'; card: Record<string, unknown> }
 ) & { at?: number }
-export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean; session?: string; name?: string }
+export interface HookReply { unread: number; from: string[]; continue?: boolean; notify?: boolean; session?: string; name?: string; mode?: 'pull' | 'push' | 'send' }
 
 export interface HookExtras {
   /** The host's lifecycle, for the task driver. */

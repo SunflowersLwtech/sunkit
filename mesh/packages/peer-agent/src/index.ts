@@ -170,7 +170,7 @@ async function main(): Promise<void> {
         void tasks?.on(e)
       },
       onCard: c => cards.set(cardFromHook(c)),
-      whoami: () => ({ session: sessionId, name: identity.name }),
+      whoami: () => ({ session: sessionId, name: identity.name, mode: decision.mode }),
       wakeAllowed: () => wakeBudget.take(),
     })
     serveHookSocket(hookPath, channel)

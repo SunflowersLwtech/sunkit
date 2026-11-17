@@ -21770,7 +21770,7 @@ function createWaker(o, d) {
   return {
     async tick() {
       const entries = await d.discover();
-      const bossaiSocket = pickHookSocket(entries, o.session);
+      const bossaiSocket = pickHookSocket(entries.filter((e) => e.mode !== "send"), o.session);
       if (bossaiSocket) {
         await stopBridge();
         socket = bossaiSocket;
@@ -21898,7 +21898,7 @@ async function discoverBossaiSockets(dir = meshDir()) {
     const path = join18(hooks, f);
     if (path === own) continue;
     const r = await askHookSocket(path, { op: "whoami" }, 800);
-    if (r?.name) out.push({ path, name: r.name });
+    if (r?.name) out.push({ path, name: r.name, ...r.mode ? { mode: r.mode } : {} });
   }
   return out;
 }

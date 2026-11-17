@@ -225,7 +225,7 @@ export interface WakeDeps {
   /** Ask a hook socket; undefined when nobody answers. */
   ask: (path: string, req: HookRequest) => Promise<HookReply | undefined>
   /** Candidate sockets with whoami names, refreshed by the caller. */
-  discover: () => Promise<{ path: string; name?: string }[]>
+  discover: () => Promise<{ path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[]>
   activeRun: () => Promise<boolean>
   inject: (body: Record<string, unknown>) => Promise<{ ok: boolean; status: number }>
   pendingAsk: () => Promise<{ toolCallId: string; toolName?: string; subtitle?: string } | undefined>
@@ -322,7 +322,9 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
   return {
     async tick(): Promise<void> {
       const entries = await d.discover()
-      const bossaiSocket = pickHookSocket(entries, o.session)
+      // Send-only peers (the app's managed MCP peer) serve a hook socket under the same
+      // name but hold no inbox; only a pull peer means BossAI itself is reading mail.
+      const bossaiSocket = pickHookSocket(entries.filter(e => e.mode !== 'send'), o.session)
       if (bossaiSocket) {
         await stopBridge()
         socket = bossaiSocket
@@ -420,17 +422,17 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
 }
 
 /** Scan MESH_HOME/hooks/*.sock and whoami each live peer. Skips wake's own bridge socket. */
-export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ path: string; name?: string }[]> {
+export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[]> {
   const hooks = join(dir, 'hooks')
   if (!existsSync(hooks)) return []
   const own = hookSocketPath(process.pid, dir)
-  const out: { path: string; name?: string }[] = []
+  const out: { path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[] = []
   for (const f of readdirSync(hooks)) {
     if (!f.endsWith('.sock')) continue
     const path = join(hooks, f)
     if (path === own) continue
     const r = await askHookSocket(path, { op: 'whoami' }, 800)
-    if (r?.name) out.push({ path, name: r.name })
+    if (r?.name) out.push({ path, name: r.name, ...(r.mode ? { mode: r.mode } : {}) })
   }
   return out
 }

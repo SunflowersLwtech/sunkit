@@ -336,8 +336,8 @@ describe('discoverBossaiSockets', () => {
     const { Inbox } = await import('../inbox.ts')
     const dir = mkdtempSync(join(tmpdir(), 'mesh-hooks-'))
     mkdirSync(join(dir, 'hooks'), { recursive: true })
-    const own = await serveHookSocket(hookSocketPath(process.pid, dir), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's', name: 'bossai-devdesk' }) }))
-    const other = await serveHookSocket(join(dir, 'hooks', '999999.sock'), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's2', name: 'bossai-devdesk' }) }))
+    const own = await serveHookSocket(hookSocketPath(process.pid, dir), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's', name: 'bossai-devdesk', mode: 'pull' }) }))
+    const other = await serveHookSocket(join(dir, 'hooks', '999999.sock'), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's2', name: 'bossai-devdesk', mode: 'pull' }) }))
     try {
       const found = await discoverBossaiSockets(dir)
       expect(found.map(f => f.path)).toEqual([join(dir, 'hooks', '999999.sock')])
@@ -439,5 +439,32 @@ describe('bridgeEnv / ensureCtlHome (hook-socket collision fix)', () => {
     expect(ctl).toBe(`${main}-ctl`)
     expect(readFileSync(join(ctl, 'token'), 'utf8')).toBe('tok')
     expect(existsSync(join(ctl, 'config.json'))).toBe(true)
+  })
+})
+
+describe('createWaker run-loop resilience', () => {
+  it('survives a tick that throws (e.g. app restart mid-poll)', async () => {
+    let n = 0
+    const d = deps({ discover: async () => { if (n++ === 0) throw new Error('fetch failed'); return [] } })
+    let sleeps = 0
+    d.sleep = async () => { if (++sleeps >= 3) throw new Error('stop-test') }
+    const w = createWaker(opts, d)
+    const logs: string[] = []
+    d.log = s => logs.push(s)
+    await expect(w.run()).rejects.toThrow('stop-test')
+    expect(logs.join('\n')).toContain('tick failed')
+    expect(n).toBeGreaterThan(1)
+  })
+})
+
+describe('createWaker ignores send-only peers', () => {
+  it('starts the bridge even when a send-only peer answers whoami under the same name', async () => {
+    const events: string[] = []
+    const d = deps({
+      discover: async () => [{ path: '/app.sock', name: 'bossai-devdesk', mode: 'send' }],
+      startBridge: async () => { events.push('start'); return { ask: async () => ({ unread: 0, from: [] }), read: async () => '', stop: async () => {} } },
+    })
+    await createWaker({ ...opts, bridge: true, graceMs: 0 }, d).tick()
+    expect(events).toEqual(['start'])
   })
 })
