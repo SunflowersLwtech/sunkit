@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { askHookSocket, hookSocketPath, type HookReply, type HookRequest } from '../hook-socket.ts'
@@ -389,13 +389,39 @@ export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ 
  * session name. Its hook socket is keyed by this process's pid (the peer's ppid). Stopping
  * closes the MCP transport, which kills the child and frees the session for BossAI's own peer.
  */
-export async function startMcpBridge(o: { node: string; peer: string; session: string }): Promise<BridgeHandle> {
+/**
+ * Bridge peer env. A distinct MESH_HOME moves the peer's hook socket out of the default
+ * hooks dir: two peers under the same wake pid would otherwise fight over one socket path
+ * (the ctl peer must not steal the main bridge's socket).
+ */
+export function bridgeEnv(o: { session: string; meshHome?: string }): Record<string, string> {
+  const env: Record<string, string> = { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: o.session, MESH_WAKE: '' }
+  if (o.meshHome) env.MESH_HOME = o.meshHome
+  return env
+}
+
+/** The ctl peer gets its own MESH_HOME; wake seeds it with the device pairing (same machine). */
+export function ensureCtlHome(mainDir: string = meshDir()): string {
+  const ctlDir = `${mainDir}-ctl`
+  mkdirSync(ctlDir, { recursive: true, mode: 0o700 })
+  for (const f of ['config.json', 'token']) {
+    const src = join(mainDir, f)
+    const dst = join(ctlDir, f)
+    if (existsSync(src) && !existsSync(dst)) {
+      copyFileSync(src, dst)
+      chmodSync(dst, 0o600)
+    }
+  }
+  return ctlDir
+}
+
+export async function startMcpBridge(o: { node: string; peer: string; session: string; meshHome?: string }): Promise<BridgeHandle> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
   const { StdioClientTransport, getDefaultEnvironment } = await import('@modelcontextprotocol/sdk/client/stdio.js')
   const transport = new StdioClientTransport({
     command: o.node,
     args: [o.peer],
-    env: { ...getDefaultEnvironment(), MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: o.session, MESH_WAKE: '' },
+    env: { ...getDefaultEnvironment(), ...bridgeEnv(o) },
   })
   const client = new Client({ name: 'bossai-wake-bridge', version: '0.1.0' })
   await client.connect(transport)
@@ -466,6 +492,7 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
           node: stableNode(process.env.PATH, process.execPath),
           peer: fileURLToPath(new URL('./mesh-peer.mjs', import.meta.url)),
           session: `${o.session}-ctl`,
+          meshHome: ensureCtlHome(),
         })
         return { read: h.read }
       }

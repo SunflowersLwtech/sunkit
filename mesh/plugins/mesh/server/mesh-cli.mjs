@@ -21561,9 +21561,11 @@ __export(bossai_exports, {
   bossaiControlToken: () => bossaiControlToken,
   bossaiPortFile: () => bossaiPortFile,
   bossaiServerBody: () => bossaiServerBody,
+  bridgeEnv: () => bridgeEnv,
   bridgeNotice: () => bridgeNotice,
   createWaker: () => createWaker,
   discoverBossaiSockets: () => discoverBossaiSockets,
+  ensureCtlHome: () => ensureCtlHome,
   filterLetters: () => filterLetters,
   injectionBody: () => injectionBody,
   parseApprovalCommand: () => parseApprovalCommand,
@@ -21579,7 +21581,7 @@ __export(bossai_exports, {
   senderAllowed: () => senderAllowed,
   startMcpBridge: () => startMcpBridge
 });
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync2, mkdirSync as mkdirSync9, copyFileSync as copyFileSync5, chmodSync as chmodSync3 } from "node:fs";
 import { join as join18 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 function flag5(args, name) {
@@ -21869,13 +21871,31 @@ async function discoverBossaiSockets(dir = meshDir()) {
   }
   return out;
 }
+function bridgeEnv(o) {
+  const env = { MESH_JOIN: "pull", MESH_HOST: "bossai", MESH_SESSION_NAME: o.session, MESH_WAKE: "" };
+  if (o.meshHome) env.MESH_HOME = o.meshHome;
+  return env;
+}
+function ensureCtlHome(mainDir = meshDir()) {
+  const ctlDir = `${mainDir}-ctl`;
+  mkdirSync9(ctlDir, { recursive: true, mode: 448 });
+  for (const f of ["config.json", "token"]) {
+    const src = join18(mainDir, f);
+    const dst = join18(ctlDir, f);
+    if (existsSync13(src) && !existsSync13(dst)) {
+      copyFileSync5(src, dst);
+      chmodSync3(dst, 384);
+    }
+  }
+  return ctlDir;
+}
 async function startMcpBridge(o) {
   const { Client: Client2 } = await Promise.resolve().then(() => (init_client2(), client_exports));
   const { StdioClientTransport: StdioClientTransport2, getDefaultEnvironment: getDefaultEnvironment2 } = await Promise.resolve().then(() => (init_stdio2(), stdio_exports));
   const transport = new StdioClientTransport2({
     command: o.node,
     args: [o.peer],
-    env: { ...getDefaultEnvironment2(), MESH_JOIN: "pull", MESH_HOST: "bossai", MESH_SESSION_NAME: o.session, MESH_WAKE: "" }
+    env: { ...getDefaultEnvironment2(), ...bridgeEnv(o) }
   });
   const client = new Client2({ name: "bossai-wake-bridge", version: "0.1.0" });
   await client.connect(transport);
@@ -21956,7 +21976,8 @@ async function runBossaiWake(args, io = {}) {
       const h = await startMcpBridge({
         node: stableNode(process.env.PATH, process.execPath),
         peer: fileURLToPath6(new URL("./mesh-peer.mjs", import.meta.url)),
-        session: `${o.session}-ctl`
+        session: `${o.session}-ctl`,
+        meshHome: ensureCtlHome()
       });
       return { read: h.read };
     } : void 0,
