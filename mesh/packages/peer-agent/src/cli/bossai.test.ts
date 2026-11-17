@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
   filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
-  readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
+  discoverBossaiSockets, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
 import type { HookReply, HookRequest } from '../hook-socket.ts'
 
@@ -324,5 +324,23 @@ describe('parseBossaiWake license', () => {
     expect(o.license).toBe('lic')
     const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o2.license).toBeUndefined()
+  })
+})
+
+describe('discoverBossaiSockets', () => {
+  it('skips wake own bridge socket so the bridge is not mistaken for BossAI peer', async () => {
+    const { mkdtempSync, mkdirSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { serveHookSocket, HookChannel, hookSocketPath } = await import('../hook-socket.ts')
+    const { Inbox } = await import('../inbox.ts')
+    const dir = mkdtempSync(join(tmpdir(), 'mesh-hooks-'))
+    mkdirSync(join(dir, 'hooks'), { recursive: true })
+    const own = await serveHookSocket(hookSocketPath(process.pid, dir), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's', name: 'bossai-devdesk' }) }))
+    const other = await serveHookSocket(join(dir, 'hooks', '999999.sock'), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's2', name: 'bossai-devdesk' }) }))
+    try {
+      const found = await discoverBossaiSockets(dir)
+      expect(found.map(f => f.path)).toEqual([join(dir, 'hooks', '999999.sock')])
+    } finally { own.close(); other.close() }
   })
 })
