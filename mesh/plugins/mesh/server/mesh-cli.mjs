@@ -21570,6 +21570,7 @@ var init_stdio2 = __esm({
 var bossai_exports = {};
 __export(bossai_exports, {
   BOSSAI_USAGE: () => BOSSAI_USAGE,
+  CHANNEL_KEYS: () => CHANNEL_KEYS,
   approvalNotice: () => approvalNotice,
   approverVerdict: () => approverVerdict,
   assertLoopbackServer: () => assertLoopbackServer,
@@ -21583,7 +21584,9 @@ __export(bossai_exports, {
   ensureCtlHome: () => ensureCtlHome,
   filterLetters: () => filterLetters,
   injectionBody: () => injectionBody,
+  letterShape: () => letterShape,
   parseApprovalCommand: () => parseApprovalCommand,
+  parseAttrs: () => parseAttrs,
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
   parseChannels: () => parseChannels,
@@ -21727,24 +21730,46 @@ function parseApprovalCommand(body) {
     ...reason ? { reason: reason.slice(0, 500) } : {}
   };
 }
+function parseAttrs(attrs) {
+  const re = /\s+([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"/y;
+  const out = /* @__PURE__ */ new Map();
+  let i = 0;
+  for (; ; ) {
+    re.lastIndex = i;
+    const m = re.exec(attrs);
+    if (!m) break;
+    if (out.has(m[1])) return void 0;
+    out.set(m[1], m[2]);
+    i = re.lastIndex;
+  }
+  return attrs.slice(i).trim() === "" ? out : void 0;
+}
+function letterShape(letter) {
+  const f = parseAttrs(letter.attrs);
+  if (!f) return "malformed";
+  for (const k of f.keys()) if (!CHANNEL_KEYS.has(k)) return "unknown-key";
+  return "ok";
+}
 function parseChannels(text) {
   const out = [];
   const re = /<channel([^>]*)>\n([\s\S]*?)\n<\/channel>/g;
   for (const m of text.matchAll(re)) {
     const attrs = m[1] ?? "";
-    const from = /from="([^"]*)"/.exec(attrs)?.[1] ?? "";
+    const from = parseAttrs(attrs)?.get("from") ?? "";
     out.push({ attrs, from, body: m[2] ?? "" });
   }
   return out;
 }
 function approverVerdict(letter, approvers, account) {
-  if (/\ssender="/.test(` ${letter.attrs}`)) return "send-only";
-  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(letter.from);
+  const shape = letterShape(letter);
+  if (shape !== "ok") return shape;
+  const f = parseAttrs(letter.attrs);
+  if (f.has("sender")) return "send-only";
+  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get("from") ?? "");
   if (!m) return "send-only";
   if (!approvers.includes(m[1])) return "not-an-approver";
   if (!account) return "no-own-account";
-  const acct = /(?:^|\s)account="([^"]*)"/.exec(letter.attrs)?.[1];
-  return acct === account ? "ok" : "foreign-account";
+  return f.get("account") === account ? "ok" : "foreign-account";
 }
 function senderAllowed(from, allow) {
   if (!allow || allow.length === 0) return true;
@@ -21753,8 +21778,9 @@ function senderAllowed(from, allow) {
 }
 function filterLetters(text, allow) {
   const letters = parseChannels(text);
-  const kept = letters.filter((l) => senderAllowed(l.from, allow));
-  const dropped = letters.filter((l) => !senderAllowed(l.from, allow)).map((l) => l.from);
+  const keep = (l) => senderAllowed(l.from, allow) && (!allow?.length || letterShape(l) === "ok");
+  const kept = letters.filter(keep);
+  const dropped = letters.filter((l) => !keep(l)).map((l) => l.from || "(unreadable tag)");
   const lines = kept.map((l) => `<channel${l.attrs}>
 ${l.body}
 </channel>`);
@@ -22091,7 +22117,7 @@ async function runBossai(args) {
   console.error(BOSSAI_USAGE);
   return 2;
 }
-var BOSSAI_USAGE;
+var BOSSAI_USAGE, CHANNEL_KEYS;
 var init_bossai = __esm({
   "packages/peer-agent/src/cli/bossai.ts"() {
     "use strict";
@@ -22132,6 +22158,7 @@ wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secr
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
 --license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
+    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source", "from_token"]);
   }
 });
 

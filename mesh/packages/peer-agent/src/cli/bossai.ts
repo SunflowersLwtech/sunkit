@@ -252,13 +252,48 @@ export interface WakeDeps {
 
 export interface ChannelLetter { attrs: string; from: string; body: string }
 
+/**
+ * The keys a <channel> tag carries when nothing but the relay wrote it. Sender meta is rendered
+ * first and can add any other key (`x_from`, `reply_from`, …), so a key is read by its exact name,
+ * never by a substring search, and a letter with a key outside this set is not trusted.
+ * `from_token` is reserved for the relay-assigned token id.
+ */
+export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source', 'from_token'])
+
+/**
+ * Parse ` key="value" …` exactly: every byte belongs to an attribute and no key appears twice.
+ * Undefined when the tag is malformed or repeats a key.
+ */
+export function parseAttrs(attrs: string): Map<string, string> | undefined {
+  const re = /\s+([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"/y
+  const out = new Map<string, string>()
+  let i = 0
+  for (;;) {
+    re.lastIndex = i
+    const m = re.exec(attrs)
+    if (!m) break
+    if (out.has(m[1]!)) return undefined
+    out.set(m[1]!, m[2]!)
+    i = re.lastIndex
+  }
+  return attrs.slice(i).trim() === '' ? out : undefined
+}
+
+/** Whether a letter's tag can be trusted at all: well-formed, no repeated key, only relay keys. */
+export function letterShape(letter: ChannelLetter): 'ok' | 'malformed' | 'unknown-key' {
+  const f = parseAttrs(letter.attrs)
+  if (!f) return 'malformed'
+  for (const k of f.keys()) if (!CHANNEL_KEYS.has(k)) return 'unknown-key'
+  return 'ok'
+}
+
 /** Parse formatInbox's <channel …> blocks so the whitelist can filter by sender. */
 export function parseChannels(text: string): ChannelLetter[] {
   const out: ChannelLetter[] = []
   const re = /<channel([^>]*)>\n([\s\S]*?)\n<\/channel>/g
   for (const m of text.matchAll(re)) {
     const attrs = m[1] ?? ''
-    const from = /from="([^"]*)"/.exec(attrs)?.[1] ?? ''
+    const from = parseAttrs(attrs)?.get('from') ?? ''
     out.push({ attrs, from, body: m[2] ?? '' })
   }
   return out
@@ -270,14 +305,16 @@ export function parseChannels(text: string): ChannelLetter[] {
  * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), and the
  * relay-verified account must be the worker's own. Unknown own account fails closed.
  */
-export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' {
-  if (/\ssender="/.test(` ${letter.attrs}`)) return 'send-only'
-  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(letter.from)
+export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' {
+  const shape = letterShape(letter)
+  if (shape !== 'ok') return shape
+  const f = parseAttrs(letter.attrs)!
+  if (f.has('sender')) return 'send-only'
+  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get('from') ?? '')
   if (!m) return 'send-only'
   if (!approvers.includes(m[1]!)) return 'not-an-approver'
   if (!account) return 'no-own-account'
-  const acct = /(?:^|\s)account="([^"]*)"/.exec(letter.attrs)?.[1]
-  return acct === account ? 'ok' : 'foreign-account'
+  return f.get('account') === account ? 'ok' : 'foreign-account'
 }
 
 /** A sender is allowed when its name (before any [ref]) starts with an allowed prefix. */
@@ -289,8 +326,10 @@ export function senderAllowed(from: string, allow?: string[]): boolean {
 
 export function filterLetters(text: string, allow?: string[]): { kept: string; dropped: string[] } {
   const letters = parseChannels(text)
-  const kept = letters.filter(l => senderAllowed(l.from, allow))
-  const dropped = letters.filter(l => !senderAllowed(l.from, allow)).map(l => l.from)
+  // With an allow-list, a letter whose tag cannot be read exactly is dropped, whatever it names.
+  const keep = (l: ChannelLetter) => senderAllowed(l.from, allow) && (!allow?.length || letterShape(l) === 'ok')
+  const kept = letters.filter(keep)
+  const dropped = letters.filter(l => !keep(l)).map(l => l.from || '(unreadable tag)')
   const lines = kept.map(l => `<channel${l.attrs}>\n${l.body}\n</channel>`)
   return { kept: lines.join('\n'), dropped }
 }
