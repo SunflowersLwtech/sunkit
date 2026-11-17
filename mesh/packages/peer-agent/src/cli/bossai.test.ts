@@ -317,3 +317,12 @@ describe('parseBossaiWake v2 flags', () => {
     expect(o.graceMs).toBe(5000)
   })
 })
+
+describe('parseBossaiWake license', () => {
+  it('reads the license from env or file and attaches nothing when absent', () => {
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'lic' })
+    expect(o.license).toBe('lic')
+    const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(o2.license).toBeUndefined()
+  })
+})
