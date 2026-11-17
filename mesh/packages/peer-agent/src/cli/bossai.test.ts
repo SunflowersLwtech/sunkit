@@ -385,7 +385,7 @@ describe('parseApprovalCommand / approvalNotice v3', () => {
 })
 
 describe('createWaker --approvers (mesh-side approval settlement)', () => {
-  const ctlLetter = (from: string, body: string) => `<channel from="${from}" account="weiliu" msg_id="m">\n${body}\n</channel>`
+  const ctlLetter = (from: string, body: string) => `<channel from="${from}" account="weiliu" from_token="tk_N150" msg_id="m">\n${body}\n</channel>`
   function ctlDeps(reads: string[], over: Partial<WakeDeps> = {}) {
     const settled: { id: string; action: string; reason?: string }[] = []
     const logs: string[] = []
@@ -398,7 +398,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     })
     return { d, settled, logs }
   }
-  const aopts = { ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }
+  const aopts = { ...opts, approvers: ['feishu-assistant@tk_N150'], account: 'weiliu' }
   it('settles an APPROVE from an allowed approver, scope once', async () => {
     const { d, settled } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
@@ -442,11 +442,11 @@ describe('createWaker approval account fence', () => {
     const logs: string[] = []
     const d = deps({
       discover: async () => [],
-      startCtl: async () => ({ read: async () => '<channel from="feishu-assistant [x]" account="intruder" msg_id="m">\nAPPROVE call_1\n</channel>' }),
+      startCtl: async () => ({ read: async () => '<channel from="feishu-assistant [x]" account="intruder" from_token="tk_N150" msg_id="m">\nAPPROVE call_1\n</channel>' }),
       resolveAsk: async id => { settled.push(id); return { ok: true, status: 200 } },
       log: s => logs.push(s),
     })
-    await createWaker({ ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }, d).tick()
+    await createWaker({ ...opts, approvers: ['feishu-assistant@tk_N150'], account: 'weiliu' }, d).tick()
     expect(settled).toHaveLength(0)
     expect(logs.join('\n')).toContain('foreign-account')
   })

@@ -537,6 +537,19 @@ against short turns. `--allow <prefix,…>` whitelists senders by name prefix �
 else is read, discarded and logged, never injected. Without `--bridge`, idle mail queues on the
 relay until the next turn (the original v1 behavior).
 
+`--approvers <name@token-id,…>` lets named sessions settle those cards: wake holds a
+`<session>-ctl` mesh session, and a reply `APPROVE|DENY <toolCallId> [reason]` settles the ask only
+when it comes from a live session with that name, on the worker's own account, sent with that
+token. The relay stamps every letter with `from_token`, the id of the token that sent it (a sender
+cannot set it), so a session of the same name on another token of the account is refused, and so
+is every letter from a relay too old to stamp it. A bare name is refused. An admin lists ids by
+device label with `GET /v1/admin/tokens`; without the admin token, send any message from the
+approver's machine to a session you can read and copy `from_token` from the `<channel>` tag.
+Every recipient, on any account, sees the sender's token id: it is not a credential (granting or
+revoking needs the admin token), but its ULID shows when that device was paired. Re-pairing or
+rotating the approver's token changes the id, and the pin then refuses everything (fails closed)
+until wake is restarted with the new one.
+
 Caveats, honest ones:
 
 - The chat API requires a BossAI Cloud identity: give `wake` a token via `BOSSAI_CLOUD_TOKEN` or

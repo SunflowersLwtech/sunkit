@@ -308,10 +308,11 @@ export function parseChannels(text: string): ChannelLetter[] {
  * Who may settle an approval. A send-only sender's name is a label any script on the account
  * picks, so only a live session counts (`from` carries `[ref]`, no `sender` attr), its name must
  * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), the
- * relay-verified account must be the worker's own, and for an entry `<name>@<token-id>` the letter
- * must carry that relay-stamped token id. Unknown own account fails closed.
+ * relay-verified account must be the worker's own, and the letter must carry the relay-stamped
+ * token id an entry `<name>@<token-id>` pins. A bare `<name>` entry is `unpinned` and never settles.
+ * Unknown own account fails closed.
  */
-export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' | 'no-token' | 'wrong-token' {
+export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' | 'unpinned' | 'no-token' | 'wrong-token' {
   const shape = letterShape(letter)
   if (shape !== 'ok') return shape
   const f = parseAttrs(letter.attrs)!
@@ -322,12 +323,14 @@ export function approverVerdict(letter: ChannelLetter, approvers: string[], acco
   if (entries.length === 0) return 'not-an-approver'
   if (!account) return 'no-own-account'
   if (f.get('account') !== account) return 'foreign-account'
-  // A name is any session's choice, even across one account's devices: a pinned entry also needs
-  // the relay-stamped id of the token that sent the letter. No stamp (an older relay) fails closed.
-  if (entries.some(a => a.token === undefined)) return 'ok'
+  // A name is any session's choice, even across one account's devices: only a pinned entry can
+  // settle, and only with the relay-stamped id of the token that sent the letter. A bare name never
+  // does, even next to a pin for the same name. No stamp (an older relay) fails closed.
+  const pins = entries.filter(a => a.token)
+  if (pins.length === 0) return 'unpinned'
   const token = f.get('from_token')
   if (!token) return 'no-token'
-  return entries.some(a => a.token === token) ? 'ok' : 'wrong-token'
+  return pins.some(a => a.token === token) ? 'ok' : 'wrong-token'
 }
 
 function splitPin(entry: string): { name: string; token?: string } {

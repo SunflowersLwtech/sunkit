@@ -67,6 +67,7 @@ describe('GET /v1/stream', () => {
     expect(msg).toBeDefined()
     expect(msg!).toContain('"from":"alice"')
     expect(msg!).toContain('"content":"hello"')
+    expect(msg!).toContain('"from_token":"tk_a"')
   })
 
   it('?since=<id> replays buffered messages in order', async () => {
@@ -84,6 +85,8 @@ describe('GET /v1/stream', () => {
     expect(msgEvents).toHaveLength(3)
     expect(msgEvents[0]!).toContain('"content":"1"')
     expect(msgEvents[2]!).toContain('"content":"3"')
+    // A replayed letter keeps the stamp: an approval read after a reconnect must still settle.
+    for (const e of msgEvents) expect(e).toContain('"from_token":"tk_a"')
   })
 
   it('401 without auth', async () => {
