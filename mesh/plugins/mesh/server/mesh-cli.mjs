@@ -21726,7 +21726,7 @@ function approverVerdict(letter, approvers, account) {
   if (/\ssender="/.test(` ${letter.attrs}`)) return "send-only";
   const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(letter.from);
   if (!m) return "send-only";
-  if (!approvers.includes(m[1])) return "not-an-approver";
+  if (!approvers.includes(m[1])) return "not-listed";
   if (!account) return "no-own-account";
   const acct = /(?:^|\s)account="([^"]*)"/.exec(letter.attrs)?.[1];
   return acct === account ? "ok" : "foreign-account";
@@ -21736,10 +21736,11 @@ function senderAllowed(from, allow) {
   const name = from.split(" [")[0].trim();
   return allow.some((p) => name.startsWith(p));
 }
-function filterLetters(text, allow) {
+function filterLetters(text, allow, account) {
   const letters = parseChannels(text);
-  const kept = letters.filter((l) => senderAllowed(l.from, allow));
-  const dropped = letters.filter((l) => !senderAllowed(l.from, allow)).map((l) => l.from);
+  const verdict = (l) => allow ? approverVerdict(l, allow, account) : "ok";
+  const kept = letters.filter((l) => verdict(l) === "ok");
+  const dropped = letters.filter((l) => verdict(l) !== "ok").map((l) => `${l.from} (${verdict(l)})`);
   const lines = kept.map((l) => `<channel${l.attrs}>
 ${l.body}
 </channel>`);
@@ -21822,7 +21823,7 @@ function createWaker(o, d) {
           const r = await bridge.ask({ op: "wake" });
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read();
-            const { kept, dropped } = filterLetters(text, o.allow);
+            const { kept, dropped } = filterLetters(text, o.allow, o.account);
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(", ")}`);
             await stopBridge();
             if (kept) {
@@ -22099,7 +22100,8 @@ wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the
          --bridge: while BossAI's own peer is offline (managed MCP connections close on
          session teardown), wake holds the mesh session with its own peer child, reads
          mail, stops the child, and injects the full letters so no mail waits for a turn.
-         --allow: only inject mail whose sender name starts with one of these prefixes.
+         --allow: only inject mail from a live session ("<name> [ref]", not send-only) whose name
+         equals one of these, on the worker's own mesh account (same rule as --approvers).
          --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with
          APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).
          Only a live session (from="<name> [ref]", not send-only) whose name equals an approver

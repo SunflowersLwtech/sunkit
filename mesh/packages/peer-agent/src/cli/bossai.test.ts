@@ -234,10 +234,10 @@ describe('parseChannels / senderAllowed / filterLetters', () => {
     expect(senderAllowed('anyone', undefined)).toBe(true)
   })
   it('keeps allowed letters and reports dropped senders', () => {
-    const r = filterLetters(text, ['feishu-assistant'])
+    const r = filterLetters(text, ['feishu-assistant'], 'weiliu')
     expect(r.kept).toContain('任务一')
     expect(r.kept).not.toContain('坏信')
-    expect(r.dropped).toEqual(['stranger [x]'])
+    expect(r.dropped).toEqual(['stranger [x] (not-listed)'])
   })
 })
 
@@ -384,7 +384,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('stranger [x]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('not-an-approver')
+    expect(logs.join('\n')).toContain('not-listed')
   })
   it('discards non-command mail on the ctl session', async () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', '随便聊聊')])

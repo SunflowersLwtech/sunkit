@@ -26,7 +26,8 @@ export const BOSSAI_USAGE =
   + '         --bridge: while BossAI\'s own peer is offline (managed MCP connections close on\n'
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
-  + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
+  + '         --allow: only inject mail from a live session ("<name> [ref]", not send-only) whose name\n'
+  + '         equals one of these, on the worker\'s own mesh account (same rule as --approvers).\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
   + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver\n'
@@ -158,7 +159,7 @@ export interface WakeOpts {
   pollMs: number
   /** Hold the mesh session with a bridge peer while BossAI's own peer is offline. */
   bridge?: boolean | undefined
-  /** Sender name prefixes allowed to wake the worker; undefined = all. */
+  /** Session names allowed to wake the worker (live session, exact name, own account); undefined = all. */
   allow?: string[] | undefined
   /** Sender prefixes allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined
@@ -261,11 +262,11 @@ export function parseChannels(text: string): ChannelLetter[] {
  * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), and the
  * relay-verified account must be the worker's own. Unknown own account fails closed.
  */
-export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' {
+export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'send-only' | 'not-listed' | 'foreign-account' | 'no-own-account' {
   if (/\ssender="/.test(` ${letter.attrs}`)) return 'send-only'
   const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(letter.from)
   if (!m) return 'send-only'
-  if (!approvers.includes(m[1]!)) return 'not-an-approver'
+  if (!approvers.includes(m[1]!)) return 'not-listed'
   if (!account) return 'no-own-account'
   const acct = /(?:^|\s)account="([^"]*)"/.exec(letter.attrs)?.[1]
   return acct === account ? 'ok' : 'foreign-account'
@@ -278,10 +279,16 @@ export function senderAllowed(from: string, allow?: string[]): boolean {
   return allow.some(p => name.startsWith(p))
 }
 
-export function filterLetters(text: string, allow?: string[]): { kept: string; dropped: string[] } {
+/**
+ * --allow uses the approvers' rule: a live session (`<name> [ref]`, not send-only) whose name equals
+ * an allowed name, on the worker's own account. A send-only label is any script's choice, and a
+ * prefix lets `feishu-assistant-x` through. No --allow keeps every letter (as before).
+ */
+export function filterLetters(text: string, allow?: string[], account?: string): { kept: string; dropped: string[] } {
   const letters = parseChannels(text)
-  const kept = letters.filter(l => senderAllowed(l.from, allow))
-  const dropped = letters.filter(l => !senderAllowed(l.from, allow)).map(l => l.from)
+  const verdict = (l: ChannelLetter) => (allow ? approverVerdict(l, allow, account) : 'ok')
+  const kept = letters.filter(l => verdict(l) === 'ok')
+  const dropped = letters.filter(l => verdict(l) !== 'ok').map(l => `${l.from} (${verdict(l)})`)
   const lines = kept.map(l => `<channel${l.attrs}>\n${l.body}\n</channel>`)
   return { kept: lines.join('\n'), dropped }
 }
@@ -368,7 +375,7 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
           const r = await bridge.ask({ op: 'wake' })
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read()
-            const { kept, dropped } = filterLetters(text, o.allow)
+            const { kept, dropped } = filterLetters(text, o.allow, o.account)
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(', ')}`)
             await stopBridge()
             if (kept) {
