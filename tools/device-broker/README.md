@@ -70,7 +70,11 @@ shell — it outlives the one-shot `device-broker` call. `--owner-pid` overrides
 
 Identity across calls: set `DB_OWNER_KEY` (or `DB_SESSION`) to one value per
 task — e.g. `export DB_OWNER_KEY="$(git rev-parse --show-toplevel):$$"` — and
-every wrapper inherits it. `OWNER_KEY`/`--owner-key` exists for tests.
+every wrapper inherits it. With no key anywhere, `acquire` refuses at the first
+call (exit 4), as `simctl-run boot` does: the old default named the broker's own
+short-lived pid, a key no later call could ever match. `release` and `check` also
+refuse (exit 4) without a key rather than fail open on a lease they cannot read.
+`OWNER_KEY`/`--owner-key` exists for tests.
 
 ### Resource names and caps
 
@@ -106,7 +110,10 @@ cap exits 6 and lists the live holders.
 - **`simctl-run <verb> <udid>`** — `boot` leases both `ios-simulator:udid-<u>`
   and the `ios-simulator:host` budget, both alive while the simulator is
   booted; other verbs verify the lease before running `xcrun simctl`.
-  `shutdown` releases. `boot` needs `DB_OWNER_KEY` (or `DB_SESSION`): without
+  The UDID is upper-cased first: `xcrun simctl list` prints UDIDs in uppercase
+  and the booted-match is exact, so one spelling per simulator keeps the leases
+  live and the one-simulator cap honest. `shutdown` releases. `boot` needs
+  `DB_OWNER_KEY` (or `DB_SESSION`): without
   it no later call could show the simulator is the session's, so it refuses
   (exit 4) before leasing or booting anything. Shared persistent simulators
   stay booted — release the lease, don't shutdown.

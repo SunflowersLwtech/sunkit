@@ -27,6 +27,13 @@ case "${UDID}" in
   [0-9A-Fa-f]*-[0-9A-Fa-f]*) ;;  # UDID-ish
   *) echo "simctl-run: '${UDID}' is not a simulator UDID" >&2; exit 4 ;;
 esac
+# xcrun simctl list prints UDIDs in uppercase and device-broker's sim_booted
+# matches exactly, so a lowercase UDID would lease a simulator never seen as
+# booted (both leases stale the moment this script exits) and slip past the
+# one-simulator cap under a second spelling. One spelling per simulator:
+# uppercase here, before the lease names, --while-booted and xcrun see it.
+# tr, not ${UDID^^}: macOS system bash is 3.2.
+UDID="$(printf '%s' "${UDID}" | tr '[:lower:]' '[:upper:]')"
 
 RES="ios-simulator:udid-${UDID}"
 HOSTRES="ios-simulator:host"
