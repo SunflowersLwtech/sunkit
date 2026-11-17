@@ -154,14 +154,16 @@ dir_mtime_s() {
   stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
-# owner key: stable per session/worktree; --owner-key overrides (tests use it)
+# owner key: stable per session/worktree; --owner-key overrides (tests use it).
+# No key anywhere is refused at the first call, as simctl-run boot refuses:
+# the old default (<toplevel>:<broker pid>) named a process that exits at once,
+# so no later call could ever match it — a lease acquired under it could not
+# be shown to be the caller's, and shutdown/release would refuse it.
 owner_key() {
   if [ -n "${OWNER_KEY:-}" ]; then printf '%s' "${OWNER_KEY}"; return; fi
   if [ -n "${DB_OWNER_KEY:-}" ]; then printf '%s' "${DB_OWNER_KEY}"; return; fi
   if [ -n "${DB_SESSION:-}" ]; then printf '%s' "${DB_SESSION}"; return; fi
-  local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top="${PWD}"
-  printf '%s:%s' "${top}" "$$"
+  die "set DB_OWNER_KEY (or DB_SESSION) to this session's own name: without it no later call can show a lease is this session's" 4
 }
 
 # cap_key_candidates RESOURCE -> candidate cap keys, longest first.
@@ -258,6 +260,9 @@ cmd_acquire() {
   [ -n "${res}" ] || die "usage: acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]" 4
   case "${res}" in *[!A-Za-z0-9:._-]*) die "bad resource name ${res}" 4 ;; esac
   case "${wb}" in *[!0-9A-Fa-f-]*) die "bad simulator UDID ${wb}" 4 ;; esac
+  # Settle the owner key before leasing anything: with no key anywhere this
+  # refuses now (owner_key), not after a claim dir no later call can match.
+  owner_key >/dev/null
 
   local capkey cap
   read -r capkey cap <<<"$(resolve_cap "${res}")"
@@ -269,9 +274,10 @@ cmd_acquire() {
       die "physical-device leases are not auto-acquirable (a human may be holding the device); see docs" 5 ;;
   esac
 
-  local d="${LEASES}/${res}.lock" attempt=0
+  local d="${LEASES}/${res}.lock" attempt=0 owned=0
   while [ "${attempt}" -lt 3 ]; do
     if mkdir "${d}" 2>/dev/null; then
+      owned=1
       break
     fi
     # Exists: live, stale, or cannot tell?
@@ -293,13 +299,30 @@ cmd_acquire() {
       sed 's/^/  /' "${jf}" >&2 || true
       exit 3
     else
-      # Stale or unreadable: reclaim by removing the dir, then retry mkdir.
-      rm -f "${d}/lease.json" 2>/dev/null
-      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+      # Stale: reclaim under a lock of its own. Two acquirers that both judge
+      # one lease stale must not each remove what the other just claimed (the
+      # second rmdir would take the first's brand-new directory, and both
+      # mkdirs would succeed). The loser of the mkdir race retries and sees
+      # the winner's lease. A reclaim lock older than the grace window is a
+      # reclaim that died mid-step: break it, or the resource wedges forever.
+      if mkdir "${d}.reclaim" 2>/dev/null; then
+        rm -f "${d}/lease.json" 2>/dev/null
+        rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+        rmdir "${d}.reclaim" 2>/dev/null
+      else
+        local rmt
+        rmt="$(dir_mtime_s "${d}.reclaim")"
+        if [ -n "${rmt}" ] && [ $(( $(now_s) - rmt )) -gt "${DB_GRACE_S:-30}" ]; then
+          rmdir "${d}.reclaim" 2>/dev/null
+        fi
+      fi
     fi
     attempt=$((attempt+1))
   done
-  [ -d "${d}" ] || die "could not acquire ${res} after ${attempt} attempts" 4
+  # Only a mkdir this call won owns the dir: falling out of the loop with the
+  # dir still there (a reclaim lock held, a racer ahead) is a refusal, not a
+  # licence to write over whoever holds it now.
+  [ "${owned}" = 1 ] || die "could not acquire ${res} after ${attempt} attempts" 4
 
   # Enforce the cap resolved for this resource's key: count OTHER live leases
   # under the same prefix.
