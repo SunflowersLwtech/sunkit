@@ -21,9 +21,9 @@ export const BOSSAI_USAGE =
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
   + '         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not\n'
-  + '         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use\n'
-  + '         the same names as wake --allow: mid-turn BossAI reads its mail with read_messages,\n'
-  + '         which wake never sees.\n'
+  + '         send-only) with a listed name, on its own mesh account, sent with the pinned token\n'
+  + '         (MESH_ALLOW, <session-name>@<token-id>). Use the same pins as wake --allow: mid-turn\n'
+  + '         BossAI reads its mail with read_messages, which wake never sees.\n'
   + 'wake:    resident injector — BossAI has no hooks surface, so this plays the hooks\' role:\n'
   + '         poll the peer\'s hook socket, inject a mail notice via the local HTTP chat API\n'
   + '         (steer into an active run, else start a turn), report busy/idle, and optionally\n'
@@ -31,7 +31,9 @@ export const BOSSAI_USAGE =
   + '         --bridge: while BossAI\'s own peer is offline (managed MCP connections close on\n'
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
-  + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
+  + '         --allow: only inject mail that --approvers would accept as a sender: a live session\n'
+  + '         with that name, on the worker\'s own account, sent with the pinned token. Entries are\n'
+  + '         <session-name>@<token-id>, like --approvers; a bare name or an empty list is refused.\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
   + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,\n'
@@ -56,7 +58,7 @@ export interface BossaiInstallOpts {
   id: string
   /** Mesh session name the peer registers as (MESH_SESSION_NAME). */
   session?: string | undefined
-  /** Session names the peer takes mail from (MESH_ALLOW); undefined = every sender. */
+  /** `<name>@<token-id>` pins the peer takes mail from (MESH_ALLOW); undefined = every sender. */
   allow?: string[] | undefined
   node: string
   peer: string
@@ -111,7 +113,13 @@ export function parseBossaiInstall(args: string[], defaults: BossaiInstallOpts):
     portFile: flag(args, '--port-file') ?? defaults.portFile,
     id: flag(args, '--id') ?? defaults.id,
     session: flag(args, '--session') ?? defaults.session,
-    allow: parseAllow(flag(args, '--allow')) ?? defaults.allow,
+    allow: (() => {
+      const raw = flag(args, '--allow')
+      if (raw === undefined) return defaults.allow
+      const allow = parseAllow(raw)
+      if (allow === undefined) throw new Error('--allow is empty; give <session-name>@<token-id>,… or leave the flag out')
+      return allow
+    })(),
     node: flag(args, '--node') ?? defaults.node,
     peer: flag(args, '--peer') ?? defaults.peer,
   }
@@ -171,7 +179,7 @@ export interface WakeOpts {
   pollMs: number
   /** Hold the mesh session with a bridge peer while BossAI's own peer is offline. */
   bridge?: boolean | undefined
-  /** Sender name prefixes allowed to wake the worker; undefined = all. */
+  /** `<name>@<token-id>` pins whose mail is injected (same rule as approvers); undefined = all. */
   allow?: string[] | undefined
   /** `<name>@<token-id>` pins allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined

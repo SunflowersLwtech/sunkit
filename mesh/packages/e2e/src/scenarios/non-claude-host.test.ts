@@ -148,28 +148,41 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     expect(await devin.call('read_messages')).toBe('No new messages.')
   })
 
-  it('MESH_ALLOW: a pull peer reads only an allowed live session on its own account; a send-only label, a prefix and another account never reach read_messages', async () => {
-    const worker = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-e2e', MESH_ALLOW: 'boss' })
+  it('MESH_ALLOW pinned to a token: the worker reads only mail from a live session with the allowed name sent with that token', async () => {
+    const tokens = await (await fetch(`${h.relayUrl}/v1/admin/tokens`, { headers: { authorization: `Bearer ${h.adminToken}` } })).json() as Array<{ id: string; label: string; handle: string }>
+    const approverId = tokens.find(t => t.handle === 'alice' && t.label === 'e2e')!.id
+    const worker = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-e2e', MESH_ALLOW: `boss@${approverId}` })
     const spoofLabel = await peer('alice', { MESH_JOIN: 'never', MESH_SESSION_NAME: 'boss' })
     const prefix = await peer('alice', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss-x' })
     const foreign = await peer('bob', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss' })
+    // A same-name session on another token of the account: the name squat #97 addressed.
+    const code = (await (await fetch(`${h.relayUrl}/v1/admin/users/alice/devices`, { method: 'POST', headers: { authorization: `Bearer ${h.adminToken}`, 'content-type': 'application/json' }, body: '{}' })).json() as { pair_code: string }).pair_code
+    const other = (await (await fetch(`${h.relayUrl}/v1/auth/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pair_code: code, device_label: 'squatter' }) })).json() as { token: string }).token
+    const stream = new AbortController()
+    const opened = await fetch(`${h.relayUrl}/v1/stream?session=s_squatter000000001&name=boss`, { headers: { authorization: `Bearer ${other}` }, signal: stream.signal })
+    expect(opened.status).toBe(200)
     const boss = await peer('alice', { MESH_JOIN: 'pull', MESH_SESSION_NAME: 'boss' })
     for (const p of [spoofLabel, prefix, foreign, boss]) {
       await until(async () => ((await p.call('list_agents')).includes('bossai-e2e') ? true : undefined), 'bossai-e2e listed')
     }
 
-    // The refused letters go first: had any got through, it would be read before the allowed one.
-    await spoofLabel.call('send_message', { to: 'bossai-e2e', message: 'from a send-only label' })
-    await prefix.call('send_message', { to: 'bossai-e2e', message: 'from a prefix' })
-    await foreign.call('send_message', { to: 'bossai-e2e', message: 'from another account' })
-    await boss.call('send_message', { to: 'bossai-e2e', message: 'from the allowed session' })
+    try {
+      // The refused letters go first: had any got through, it would be read before the allowed one.
+      await spoofLabel.call('send_message', { to: 'bossai-e2e', message: 'from a send-only label' })
+      await prefix.call('send_message', { to: 'bossai-e2e', message: 'from a prefix' })
+      await foreign.call('send_message', { to: 'bossai-e2e', message: 'from another account' })
+      expect((await fetch(`${h.relayUrl}/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${other}`, 'content-type': 'application/json', 'x-mesh-session': 's_squatter000000001' }, body: JSON.stringify({ to: 'alice', kind: 'chat', content: 'from the squatter' }) })).status).toBe(201)
+      await boss.call('send_message', { to: 'bossai-e2e', message: 'from the allowed session' })
 
-    const got = await nextMessage(worker)
-    expect(got.body).toBe('from the allowed session')
-    expect(got.attrs.from).toMatch(/^boss \[[0-9a-z]{6}\]$/)
-    expect(got.attrs.account).toBe('alice')
-    await new Promise(r => setTimeout(r, 500))
-    expect(await worker.call('read_messages')).toBe('No new messages.')
+      const got = await nextMessage(worker)
+      expect(got.body).toBe('from the allowed session')
+      expect(got.attrs.from).toMatch(/^boss \[[0-9a-z]{6}\]$/)
+      expect(got.attrs.account).toBe('alice')
+      await new Promise(r => setTimeout(r, 500))
+      expect(await worker.call('read_messages')).toBe('No new messages.')
+    } finally {
+      stream.abort()
+    }
   })
 
   it('wake reads a letter tag by exact key: sender meta naming the approver (x_from) neither approves nor passes --allow, a live approver does', async () => {
