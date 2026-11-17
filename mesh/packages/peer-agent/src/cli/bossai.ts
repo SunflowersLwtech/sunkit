@@ -12,7 +12,7 @@ import { stableNode } from './devin.ts'
 
 export const BOSSAI_USAGE =
   'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n'
-  + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
+  + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
   + '                        [--bridge] [--allow <name-prefix,…>] [--grace-ms <n>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
@@ -25,7 +25,9 @@ export const BOSSAI_USAGE =
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
   + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
-  + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).'
+  + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\n'
+  + 'Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n'
+  + '--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).'
 
 export interface BossaiInstallOpts {
   /** BossAI embedded server origin, e.g. http://127.0.0.1:57291. Discovered from the port file when absent. */
@@ -141,6 +143,8 @@ export interface WakeOpts {
   session?: string | undefined
   server: string
   token: string
+  /** Enterprise cloud license (X-BossAI-Cloud-License); cloud models need it per request. */
+  license?: string | undefined
   notify?: string | undefined
   pollMs: number
   /** Hold the mesh session with a bridge peer while BossAI's own peer is offline. */
@@ -373,6 +377,8 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
   const tokenFile = flag(args, '--token-file')
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined)
   if (!token) throw new Error('wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).')
+  const licenseFile = flag(args, '--license-file')
+  const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync(licenseFile, 'utf8').trim() : undefined)
   const pollMs = Number(flag(args, '--poll-ms') ?? 3_000)
   const graceMs = Number(flag(args, '--grace-ms') ?? 15_000)
   const allowRaw = flag(args, '--allow')
@@ -381,6 +387,7 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
     session: flag(args, '--session'),
     server: resolveBossaiServer({ server: flag(args, '--server'), portFile: flag(args, '--port-file') }),
     token,
+    license,
     notify: flag(args, '--notify'),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
@@ -394,7 +401,8 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
   let o: WakeOpts
   try { o = parseBossaiWake(args) } catch (e) { log((e as Error).message); return 2 }
   const fetchImpl = io.fetch ?? fetch
-  const auth = { Authorization: `Bearer ${o.token}`, 'Content-Type': 'application/json' }
+  const auth: Record<string, string> = { Authorization: `Bearer ${o.token}`, 'Content-Type': 'application/json' }
+  if (o.license) auth['X-BossAI-Cloud-License'] = o.license
   const api = (path: string) => `${o.server}/api${path}`
   let relay: RelayClient | undefined
   if (o.notify) {

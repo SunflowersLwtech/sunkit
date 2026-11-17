@@ -21846,6 +21846,8 @@ function parseBossaiWake(args, env = process.env) {
   const tokenFile = flag5(args, "--token-file");
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync14(tokenFile, "utf8").trim() : void 0);
   if (!token) throw new Error("wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).");
+  const licenseFile = flag5(args, "--license-file");
+  const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync14(licenseFile, "utf8").trim() : void 0);
   const pollMs = Number(flag5(args, "--poll-ms") ?? 3e3);
   const graceMs = Number(flag5(args, "--grace-ms") ?? 15e3);
   const allowRaw = flag5(args, "--allow");
@@ -21854,6 +21856,7 @@ function parseBossaiWake(args, env = process.env) {
     session: flag5(args, "--session"),
     server: resolveBossaiServer({ server: flag5(args, "--server"), portFile: flag5(args, "--port-file") }),
     token,
+    license,
     notify: flag5(args, "--notify"),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
@@ -21872,6 +21875,7 @@ async function runBossaiWake(args, io = {}) {
   }
   const fetchImpl = io.fetch ?? fetch;
   const auth = { Authorization: `Bearer ${o.token}`, "Content-Type": "application/json" };
+  if (o.license) auth["X-BossAI-Cloud-License"] = o.license;
   const api = (path) => `${o.server}/api${path}`;
   let relay;
   if (o.notify) {
@@ -21940,7 +21944,7 @@ var init_bossai = __esm({
     init_outbound();
     init_say();
     init_devin();
-    BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).";
+    BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\nCloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).";
   }
 });
 
