@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { registerTools, TOOL_DESCRIPTORS } from './tools.ts'
+import { createWorkerAllowed, registerTools, toolDescriptors, TOOL_DESCRIPTORS } from './tools.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import type { RelayClient } from './outbound.ts'
 import type { SessionRow } from './resolve-target.ts'
@@ -27,6 +27,31 @@ describe('tools', () => {
     expect(TOOL_DESCRIPTORS.map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker'])
   })
 
+  it('create_worker is a push-mode Claude Code tool: pull and bossai peers get it only with MESH_CREATE_WORKER=1', () => {
+    expect(createWorkerAllowed({ pull: false })).toBe(true)
+    expect(createWorkerAllowed({ pull: true, host: 'devin' })).toBe(false)
+    // A bossai host is refused on the host alone, whatever the join mode.
+    expect(createWorkerAllowed({ pull: false, host: 'bossai' })).toBe(false)
+    expect(createWorkerAllowed({ pull: true, host: 'bossai', optIn: '1' })).toBe(true)
+    expect(createWorkerAllowed({ pull: false, host: 'bossai', optIn: '1' })).toBe(true)
+    expect(createWorkerAllowed({ pull: true, optIn: '0' })).toBe(false)
+    expect(createWorkerAllowed({ pull: true, optIn: 'yes' })).toBe(false)
+  })
+
+  it('a peer without create_worker neither lists it nor runs it', async () => {
+    expect(toolDescriptors({ pull: true, createWorker: false }).map(t => t.name)).toEqual(['list_agents', 'send_message', 'read_messages'])
+    expect(toolDescriptors({ pull: false, createWorker: false }).map(t => t.name)).toEqual(['list_agents', 'send_message'])
+    expect(toolDescriptors({ pull: true, createWorker: true }).map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker', 'read_messages'])
+    expect(toolDescriptors({ pull: false, createWorker: true }).map(t => t.name)).toEqual(['list_agents', 'send_message', 'create_worker'])
+    const calls: string[][] = []
+    const spawnRunner = async (_machine: string, argv: string[]) => { calls.push(argv); return '{}' }
+    for (const opts of [{ selfSessionId: SELF, spawnRunner, createWorker: false }, { selfSessionId: SELF, spawnRunner }]) {
+      const { callTool } = registerTools(fakeClient(), opts)
+      await expect(callTool('create_worker', { machine: 'devdesk', name: 'w1', cwd: '/x', prompt: 'p' })).rejects.toThrow(/MESH_CREATE_WORKER=1/)
+    }
+    expect(calls).toEqual([])
+  })
+
   it('create_worker creates a herdr workspace, starts the agent in its pane and prompts it', async () => {
     const calls: Array<{ machine: string; argv: string[] }> = []
     const spawnRunner = async (machine: string, argv: string[]) => {
@@ -36,7 +61,7 @@ describe('tools', () => {
       }
       return '{}'
     }
-    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner, createWorker: true })
     const res = await callTool('create_worker', {
       machine: 'devdesk', name: 'shellnet', cwd: '/home/u/repo', prompt: 'study sandboxing',
       kind: 'devin', agent_args: ['--permission-mode', 'smart'],
@@ -53,7 +78,7 @@ describe('tools', () => {
 
   it('create_worker fails when workspace create returns no pane_id', async () => {
     const spawnRunner = async () => JSON.stringify({ result: {} })
-    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner, createWorker: true })
     await expect(callTool('create_worker', {
       machine: 'devdesk', name: 'w1', cwd: '/x', prompt: 'p',
     })).rejects.toThrow('pane_id')
@@ -62,7 +87,7 @@ describe('tools', () => {
   it('create_worker rejects a malformed worker name before running anything on the machine', async () => {
     const calls: string[][] = []
     const spawnRunner = async (_machine: string, argv: string[]) => { calls.push(argv); return '{}' }
-    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner })
+    const { callTool } = registerTools(fakeClient(), { selfSessionId: SELF, spawnRunner, createWorker: true })
     await expect(callTool('create_worker', {
       machine: 'devdesk', name: 'Bad Name!', cwd: '/x', prompt: 'p',
     })).rejects.toThrow(/name/)

@@ -48,6 +48,8 @@ describe('bossaiServerBody', () => {
     expect(t.command).toBe('/n')
     expect(t.args).toEqual(['/p.mjs'])
     expect(t.env).toEqual({ MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
+    // create_worker stays off for BossAI: install never writes the opt-in.
+    expect(t.env).not.toHaveProperty('MESH_CREATE_WORKER')
   })
   it('omits MESH_SESSION_NAME when unnamed', () => {
     const body = bossaiServerBody({ id: 'mesh', node: '/n', peer: '/p' })

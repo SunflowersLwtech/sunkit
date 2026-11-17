@@ -31,6 +31,8 @@ afterAll(() => { rmSync(outDir, { recursive: true, force: true }) })
 
 interface Peer {
   call: (tool: string, args?: Record<string, unknown>) => Promise<string>
+  /** Tool names the peer lists (tools/list). */
+  tools: () => Promise<string[]>
   stop: () => void
   /** What a host such as Devin CLI does when it exits: close the pipe, send no signal. */
   closeStdin: () => void
@@ -56,7 +58,7 @@ async function startPeer(h: Harness, who: string, extra: Record<string, string>,
   let buf = ''
   let stderr = ''
   let next = 1
-  const waiting = new Map<number, (m: { result?: { content?: Array<{ text: string }>; isError?: boolean }; error?: unknown }) => void>()
+  const waiting = new Map<number, (m: { result?: { content?: Array<{ text: string }>; isError?: boolean; tools?: Array<{ name: string }> }; error?: unknown }) => void>()
   p.stderr.on('data', d => { stderr += d })
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(res => { p.on('exit', (code, signal) => res({ code, signal })) })
   p.on('exit', code => {
@@ -70,7 +72,7 @@ async function startPeer(h: Harness, who: string, extra: Record<string, string>,
       try { const m = JSON.parse(line); waiting.get(m.id)?.(m); waiting.delete(m.id) } catch { /* not JSON-RPC */ }
     }
   })
-  const rpc = (method: string, params: unknown) => new Promise<{ result?: { content?: Array<{ text: string }>; isError?: boolean }; error?: unknown }>(res => {
+  const rpc = (method: string, params: unknown) => new Promise<{ result?: { content?: Array<{ text: string }>; isError?: boolean; tools?: Array<{ name: string }> }; error?: unknown }>(res => {
     const id = next++
     waiting.set(id, res)
     p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
@@ -84,6 +86,11 @@ async function startPeer(h: Harness, who: string, extra: Record<string, string>,
       const text = (m.result?.content ?? []).map(c => c.text).join('\n')
       if (m.error || m.result?.isError) throw new Error(text || JSON.stringify(m.error))
       return text
+    },
+    tools: async () => {
+      const m = await rpc('tools/list', {})
+      if (m.error) throw new Error(JSON.stringify(m.error))
+      return (m.result?.tools ?? []).map(t => t.name)
     },
     stop: () => { p.kill() },
     closeStdin: () => { p.stdin.end() },
@@ -191,6 +198,16 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     const kept = filterLetters(text, ['feishu-assistant']).kept
     expect(kept).toContain('call_real')
     expect(kept).not.toContain('call_forged')
+  })
+
+  it('create_worker: a BossAI pull peer neither lists nor runs it; MESH_CREATE_WORKER=1 brings it back', async () => {
+    const bossai = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-nocw' })
+    expect(await bossai.tools()).toEqual(['list_agents', 'send_message', 'read_messages'])
+    // Called anyway (a host can call a tool it was never shown): refused before anything runs.
+    await expect(bossai.call('create_worker', { machine: 'nowhere-e2e', name: 'w1', cwd: '/x', prompt: 'p' })).rejects.toThrow(/MESH_CREATE_WORKER=1/)
+
+    const optedIn = await peer('alice', { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_SESSION_NAME: 'bossai-cw', MESH_CREATE_WORKER: '1' })
+    expect(await optedIn.tools()).toContain('create_worker')
   })
 
   it('an unnamed pull peer is named after its directory with the host prefix, not after a Claude session in that directory', async () => {

@@ -37368,8 +37368,16 @@ var PULL_TOOL_DESCRIPTORS = [
     }
   }
 ];
+function createWorkerAllowed(o) {
+  if (o.optIn?.trim() === "1") return true;
+  return !o.pull && o.host?.trim() !== "bossai";
+}
+function toolDescriptors(o) {
+  const all = o.pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS;
+  return all.filter((t) => o.createWorker || t.name !== "create_worker");
+}
 function registerTools(client, opts) {
-  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner } = opts;
+  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner, createWorker = false } = opts;
   async function callTool(name, args) {
     if (name === "list_agents") {
       ListInput.parse(args);
@@ -37402,6 +37410,7 @@ function registerTools(client, opts) {
       return { content: [{ type: "text", text: formatInbox(inbox.take(input.limit)) }] };
     }
     if (name === "create_worker") {
+      if (!createWorker) throw new Error("create_worker is not offered by this peer (a pull or bossai peer needs MESH_CREATE_WORKER=1)");
       const input = CreateWorkerInput.parse(args);
       const text = await spawnWorker({ ...input, agentArgs: input.agent_args }, spawnRunner);
       return { content: [{ type: "text", text }] };
@@ -38323,8 +38332,9 @@ async function main() {
   });
   const inbox = pull ? new Inbox() : void 0;
   const replyLimiter = new ReplyLimiter({ windowMs: 1e4, maxReplies: 2 });
-  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox });
-  const tools = pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS;
+  const createWorker = createWorkerAllowed({ pull, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER });
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox, createWorker });
+  const tools = toolDescriptors({ pull, createWorker });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...tools] }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {

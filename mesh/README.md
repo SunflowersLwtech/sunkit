@@ -494,6 +494,7 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 | `MESH_HOST` | short host label (`devin`, `agy`, `grok`, `pi`) that prefixes a pull session's fallback name |
 | `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the Devin, agy or grok hooks); for pi, any value but `0` makes the extension start the turn itself |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
+| `MESH_CREATE_WORKER` | `1`: offer `create_worker` on a pull or BossAI peer. Unset: those peers neither list nor run it (it spawns an agent over ssh, and a host that approves MCP tools by wildcard would run it unasked); push-mode Claude Code sessions always have it |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from
 this version. Against an older relay, pull sessions still work but show no marker, and send-only
@@ -516,7 +517,8 @@ node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow 
 `install` discovers the server port from the app's `desktop-server-port.json` (override with
 `--server`/`--port-file`), bootstraps the MCP control token, and registers `mesh-peer.mjs` as a
 stdio MCP server (`MESH_JOIN=pull`, `MESH_HOST=bossai`). The BossAI session itself joins the mesh;
-its agent gets `list_agents` / `send_message` / `read_messages` and reads mail with its own tools.
+its agent gets `list_agents` / `send_message` / `read_messages` and reads mail with its own tools;
+`create_worker` is not offered (see `MESH_CREATE_WORKER`), and `install` never turns it on.
 Verified live against BossAI 1.3.34 (macOS arm64): config write, tool discovery, mesh registration.
 
 `wake` plays the hooks' role from outside: it finds the peer's hook socket by `whoami`, asks
