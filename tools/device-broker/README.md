@@ -72,8 +72,9 @@ Identity across calls: set `DB_OWNER_KEY` (or `DB_SESSION`) to one value per
 task — e.g. `export DB_OWNER_KEY="$(git rev-parse --show-toplevel):$$"` — and
 every wrapper inherits it. With no key anywhere, `acquire` refuses at the first
 call (exit 4), as `simctl-run boot` does: the old default named the broker's own
-short-lived pid, a key no later call could ever match. `OWNER_KEY`/`--owner-key`
-exists for tests.
+short-lived pid, a key no later call could ever match. `release` and `check` also
+refuse (exit 4) without a key rather than fail open on a lease they cannot read.
+`OWNER_KEY`/`--owner-key` exists for tests.
 
 ### Resource names and caps
 

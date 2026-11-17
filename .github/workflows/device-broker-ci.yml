@@ -22,4 +22,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Show which bash runs the scripts (PATH decides, not the step wrapper)
+        run: |
+          command -v bash; bash --version | head -1
+          if [ "$RUNNER_OS" = macOS ]; then
+            bash -c '[ "${BASH_VERSINFO[0]}" = 3 ]' || { echo "::error::expected the macOS system bash 3.2 on PATH"; exit 1; }
+          fi
       - run: bash tools/device-broker/tests/run-tests.sh

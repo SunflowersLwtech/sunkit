@@ -356,7 +356,7 @@ T="t21a: a lowercase UDID boots under uppercase leases that stay live"
 sim sess-A boot aaaa-1111 >/dev/null 2>&1; rc=$?
 s1="$(simstate ios-simulator:host)"; s2="$(simstate ios-simulator:udid-AAAA-1111)"
 if [ "${rc}" -eq 0 ] && [ "${s1}" = live ] && [ "${s2}" = live ] && \
-   [ ! -d "${H18}/leases/ios-simulator:udid-aaaa-1111.lock" ] && \
+   ! ls "${H18}/leases" | grep -q "udid-aaaa-1111" && \
    grep -q "boot AAAA-1111" "${XCRUN_STUB_LOG}"; then ok
 else bad "boot rc=${rc}, host ${s1:-none}, uppercase udid lease ${s2:-none}, lowercase dir: $(ls "${H18}/leases" | tr '\n' ' ')"; fi
 
@@ -433,6 +433,85 @@ env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H25}" \
   "${BIN}/device-broker" acquire android-emulator:port-6070 >/dev/null 2>&1; rc=$?
 if [ "${rc}" -eq 4 ] && [ ! -d "${H25}/leases/android-emulator:port-6070.lock" ]; then ok
 else bad "rc=${rc} (want 4); leases: $(ls "${H25}/leases" 2>/dev/null | tr '\n' ' ')"; fi
+
+# --- T26: no owner key in the environment: release and check must refuse, not
+#          fail open (PR #93 review #2). owner_key dies inside $(...) only exits
+#          the subshell, so the old comparison became "" != "" / "" = "".
+T="t26a: release with no owner key refuses an unreadable lease (4), lease kept"
+H26="$(newhome)"
+L26A="${H26}/leases/android-emulator:port-6090.lock"
+mkdir -p "${L26A}"; : > "${L26A}/lease.json"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
+  "${BIN}/device-broker" release android-emulator:port-6090 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 4 ] && [ -d "${L26A}" ] && [ -f "${L26A}/lease.json" ]; then ok
+else bad "rc=${rc} (want 4); lease $([ -d "${L26A}" ] && echo kept || echo REMOVED)"; fi
+
+T="t26b: check --require-mine with no owner key refuses a live lease it cannot claim, lease kept"
+L26B="${H26}/leases/android-emulator:port-6092.lock"
+mkdir -p "${L26B}"
+printf '{"schemaVersion": 1, "resource": "android-emulator:port-6092", "owner": {"pid": %s, "pidStart": ""}, "acquiredAt": 1, "meta": {}}\n' "$$" > "${L26B}/lease.json"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
+  "${BIN}/device-broker" check android-emulator:port-6092 --require-mine >/dev/null 2>&1; rc=$?
+if [ "${rc}" -ne 0 ] && [ -f "${L26B}/lease.json" ]; then ok
+else bad "rc=${rc} (want nonzero refusal); lease $([ -f "${L26B}/lease.json" ] && echo kept || echo REMOVED)"; fi
+
+# --- T27: the reclaim race (PR #93 review #3). A slow xcrun stub on the loser's
+#          PATH makes its stale judgment end ~3 s late; meanwhile the winner
+#          reclaims and writes a LIVE lease. The loser must re-check under the
+#          lock and leave the winner's lease alone (acquire exits 3; gc keeps it).
+R27="$(mktemp -d "${TESTROOT}/race.XXXXXX")"
+mkdir -p "${R27}/fast" "${R27}/slow"
+printf '#!/usr/bin/env bash\necho "== Devices =="\n' > "${R27}/fast/xcrun"
+printf '#!/usr/bin/env bash\nsleep 3\necho "== Devices =="\n' > "${R27}/slow/xcrun"
+chmod +x "${R27}/fast/xcrun" "${R27}/slow/xcrun"
+RES27="ios-simulator:udid-EEEE-5555"
+
+T="t27a: two acquirers of one stale lease: only one wins, the winner's lease survives"
+H27="$(newhome)"; mkdir -p "${H27}/leases"
+D27="${H27}/leases/${RES27}.lock"
+mkdir "${D27}"
+cat > "${D27}/lease.json" <<EOF
+{"schemaVersion": 1, "resource": "${RES27}", "ownerKey": "sess-DEAD",
+ "owner": {"pid": 4194303, "pidStart": "", "host": "x", "worktree": "/", "session": "", "command": "x"},
+ "acquiredAt": 1, "whileBooted": "EEEE-5555", "meta": {}}
+EOF
+sleep 30 & A27PID=$!
+( DB_HOME="${H27}" PATH="${R27}/slow:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+    --owner-key sess-B --while-booted EEEE-5555 > "${R27}/b.out" 2> "${R27}/b.err"; echo $? > "${R27}/b.rc" ) &
+B27PID=$!
+sleep 1
+DB_HOME="${H27}" PATH="${R27}/fast:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+  --owner-key sess-A --owner-pid "${A27PID}" --while-booted EEEE-5555 > "${R27}/a.out" 2> "${R27}/a.err"; rca27=$?
+wait "${B27PID}"; rcb27="$(cat "${R27}/b.rc")"
+own27="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${D27}/lease.json" 2>/dev/null | head -1)"
+kill "${A27PID}" 2>/dev/null
+if [ "${rca27}" -eq 0 ] && [ "${rcb27}" -ne 0 ] && [ "${own27}" = sess-A ]; then ok
+else bad "A rc=${rca27}, B rc=${rcb27} (want nonzero), final owner ${own27:-none}; B stderr: $(tr '\n' '|' < "${R27}/b.err")"; fi
+
+T="t27b: gc that judged a stale lease does not remove the live lease another acquirer just wrote"
+H27B="$(newhome)"; mkdir -p "${H27B}/leases"
+D27B="${H27B}/leases/${RES27}.lock"
+mkdir "${D27B}"
+cat > "${D27B}/lease.json" <<EOF
+{"schemaVersion": 1, "resource": "${RES27}", "ownerKey": "sess-DEAD",
+ "owner": {"pid": 4194303, "pidStart": "", "host": "x", "worktree": "/", "session": "", "command": "x"},
+ "acquiredAt": 1, "whileBooted": "EEEE-5555", "meta": {}}
+EOF
+sleep 30 & A27BPID=$!
+( DB_HOME="${H27B}" PATH="${R27}/slow:${PATH}" "${BIN}/device-broker" gc > "${R27}/gc.out" 2> "${R27}/gc.err" ) &
+G27PID=$!
+sleep 1
+DB_HOME="${H27B}" PATH="${R27}/fast:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+  --owner-key sess-A --owner-pid "${A27BPID}" --while-booted EEEE-5555 > "${R27}/a2.out" 2>&1; rca27b=$?
+wait "${G27PID}"
+own27b="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${D27B}/lease.json" 2>/dev/null | head -1)"
+kill "${A27BPID}" 2>/dev/null
+# The guarantee: gc must never remove a lease whose owner is alive. Either A was
+# refused (gc held the reclaim lock while judging, so A could not write — gc then
+# cleared only the stale lease), or A wrote a live lease and it survives gc's
+# inside-lock re-check. The bug (head): A rc=0 yet gc removed A's live lease.
+if [ "${rca27b}" -ne 0 ] || [ "${own27b}" = sess-A ]; then ok
+else bad "A rc=${rca27b} but lease after gc: ${own27b:-GONE} (gc removed a live lease); gc said: $(tr '\n' '|' < "${R27}/gc.err")"; fi
 
 say ""
 say "== ${PASS} passed, ${FAIL} failed =="
