@@ -86,6 +86,11 @@ async function main(): Promise<void> {
     process.exitCode = await runDevin(args)
     return
   }
+  if (cmd === 'bossai') {
+    const { runBossai } = await import('./cli/bossai.ts')
+    process.exitCode = await runBossai(args)
+    return
+  }
   if (cmd === 'claude') {
     // Run by the mesh plugin's hooks: never prints, always exits 0.
     if (args[0] === 'hook') {

@@ -259,7 +259,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 | Permission relay | optional | removed |
 | Session names / status | none | read from Claude Code's session registry |
 | Admin | `add-user --force` resets a person's tokens | `add-device` adds a machine without revoking |
-| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build, pi and other MCP hosts), hook notices and busy/idle for Devin CLI, Antigravity, Grok Build and pi (an extension), named send-only senders, `mesh say` |
+| Hosts without channels | not supported | pull mode with `read_messages` (Devin CLI, Antigravity CLI, Grok Build, pi, BossAI desktop and other MCP hosts), hook notices and busy/idle for Devin CLI, Antigravity, Grok Build and pi (an extension), an external wake injector for BossAI, named send-only senders, `mesh say` |
 
 ## Devin CLI, Antigravity CLI, Grok Build, pi and other agents without channels
 
@@ -500,6 +500,43 @@ this version. Against an older relay, pull sessions still work but show no marke
 senders show their account handle as before; older peers on the receiving side also show the handle.
 The inbox holds the 200 most recent messages; anything older is dropped and the next
 `read_messages` says how many.
+
+### BossAI desktop
+
+BossAI (Electron desktop app with an embedded pi-coding-agent server on 127.0.0.1) has managed
+MCP config but no hooks surface and no channel. The adapter is two commands, and changes nothing
+in BossAI itself:
+
+```bash
+node $M bossai install --session bossai-<machine>           # prints the MCP config it would write
+node $M bossai install --session bossai-<machine> --write   # writes it via BossAI's local MCP API
+node $M bossai wake --chat <chatId> --session bossai-<machine>  # resident mail injector
+```
+
+`install` discovers the server port from the app's `desktop-server-port.json` (override with
+`--server`/`--port-file`), bootstraps the MCP control token, and registers `mesh-peer.mjs` as a
+stdio MCP server (`MESH_JOIN=pull`, `MESH_HOST=bossai`). The BossAI session itself joins the mesh;
+its agent gets `list_agents` / `send_message` / `read_messages` and reads mail with its own tools.
+Verified live against BossAI 1.3.34 (macOS arm64): config write, tool discovery, mesh registration.
+
+`wake` plays the hooks' role from outside: it finds the peer's hook socket by `whoami`, asks
+`wake` once per poll, and injects a mail notice through the local chat API — `deliverAs=steer`
+into an active run, else a new turn — then reports busy/idle. A 409 from the global concurrency
+slot is retried without consuming another wake nudge. `--notify <mesh-name>` optionally forwards
+pending tool-approval cards to a mesh contact; it never approves anything (BossAI's own approval
+queue stays authoritative, 5-minute default timeout).
+
+Caveats, honest ones:
+
+- The chat API requires a BossAI Cloud identity: give `wake` a token via `BOSSAI_CLOUD_TOKEN` or
+  `--token-file`. The token is never logged.
+- BossAI connects managed MCP servers lazily and, observed in a live smoke test, closes the
+  connection when a turn's session tears down: an idle app shows `reconnecting` on the relay and
+  mail queues there until the next turn. `wake` injects reliably while the peer is alive; the
+  idle-mail case needs either a BossAI-side fix (persistent MCP connections, or loading user pi
+  extensions — 1.3.34 does not load `~/.pi/agent/extensions`, root cause under investigation) or a
+  bridge-mode wake that holds the session while idle. Tracked as follow-up.
+- One managed MCP server = one mesh session per app; name it explicitly with `--session`.
 
 ## Ledger: cards, tasks, leases, machines
 
