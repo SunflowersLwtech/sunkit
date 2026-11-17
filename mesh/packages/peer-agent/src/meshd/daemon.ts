@@ -14,6 +14,8 @@ const QUOTA_EVERY_MS = 5 * 60_000
 const READ_DEFAULT_LINES = 80
 const OUTPUT_CAP = 60_000
 const KINDS: AgentKind[] = ['claude', 'pi', 'agy', 'grok', 'devin']
+/** Desktop-app hosts with no CLI to ask `--version`: reported when their install marker exists. */
+const APP_KINDS: AgentKind[] = ['bossai']
 
 export interface RunResult { ok: boolean; stdout: string; error?: string }
 export type Runner = (file: string, args: string[], timeoutMs: number) => Promise<RunResult>
@@ -29,6 +31,8 @@ export interface MeshdOpts {
   maxActive?: number
   /** Directory roots dispatch may use, reported as exists/missing (display paths, e.g. ~/Developer/products). */
   roots: Array<{ path: string; exists: () => boolean }>
+  /** Install markers of desktop-app hosts (APP_KINDS), e.g. BossAI's userData directory. */
+  apps?: Partial<Record<AgentKind, () => boolean>>
   load: () => { load1: number; cpus: number; memUsedPct?: number }
   run: Runner
   fetch: typeof globalThis.fetch
@@ -65,6 +69,9 @@ export class Meshd {
       const version = cleanVersion(r.stdout)
       value.push(version ? { kind, version } : { kind })
     })
+    for (const kind of APP_KINDS) {
+      if (this.o.apps?.[kind]?.()) value.push({ kind })
+    }
     this.kinds = { at: this.now(), value }
     return value
   }

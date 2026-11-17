@@ -40,7 +40,7 @@ export const WorkgroupSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
 export const RoleSchema = z.enum(['worker', 'orchestrator', 'observer', 'executor'])
 export type Role = z.infer<typeof RoleSchema>
 
-export const AgentKindSchema = z.enum(['claude', 'pi', 'agy', 'grok', 'devin'])
+export const AgentKindSchema = z.enum(['claude', 'pi', 'agy', 'grok', 'devin', 'bossai'])
 export type AgentKind = z.infer<typeof AgentKindSchema>
 export const MachineNameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
 export const HerdrWorkspaceIdSchema = z.string().regex(/^w[0-9A-Za-z]{1,8}$/)

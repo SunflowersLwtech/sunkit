@@ -18575,8 +18575,8 @@ var require_undici = __commonJS({
 // packages/peer-agent/src/meshd/main.ts
 import { execFile } from "node:child_process";
 import { existsSync as existsSync2, realpathSync } from "node:fs";
-import { cpus, freemem, homedir as homedir2, loadavg, platform, totalmem } from "node:os";
-import { delimiter, dirname as dirname2, join as join3 } from "node:path";
+import { cpus, freemem, homedir as homedir3, loadavg, platform, totalmem } from "node:os";
+import { delimiter, dirname as dirname2, join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // packages/peer-agent/src/config.ts
@@ -22801,7 +22801,7 @@ var TASK_STATES = [
 var TaskStateSchema = external_exports.enum(TASK_STATES);
 var WorkgroupSchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 var RoleSchema = external_exports.enum(["worker", "orchestrator", "observer", "executor"]);
-var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin"]);
+var AgentKindSchema = external_exports.enum(["claude", "pi", "agy", "grok", "devin", "bossai"]);
 var MachineNameSchema = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 var HerdrWorkspaceIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}$/);
 var HerdrTabIdSchema = external_exports.string().regex(/^w[0-9A-Za-z]{1,8}:t[0-9A-Za-z]{1,8}$/);
@@ -23072,6 +23072,7 @@ var QUOTA_EVERY_MS = 5 * 6e4;
 var READ_DEFAULT_LINES = 80;
 var OUTPUT_CAP = 6e4;
 var KINDS = ["claude", "pi", "agy", "grok", "devin"];
+var APP_KINDS = ["bossai"];
 var Meshd = class {
   constructor(o) {
     this.o = o;
@@ -23098,6 +23099,9 @@ var Meshd = class {
       const version = cleanVersion(r.stdout);
       value.push(version ? { kind, version } : { kind });
     });
+    for (const kind of APP_KINDS) {
+      if (this.o.apps?.[kind]?.()) value.push({ kind });
+    }
     this.kinds = { at: this.now(), value };
     return value;
   }
@@ -23282,13 +23286,21 @@ var Meshd = class {
   }
 };
 
+// packages/peer-agent/src/cli/bossai-paths.ts
+import { homedir as homedir2 } from "node:os";
+import { join as join3 } from "node:path";
+function bossaiPortFile(platform2, env = process.env, home = homedir2()) {
+  const base = platform2 === "darwin" ? join3(home, "Library", "Application Support") : platform2 === "win32" ? env.APPDATA ?? join3(home, "AppData", "Roaming") : env.XDG_CONFIG_HOME ?? join3(home, ".config");
+  return join3(base, "@bossai", "desktop", "desktop-server-port.json");
+}
+
 // packages/peer-agent/src/meshd/main.ts
 var log = (level, event, fields = {}) => {
   process.stderr.write(JSON.stringify({ level, event, at: (/* @__PURE__ */ new Date()).toISOString(), ...fields }) + "\n");
 };
 function searchPath() {
-  const home = homedir2();
-  const extra = [join3(home, ".local/bin"), join3(home, ".bun/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+  const home = homedir3();
+  const extra = [join4(home, ".local/bin"), join4(home, ".bun/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
   return [dirname2(process.execPath), ...(process.env.PATH ?? "").split(delimiter).filter(Boolean), ...extra].join(delimiter);
 }
 var run = (file, args, timeoutMs) => new Promise((resolve2) => {
@@ -23305,8 +23317,8 @@ async function main() {
   const cfg = loadConfig();
   assertTokenNotInRepo(cfg.token_path);
   const token = loadToken(cfg.token_path);
-  const home = homedir2();
-  const ccQuota = join3(home, ".agents/tools/cc-quota");
+  const home = homedir3();
+  const ccQuota = join4(home, ".agents/tools/cc-quota");
   const maxActive = Number(process.env.MESHD_MAX_ACTIVE);
   const roots = ["~/Developer/products", "~/.agents/tmp", "~/Developer/obsun"];
   const meshd = new Meshd({
@@ -23317,7 +23329,9 @@ async function main() {
     // On a Mac a LaunchAgent already refreshes cc-quota's cache every 5 minutes; read that instead of calling again.
     ccQuotaArgs: platform() === "darwin" ? ["--json", "--cache-only"] : ["--json"],
     ...Number.isInteger(maxActive) && maxActive > 0 && maxActive <= 1e3 ? { maxActive } : {},
-    roots: roots.map((p) => ({ path: p, exists: () => existsSync2(join3(home, p.slice(2))) })),
+    roots: roots.map((p) => ({ path: p, exists: () => existsSync2(join4(home, p.slice(2))) })),
+    // BossAI has no CLI: the desktop app's userData directory marks it as installed and run here.
+    apps: { bossai: () => existsSync2(dirname2(bossaiPortFile(platform()))) },
     load: () => ({ load1: loadavg()[0] ?? 0, cpus: cpus().length || 1, memUsedPct: (1 - freemem() / totalmem()) * 100 }),
     run,
     fetch: globalThis.fetch,

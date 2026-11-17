@@ -96,6 +96,16 @@ describe('pull-mode tools', () => {
     expect(text).toContain('repo-x [bbbbbb] — bob@msi · idle')
     expect(text).not.toContain('repo-x [bbbbbb] — bob@msi · idle · pull')
   })
+
+  it('list_agents names a non-Claude host kind, so a BossAI worker reads as one', () => {
+    const text = formatListing([
+      row('s_01hrk7y0000000000000aaaaaa', 'bossai-devdesk', { mode: 'pull', agent: 'bossai' }),
+      row('s_01hrk7y0000000000000bbbbbb', 'repo-x', { mode: 'push', agent: 'claude', cwd: '/w' }),
+    ], SELF)
+    expect(text).toContain('bossai-devdesk [aaaaaa] — bob@msi · idle · pull · bossai')
+    expect(text).toContain('repo-x [bbbbbb] — bob@msi · idle · /w')
+    expect(text).not.toContain('· claude')
+  })
 })
 
 describe('pull-mode MCP server', () => {

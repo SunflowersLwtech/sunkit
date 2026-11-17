@@ -30,6 +30,14 @@ describe('session cards (POST /v1/sessions/self)', () => {
     })
   })
 
+  it('accepts the bossai host kind and still refuses kinds it does not know (why the relay deploys before peers)', async () => {
+    const h = harness(specs)
+    await openSession(h.app, h.tok.tk_m4!, S.a1, 'bossai-devdesk')
+    expect((await req(h.app, h.tok.tk_m4!, 'POST', '/v1/sessions/self', { session: S.a1, agent: 'bossai' })).status).toBe(200)
+    expect((await list(h, h.tok.tk_m4!)).find(r => r.session_id === S.a1)).toMatchObject({ name: 'bossai-devdesk', agent: 'bossai' })
+    expect((await req(h.app, h.tok.tk_m4!, 'POST', '/v1/sessions/self', { session: S.a1, agent: 'not-a-host' })).status).toBe(400)
+  })
+
   it('rejects role and dispatched_by outright, and a workgroup the token was not granted', async () => {
     const h = harness(specs)
     await openSession(h.app, h.tok.tk_mate!, S.b1, 'mate')
