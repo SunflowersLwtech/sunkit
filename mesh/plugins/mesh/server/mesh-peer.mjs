@@ -37196,7 +37196,7 @@ function resolveTarget(to, rows, selfId) {
   const byName = others.filter((r) => r.name === trimmed);
   if (byName.length === 1) return { ok: true, target: byName[0] };
   if (byName.length > 1) {
-    const live = byName.filter((r) => r.status === "idle" || r.status === "busy");
+    const live = byName.filter((r) => r.status === "idle" || r.status === "busy" || r.status === "unknown");
     if (live.length === 1) return { ok: true, target: live[0] };
     return {
       ok: false,

@@ -33,3 +33,11 @@ describe('resolveTarget stale-row preference', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe('resolveTarget unknown status', () => {
+  it('taches unknown (attached, no status report) as live over reconnecting', () => {
+    const row = (ref: string, status: string): any => ({ session_id: 's' + ref, ref, name: 'c', account: 'a', device: 'd', status, last_seen: '' })
+    const r = resolveTarget('c', [row('aaaaaa', 'reconnecting'), row('bbbbbb', 'unknown')], 'self')
+    expect(r.ok && r.target.ref).toBe('bbbbbb')
+  })
+})

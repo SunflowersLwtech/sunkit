@@ -553,12 +553,15 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
       : undefined,
     startCtl: o.approvers?.length && o.session
       ? async () => {
+        const home = ensureCtlHome()
         const h = await startMcpBridge({
           node: stableNode(process.env.PATH, process.execPath),
           peer: fileURLToPath(new URL('./mesh-peer.mjs', import.meta.url)),
           session: `${o.session}-ctl`,
-          meshHome: ensureCtlHome(),
+          meshHome: home,
         })
+        // Report idle so the relay card shows a live status, not "unknown".
+        void askHookSocket(join(home, 'hooks', `${process.pid}.sock`), { op: 'idle' })
         return { read: h.read }
       }
       : undefined,
