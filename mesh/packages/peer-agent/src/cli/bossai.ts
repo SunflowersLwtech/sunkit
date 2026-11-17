@@ -9,16 +9,21 @@ import { RelayClient } from '../outbound.ts'
 import { sayWith } from './say.ts'
 import { stableNode } from './devin.ts'
 import { bossaiPortFile } from './bossai-paths.ts'
+import { parseAllow } from '../sender-allow.ts'
 
 export { bossaiPortFile }
 
 export const BOSSAI_USAGE =
-  'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n'
+  'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,…>] [--node <path>] [--peer <path>] [--write]\n'
   + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
   + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
+  + '         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not\n'
+  + '         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use\n'
+  + '         the same names as wake --allow: mid-turn BossAI reads its mail with read_messages,\n'
+  + '         which wake never sees.\n'
   + 'wake:    resident injector — BossAI has no hooks surface, so this plays the hooks\' role:\n'
   + '         poll the peer\'s hook socket, inject a mail notice via the local HTTP chat API\n'
   + '         (steer into an active run, else start a turn), report busy/idle, and optionally\n'
@@ -47,6 +52,8 @@ export interface BossaiInstallOpts {
   id: string
   /** Mesh session name the peer registers as (MESH_SESSION_NAME). */
   session?: string | undefined
+  /** Session names the peer takes mail from (MESH_ALLOW); undefined = every sender. */
+  allow?: string[] | undefined
   node: string
   peer: string
 }
@@ -85,6 +92,7 @@ export function resolveBossaiServer(o: { server?: string | undefined; portFile?:
 export function bossaiServerBody(o: BossaiInstallOpts): Record<string, unknown> {
   const env: Record<string, string> = { MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_WAKE: '' }
   if (o.session) env.MESH_SESSION_NAME = o.session
+  if (o.allow?.length) env.MESH_ALLOW = o.allow.join(',')
   return {
     id: o.id,
     label: `mesh (${o.session ?? o.id})`,
@@ -99,6 +107,7 @@ export function parseBossaiInstall(args: string[], defaults: BossaiInstallOpts):
     portFile: flag(args, '--port-file') ?? defaults.portFile,
     id: flag(args, '--id') ?? defaults.id,
     session: flag(args, '--session') ?? defaults.session,
+    allow: parseAllow(flag(args, '--allow')) ?? defaults.allow,
     node: flag(args, '--node') ?? defaults.node,
     peer: flag(args, '--peer') ?? defaults.peer,
   }
