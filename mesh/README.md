@@ -510,7 +510,7 @@ in BossAI itself:
 ```bash
 node $M bossai install --session bossai-<machine>           # prints the MCP config it would write
 node $M bossai install --session bossai-<machine> --write   # writes it via BossAI's local MCP API
-node $M bossai wake --chat <chatId> --session bossai-<machine>  # resident mail injector
+node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow feishu-assistant
 ```
 
 `install` discovers the server port from the app's `desktop-server-port.json` (override with
@@ -526,17 +526,23 @@ slot is retried without consuming another wake nudge. `--notify <mesh-name>` opt
 pending tool-approval cards to a mesh contact; it never approves anything (BossAI's own approval
 queue stays authoritative, 5-minute default timeout).
 
+`--bridge` covers the idle app: BossAI closes managed MCP connections on session teardown, so
+while no BossAI peer answers, wake holds the mesh session with its own peer child (same session
+name), reads the mail, stops the child so BossAI's turn can take the session over, and injects
+the full letters (`<channel>` blocks plus a reply hint). Letters are held and retried if the
+injection hits the concurrency slot; a grace window (`--grace-ms`, default 15s) prevents flapping
+against short turns. `--allow <prefix,…>` whitelists senders by name prefix — mail from anyone
+else is read, discarded and logged, never injected. Without `--bridge`, idle mail queues on the
+relay until the next turn (the original v1 behavior).
+
 Caveats, honest ones:
 
 - The chat API requires a BossAI Cloud identity: give `wake` a token via `BOSSAI_CLOUD_TOKEN` or
   `--token-file`. The token is never logged.
-- BossAI connects managed MCP servers lazily and, observed in a live smoke test, closes the
-  connection when a turn's session tears down: an idle app shows `reconnecting` on the relay and
-  mail queues there until the next turn. `wake` injects reliably while the peer is alive; the
-  idle-mail case needs either a BossAI-side fix (persistent MCP connections, or loading user pi
-  extensions — 1.3.34 does not load `~/.pi/agent/extensions`, root cause under investigation) or a
-  bridge-mode wake that holds the session while idle. Tracked as follow-up.
 - One managed MCP server = one mesh session per app; name it explicitly with `--session`.
+- BossAI 1.3.34 does not load user pi extensions from `~/.pi/agent/extensions` (root cause under
+  investigation on the BossAI side); if that is fixed, the pi-style extension could replace the
+  external wake entirely.
 
 ## Ledger: cards, tasks, leases, machines
 

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
-  injectionBody, parseBossaiInstall, parseBossaiWake, pickHookSocket, readBossaiPort,
-  resolveBossaiServer, runBossaiInstall, type WakeDeps,
+  filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
+  readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
 import type { HookReply, HookRequest } from '../hook-socket.ts'
 
@@ -218,5 +218,102 @@ describe('parseBossaiWake', () => {
   it('clamps a too-small poll interval', () => {
     const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--poll-ms', '10'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.pollMs).toBe(3000)
+  })
+})
+describe('parseChannels / senderAllowed / filterLetters', () => {
+  const text = '<channel from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m1">\n任务一\n</channel>\n<channel from="stranger [x]" account="other" msg_id="m2">\n坏信\n</channel>'
+  it('parses channel blocks with from and body', () => {
+    const ls = parseChannels(text)
+    expect(ls).toHaveLength(2)
+    expect(ls[0]!.from).toBe('feishu-assistant [8vetwb]')
+    expect(ls[0]!.body).toBe('任务一')
+  })
+  it('matches sender name prefixes before the [ref]', () => {
+    expect(senderAllowed('feishu-assistant [8vetwb]', ['feishu-assistant'])).toBe(true)
+    expect(senderAllowed('stranger [x]', ['feishu-assistant'])).toBe(false)
+    expect(senderAllowed('anyone', undefined)).toBe(true)
+  })
+  it('keeps allowed letters and reports dropped senders', () => {
+    const r = filterLetters(text, ['feishu-assistant'])
+    expect(r.kept).toContain('任务一')
+    expect(r.kept).not.toContain('坏信')
+    expect(r.dropped).toEqual(['stranger [x]'])
+  })
+})
+
+describe('createWaker --bridge', () => {
+  const letters = '<channel from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m1">\n干活\n</channel>'
+  function bridgeDeps(over: Partial<WakeDeps> = {}) {
+    const events: string[] = []
+    const handle = {
+      ask: async (req: HookRequest) => { events.push(`bridge:${req.op}`); return { unread: 1, from: ['feishu-assistant'], continue: true } },
+      read: async () => { events.push('bridge:read'); return letters },
+      stop: async () => { events.push('bridge:stop') },
+    }
+    const d = deps({
+      discover: async () => [],
+      startBridge: async () => { events.push('bridge:start'); return handle },
+      ...over,
+    })
+    return { d, events }
+  }
+  const bopts = { ...opts, bridge: true, graceMs: 0 }
+  it('holds the session, reads mail, stops the child, injects full letters', async () => {
+    const { d, events } = bridgeDeps()
+    await createWaker(bopts, d).tick()
+    expect(events).toEqual(['bridge:start', 'bridge:wake', 'bridge:read', 'bridge:stop'])
+    expect(d.injected[0]!.text).toContain('干活')
+    expect(d.injected[0]!.text).toContain('send_message')
+  })
+  it('discards non-allowed senders without injecting', async () => {
+    const { d } = bridgeDeps()
+    const logs: string[] = []
+    d.log = s => logs.push(s)
+    await createWaker({ ...bopts, allow: ['someone-else'] }, d).tick()
+    expect(d.injected).toHaveLength(0)
+    expect(logs.join('\n')).toContain('non-allowed')
+  })
+  it('holds letters for retry when injection is deferred, without re-reading', async () => {
+    let fail = true
+    const { d, events } = bridgeDeps({ inject: async body => { d.injected.push(body); if (fail) { fail = false; return { ok: false, status: 409 } } return { ok: true, status: 200 } } })
+    const w = createWaker(bopts, d)
+    await w.tick()
+    await w.tick()
+    expect(d.injected).toHaveLength(2)
+    expect(events.filter(e => e === 'bridge:read')).toHaveLength(1)
+  })
+  it('stops the bridge when BossAI own peer appears', async () => {
+    const { d, events } = bridgeDeps()
+    const w = createWaker(bopts, d)
+    await w.tick()
+    d.discover = async () => [{ path: '/a.sock', name: 'bossai-m2' }]
+    await w.tick()
+    expect(events.filter(e => e === 'bridge:stop').length).toBeGreaterThanOrEqual(1)
+  })
+  it('respects the grace window after stopping', async () => {
+    let t = 100_000
+    const { d, events } = bridgeDeps({ now: () => t })
+    const w = createWaker({ ...bopts, graceMs: 15_000 }, d)
+    await w.tick()
+    t += 5_000
+    await w.tick()
+    expect(events.filter(e => e === 'bridge:start')).toHaveLength(1)
+    t += 15_000
+    await w.tick()
+    expect(events.filter(e => e === 'bridge:start')).toHaveLength(2)
+  })
+  it('without --bridge, an idle app does nothing', async () => {
+    const { d } = bridgeDeps()
+    await createWaker(opts, d).tick()
+    expect(d.injected).toHaveLength(0)
+  })
+})
+
+describe('parseBossaiWake v2 flags', () => {
+  it('parses bridge, allow and grace', () => {
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--bridge', '--allow', 'feishu-assistant, m4-', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(o.bridge).toBe(true)
+    expect(o.allow).toEqual(['feishu-assistant', 'm4-'])
+    expect(o.graceMs).toBe(5000)
   })
 })
