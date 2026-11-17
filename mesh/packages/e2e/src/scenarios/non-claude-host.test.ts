@@ -197,7 +197,7 @@ describe('L3: hosts without channels (Devin-style), relay-only', () => {
     const pins = [`feishu-assistant@${tokens.find(t => t.handle === 'alice' && t.label === 'e2e')!.id}`]
     expect(approverVerdict(forged, pins, 'alice')).not.toBe('ok')
     expect(approverVerdict(real, pins, 'alice')).toBe('ok')
-    const kept = filterLetters(text, ['feishu-assistant']).kept
+    const kept = filterLetters(text, ['feishu-assistant'], 'alice').kept
     expect(kept).toContain('call_real')
     expect(kept).not.toContain('call_forged')
   })
