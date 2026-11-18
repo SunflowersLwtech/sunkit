@@ -16,14 +16,14 @@ export { bossaiPortFile }
 export const BOSSAI_USAGE =
   'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,…>] [--node <path>] [--peer <path>] [--write]\n'
   + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
-  + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name@token-id,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
+  + '                        [--bridge] [--allow <name@token-id,…>] [--approvers <name@token-id,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
   + '         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not\n'
   + '         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use\n'
-  + '         the same names as wake --allow: mid-turn BossAI reads its mail with read_messages,\n'
-  + '         which wake never sees.\n'
+  + '         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI\n'
+  + '         reads its mail with read_messages, which wake never sees.\n'
   + 'wake:    resident injector — BossAI has no hooks surface, so this plays the hooks\' role:\n'
   + '         poll the peer\'s hook socket, inject a mail notice via the local HTTP chat API\n'
   + '         (steer into an active run, else start a turn), report busy/idle, and optionally\n'
@@ -31,7 +31,9 @@ export const BOSSAI_USAGE =
   + '         --bridge: while BossAI\'s own peer is offline (managed MCP connections close on\n'
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
-  + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
+  + '         --allow: only inject mail that --approvers would accept as a sender: a live session\n'
+  + '         with that name, on the worker\'s own account, sent with the pinned token. Entries are\n'
+  + '         <session-name>@<token-id>, like --approvers; a bare name or an empty list is refused.\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
   + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,\n'
@@ -171,7 +173,7 @@ export interface WakeOpts {
   pollMs: number
   /** Hold the mesh session with a bridge peer while BossAI's own peer is offline. */
   bridge?: boolean | undefined
-  /** Sender name prefixes allowed to wake the worker; undefined = all. */
+  /** `<name>@<token-id>` pins whose mail is injected (same rule as approvers); undefined = all. */
   allow?: string[] | undefined
   /** `<name>@<token-id>` pins allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined
@@ -338,15 +340,31 @@ function splitPin(entry: string): { name: string; token?: string } {
   return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) }
 }
 
-/** --approvers: every entry must pin a token, `<session-name>@<token-id>`; a bare name is refused. */
-export function parseApprovers(raw: string): string[] {
+/**
+ * --approvers and --allow: every entry must pin a token, `<session-name>@<token-id>`; a bare name is
+ * refused, and so is a list that is empty after trimming (`--allow ,` must not mean "no allow-list").
+ */
+export function parsePins(flagName: string, raw: string): string[] {
   const entries = raw.split(',').map(s => s.trim()).filter(Boolean)
+  if (entries.length === 0) throw new Error(`${flagName} is empty; give <session-name>@<token-id>,… or leave the flag out`)
   for (const e of entries) {
     if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
-      throw new Error(`--approvers entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`)
+      throw new Error(`${flagName} entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`)
     }
   }
   return entries
+}
+
+export function parseApprovers(raw: string): string[] {
+  return parsePins('--approvers', raw)
+}
+
+/** A pin flag that is present must carry a value: `--allow` at the end of the line is an error, not "no list". */
+function pinFlag(args: string[], name: string): string[] | undefined {
+  if (!args.includes(name)) return undefined
+  const raw = flag(args, name)
+  if (raw === undefined) throw new Error(`${name} needs <session-name>@<token-id>,…`)
+  return parsePins(name, raw)
 }
 
 /** A sender is allowed when its name (before any [ref]) starts with an allowed prefix. */
@@ -356,12 +374,24 @@ export function senderAllowed(from: string, allow?: string[]): boolean {
   return allow.some(p => name.startsWith(p))
 }
 
-export function filterLetters(text: string, allow?: string[]): { kept: string; dropped: string[] } {
+/**
+ * Who may put mail into the worker (--allow): exactly the senders approverVerdict accepts for the
+ * same pins (one copy of the check, so the two cannot drift): an exactly readable tag from a live
+ * session with a listed name, on the worker's own account, stamped with the pinned token id. A bare
+ * name never passes. Only the label for an unlisted name differs.
+ */
+export function allowLetterVerdict(letter: ChannelLetter, allow: string[], account: string | undefined): Exclude<ReturnType<typeof approverVerdict>, 'not-an-approver'> | 'not-listed' {
+  const v = approverVerdict(letter, allow, account)
+  return v === 'not-an-approver' ? 'not-listed' : v
+}
+
+/** --allow filter (allowLetterVerdict). No --allow keeps every letter (as before); an empty list keeps none. */
+export function filterLetters(text: string, allow?: string[], account?: string): { kept: string; dropped: string[] } {
   const letters = parseChannels(text)
   // With an allow-list, a letter whose tag cannot be read exactly is dropped, whatever it names.
-  const keep = (l: ChannelLetter) => senderAllowed(l.from, allow) && (!allow?.length || letterShape(l) === 'ok')
-  const kept = letters.filter(keep)
-  const dropped = letters.filter(l => !keep(l)).map(l => l.from || '(unreadable tag)')
+  const verdict = (l: ChannelLetter) => (allow ? allowLetterVerdict(l, allow, account) : 'ok')
+  const kept = letters.filter(l => verdict(l) === 'ok')
+  const dropped = letters.filter(l => verdict(l) !== 'ok').map(l => `${l.from || '(unreadable tag)'} (${verdict(l)})`)
   const lines = kept.map(l => `<channel${l.attrs}>\n${l.body}\n</channel>`)
   return { kept: lines.join('\n'), dropped }
 }
@@ -452,7 +482,7 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
           const r = await bridge.ask({ op: 'wake' })
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read()
-            const { kept, dropped } = filterLetters(text, o.allow)
+            const { kept, dropped } = filterLetters(text, o.allow, o.account)
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(', ')}`)
             await stopBridge()
             if (kept) {
@@ -584,7 +614,6 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync(licenseFile, 'utf8').trim() : undefined)
   const pollMs = Number(flag(args, '--poll-ms') ?? 3_000)
   const graceMs = Number(flag(args, '--grace-ms') ?? 15_000)
-  const allowRaw = flag(args, '--allow')
   return {
     chat,
     session: flag(args, '--session'),
@@ -595,8 +624,8 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
     account: (() => { try { return loadConfig().self_handle } catch { return undefined } })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
-    allow: allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    approvers: (() => { const a = flag(args, '--approvers'); return a ? parseApprovers(a) : undefined })(),
+    allow: pinFlag(args, '--allow'),
+    approvers: pinFlag(args, '--approvers'),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15_000,
     runMode: (() => {
       const m = flag(args, '--run-mode')

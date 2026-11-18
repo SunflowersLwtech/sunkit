@@ -511,7 +511,7 @@ in BossAI itself:
 ```bash
 node $M bossai install --session bossai-<machine>           # prints the MCP config it would write
 node $M bossai install --session bossai-<machine> --write   # writes it via BossAI's local MCP API
-node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow feishu-assistant
+node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow feishu-assistant@<token-id>
 ```
 
 `install` discovers the server port from the app's `desktop-server-port.json` (override with
@@ -533,9 +533,13 @@ while no BossAI peer answers, wake holds the mesh session with its own peer chil
 name), reads the mail, stops the child so BossAI's turn can take the session over, and injects
 the full letters (`<channel>` blocks plus a reply hint). Letters are held and retried if the
 injection hits the concurrency slot; a grace window (`--grace-ms`, default 15s) prevents flapping
-against short turns. `--allow <prefix,…>` whitelists senders by name prefix — mail from anyone
-else is read, discarded and logged, never injected. Without `--bridge`, idle mail queues on the
-relay until the next turn (the original v1 behavior).
+against short turns. `--allow <name@token-id,…>` admits mail only from the senders
+`--approvers` (below) would accept for the same pins: a live session with that exact name, on the
+worker's own account, stamped with that token id (not a send-only label, not a prefix, not a
+same-name session on another token). Mail from anyone else is read, discarded and logged, never
+injected. A bare name, an empty list and a flag without a value are refused at startup. Without
+`--bridge`, idle mail queues on the relay until the next turn (the original v1 behavior).
+`install --allow` (the peer's own `MESH_ALLOW`) still takes names only.
 
 `--approvers <name@token-id,…>` lets named sessions settle those cards: wake holds a
 `<session>-ctl` mesh session, and a reply `APPROVE|DENY <toolCallId> [reason]` settles the ask only
