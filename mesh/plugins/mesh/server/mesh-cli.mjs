@@ -21576,6 +21576,7 @@ __export(bossai_exports, {
   BOSSAI_USAGE: () => BOSSAI_USAGE,
   CHANNEL_KEYS: () => CHANNEL_KEYS,
   DEFAULT_ASK_TIMEOUT_MS: () => DEFAULT_ASK_TIMEOUT_MS,
+  allowLetterVerdict: () => allowLetterVerdict,
   approvalNotice: () => approvalNotice,
   approverVerdict: () => approverVerdict,
   askTimeoutMs: () => askTimeoutMs,
@@ -21598,6 +21599,7 @@ __export(bossai_exports, {
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
   parseChannels: () => parseChannels,
+  parsePins: () => parsePins,
   pickHookSocket: () => pickHookSocket,
   readBossaiPort: () => readBossaiPort,
   redactSubtitle: () => redactSubtitle,
@@ -21798,25 +21800,39 @@ function splitPin(entry) {
   const i = entry.lastIndexOf("@");
   return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
 }
-function parseApprovers(raw) {
+function parsePins(flagName, raw) {
   const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) throw new Error(`${flagName} is empty; give <session-name>@<token-id>,\u2026 or leave the flag out`);
   for (const e of entries) {
     if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
-      throw new Error(`--approvers entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+      throw new Error(`${flagName} entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
     }
   }
   return entries;
+}
+function parseApprovers(raw) {
+  return parsePins("--approvers", raw);
+}
+function pinFlag(args, name) {
+  if (!args.includes(name)) return void 0;
+  const raw = flag5(args, name);
+  if (raw === void 0) throw new Error(`${name} needs <session-name>@<token-id>,\u2026`);
+  return parsePins(name, raw);
 }
 function senderAllowed(from, allow) {
   if (!allow || allow.length === 0) return true;
   const name = from.split(" [")[0].trim();
   return allow.some((p) => name.startsWith(p));
 }
-function filterLetters(text, allow) {
+function allowLetterVerdict(letter, allow, account) {
+  const v = approverVerdict(letter, allow, account);
+  return v === "not-an-approver" ? "not-listed" : v;
+}
+function filterLetters(text, allow, account) {
   const letters = parseChannels(text);
-  const keep = (l) => senderAllowed(l.from, allow) && (!allow?.length || letterShape(l) === "ok");
-  const kept = letters.filter(keep);
-  const dropped = letters.filter((l) => !keep(l)).map((l) => l.from || "(unreadable tag)");
+  const verdict = (l) => allow ? allowLetterVerdict(l, allow, account) : "ok";
+  const kept = letters.filter((l) => verdict(l) === "ok");
+  const dropped = letters.filter((l) => verdict(l) !== "ok").map((l) => `${l.from || "(unreadable tag)"} (${verdict(l)})`);
   const lines = kept.map((l) => `<channel${l.attrs}>
 ${l.body}
 </channel>`);
@@ -21899,7 +21915,7 @@ function createWaker(o, d) {
           const r = await bridge.ask({ op: "wake" });
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read();
-            const { kept, dropped } = filterLetters(text, o.allow);
+            const { kept, dropped } = filterLetters(text, o.allow, o.account);
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(", ")}`);
             await stopBridge();
             if (kept) {
@@ -22032,7 +22048,6 @@ function parseBossaiWake(args, env = process.env) {
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync14(licenseFile, "utf8").trim() : void 0);
   const pollMs = Number(flag5(args, "--poll-ms") ?? 3e3);
   const graceMs = Number(flag5(args, "--grace-ms") ?? 15e3);
-  const allowRaw = flag5(args, "--allow");
   return {
     chat,
     session: flag5(args, "--session"),
@@ -22049,11 +22064,8 @@ function parseBossaiWake(args, env = process.env) {
     })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
-    allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
-    approvers: (() => {
-      const a = flag5(args, "--approvers");
-      return a ? parseApprovers(a) : void 0;
-    })(),
+    allow: pinFlag(args, "--allow"),
+    approvers: pinFlag(args, "--approvers"),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3,
     runMode: (() => {
       const m = flag5(args, "--run-mode");
@@ -22169,14 +22181,14 @@ var init_bossai = __esm({
     init_sender_allow();
     BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,\u2026>] [--node <path>] [--peer <path>] [--write]
        mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]
-                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
+                        [--bridge] [--allow <name@token-id,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
 
 install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
          (pure config; the BossAI session itself joins the mesh in pull mode).
          --allow: the peer itself only takes mail from a live session ("<name> [ref]", not
          send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use
-         the same names as wake --allow: mid-turn BossAI reads its mail with read_messages,
-         which wake never sees.
+         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI
+         reads its mail with read_messages, which wake never sees.
 wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:
          poll the peer's hook socket, inject a mail notice via the local HTTP chat API
          (steer into an active run, else start a turn), report busy/idle, and optionally
@@ -22184,7 +22196,9 @@ wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the
          --bridge: while BossAI's own peer is offline (managed MCP connections close on
          session teardown), wake holds the mesh session with its own peer child, reads
          mail, stops the child, and injects the full letters so no mail waits for a turn.
-         --allow: only inject mail whose sender name starts with one of these prefixes.
+         --allow: only inject mail that --approvers would accept as a sender: a live session
+         with that name, on the worker's own account, sent with the pinned token. Entries are
+         <session-name>@<token-id>, like --approvers; a bare name or an empty list is refused.
          --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with
          APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).
          Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,

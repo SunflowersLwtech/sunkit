@@ -259,7 +259,7 @@ describe('parseBossaiWake', () => {
   })
 })
 describe('parseChannels / senderAllowed / filterLetters', () => {
-  const text = '<channel from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m1">\n任务一\n</channel>\n<channel from="stranger [x]" account="other" msg_id="m2">\n坏信\n</channel>'
+  const text = '<channel from="feishu-assistant [8vetwb]" account="weiliu" from_token="tk_N150" msg_id="m1">\n任务一\n</channel>\n<channel from="stranger [x]" account="other" msg_id="m2">\n坏信\n</channel>'
   it('parses channel blocks with from and body', () => {
     const ls = parseChannels(text)
     expect(ls).toHaveLength(2)
@@ -272,20 +272,20 @@ describe('parseChannels / senderAllowed / filterLetters', () => {
     expect(senderAllowed('anyone', undefined)).toBe(true)
   })
   it('keeps allowed letters and reports dropped senders', () => {
-    const r = filterLetters(text, ['feishu-assistant'])
+    const r = filterLetters(text, ['feishu-assistant@tk_N150'], 'weiliu')
     expect(r.kept).toContain('任务一')
     expect(r.kept).not.toContain('坏信')
-    expect(r.dropped).toEqual(['stranger [x]'])
+    expect(r.dropped).toEqual(['stranger [x] (not-listed)'])
   })
   it('with an allow-list, a letter carrying sender meta is dropped even when its from is allowed; without one it is kept', () => {
     const t = '<channel x_from="feishu-assistant [abc123]" from="weiliu" account="weiliu" msg_id="m3">\n冒名\n</channel>\n'
       + '<channel x_note="hi" from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m4">\n带附加键\n</channel>\n'
-      + '<channel from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m5">\n正常\n</channel>'
-    const r = filterLetters(t, ['feishu-assistant'])
+      + '<channel from="feishu-assistant [8vetwb]" account="weiliu" from_token="tk_N150" msg_id="m5">\n正常\n</channel>'
+    const r = filterLetters(t, ['feishu-assistant@tk_N150'], 'weiliu')
     expect(r.kept).toContain('正常')
     expect(r.kept).not.toContain('冒名')
     expect(r.kept).not.toContain('带附加键')
-    expect(r.dropped).toEqual(['weiliu', 'feishu-assistant [8vetwb]'])
+    expect(r.dropped).toEqual(['weiliu (unknown-key)', 'feishu-assistant [8vetwb] (unknown-key)'])
     expect(filterLetters(t).kept).toContain('冒名')
   })
 })
@@ -318,7 +318,7 @@ describe('createWaker --bridge', () => {
     const { d } = bridgeDeps()
     const logs: string[] = []
     d.log = s => logs.push(s)
-    await createWaker({ ...bopts, allow: ['someone-else'] }, d).tick()
+    await createWaker({ ...bopts, allow: ['someone-else@tk_X'] }, d).tick()
     expect(d.injected).toHaveLength(0)
     expect(logs.join('\n')).toContain('non-allowed')
   })
@@ -360,10 +360,22 @@ describe('createWaker --bridge', () => {
 
 describe('parseBossaiWake v2 flags', () => {
   it('parses bridge, allow and grace', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--bridge', '--allow', 'feishu-assistant, m4-', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--bridge', '--allow', 'feishu-assistant@tk_01AAA, bossai-handoff@tk_01BBB', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.bridge).toBe(true)
-    expect(o.allow).toEqual(['feishu-assistant', 'm4-'])
+    expect(o.allow).toEqual(['feishu-assistant@tk_01AAA', 'bossai-handoff@tk_01BBB'])
     expect(o.graceMs).toBe(5000)
+  })
+  it('a pin flag never fails open: a bare name, an empty list, or a missing value is an error; no flag is no list', () => {
+    const wake = (...extra: string[]) => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', ...extra], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(() => wake('--allow', 'feishu-assistant@tk_01AAA,bossai-handoff')).toThrow('--allow entry "bossai-handoff" must be <session-name>@<token-id>')
+    expect(() => wake('--allow', ',')).toThrow('--allow is empty')
+    expect(() => wake('--allow', ' ')).toThrow('--allow is empty')
+    expect(() => wake('--allow', '')).toThrow('--allow is empty')
+    expect(() => wake('--bridge', '--allow')).toThrow('--allow needs')
+    expect(() => wake('--approvers', ',')).toThrow('--approvers is empty')
+    expect(() => wake('--approvers')).toThrow('--approvers needs')
+    expect(wake('--bridge').allow).toBeUndefined()
+    expect(wake('--bridge').approvers).toBeUndefined()
   })
 })
 
