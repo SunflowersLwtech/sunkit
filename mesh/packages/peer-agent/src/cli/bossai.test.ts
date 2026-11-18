@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
+  approvalNotice, askTimeoutMs, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker, DEFAULT_ASK_TIMEOUT_MS,
   filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
   approvalNotice, bridgeEnv, discoverBossaiSockets, ensureCtlHome, parseApprovalCommand, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
@@ -146,6 +146,31 @@ describe('injectionBody / approvalNotice', () => {
     expect(s).toContain('shell_command')
     expect(s).toContain('chat-1')
     expect(s).toContain('不会代为批准')
+  })
+  it('states the timeout BossAI is configured with, not a fixed one', () => {
+    const card = (ms?: number) => approvalNotice({ toolCallId: 't1', toolName: 'shell_command' }, 'chat-1', undefined, ms)
+    expect(card()).toContain('5 分钟内没人处理会自动拒')
+    expect(card(1_800_000)).toContain('30 分钟内没人处理会自动拒')
+    expect(card(1_800_000)).not.toContain('5 分钟')
+    expect(card(90_000)).toContain('90 秒内没人处理会自动拒')
+    expect(card(0)).toContain('不超时')
+    expect(card(0)).not.toContain('自动拒')
+  })
+  it('reads BOSSAI_PERMISSION_ASK_TIMEOUT_MS the way BossAI does', () => {
+    expect(askTimeoutMs({})).toBe(DEFAULT_ASK_TIMEOUT_MS)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '1800000' })).toBe(1_800_000)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: 'soon' })).toBe(DEFAULT_ASK_TIMEOUT_MS)
+    // BossAI: Number('') is 0, and 0 waits forever; negatives clamp to 0.
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '' })).toBe(0)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '-5' })).toBe(0)
+  })
+  it('wake takes the timeout from its environment and puts it on the card it sends', async () => {
+    expect(parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '1800000' }).askTimeoutMs).toBe(1_800_000)
+    const sent: string[] = []
+    const d = deps({ discover: async () => [], pendingAsk: async () => ({ toolCallId: 'call_9', toolName: 'shell_command' }), notify: async t => { sent.push(t) } })
+    await createWaker({ ...opts, notify: 'feishu-assistant', askTimeoutMs: 1_800_000 }, d).tick()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('30 分钟内没人处理会自动拒')
   })
 })
 

@@ -526,7 +526,9 @@ Verified live against BossAI 1.3.34 (macOS arm64): config write, tool discovery,
 into an active run, else a new turn — then reports busy/idle. A 409 from the global concurrency
 slot is retried without consuming another wake nudge. `--notify <mesh-name>` optionally forwards
 pending tool-approval cards to a mesh contact; it never approves anything (BossAI's own approval
-queue stays authoritative, 5-minute default timeout).
+queue stays authoritative). The card states BossAI's timeout, `BOSSAI_PERMISSION_ASK_TIMEOUT_MS`
+(default 5 minutes, `0` waits forever; an expired card is denied). The app's API does not report
+it, so start `wake` with the same value as the app; wake logs the value it assumes.
 
 `--bridge` covers the idle app: BossAI closes managed MCP connections on session teardown, so
 while no BossAI peer answers, wake holds the mesh session with its own peer child (same session

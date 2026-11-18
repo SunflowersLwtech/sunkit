@@ -21575,9 +21575,12 @@ var bossai_exports = {};
 __export(bossai_exports, {
   BOSSAI_USAGE: () => BOSSAI_USAGE,
   CHANNEL_KEYS: () => CHANNEL_KEYS,
+  DEFAULT_ASK_TIMEOUT_MS: () => DEFAULT_ASK_TIMEOUT_MS,
   allowLetterVerdict: () => allowLetterVerdict,
   approvalNotice: () => approvalNotice,
   approverVerdict: () => approverVerdict,
+  askTimeoutMs: () => askTimeoutMs,
+  askTimeoutText: () => askTimeoutText,
   assertLoopbackServer: () => assertLoopbackServer,
   bossaiControlToken: () => bossaiControlToken,
   bossaiPortFile: () => bossaiPortFile,
@@ -21723,9 +21726,18 @@ function redactSubtitle(s, max = 160) {
   const r = s.replace(/(bearer\s+)\S+/gi, "$1[redacted]").replace(/((?:token|key|secret|password|passwd|pwd|auth)[\w-]*\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[redacted]").replace(/[A-Za-z0-9_+/=-]{32,}/g, "[redacted]");
   return r.length > max ? `${r.slice(0, max)}\u2026` : r;
 }
-function approvalNotice(ask, chat, ctlSession) {
+function askTimeoutMs(env = process.env) {
+  const v = Number(env.BOSSAI_PERMISSION_ASK_TIMEOUT_MS);
+  return Math.max(0, Number.isFinite(v) ? v : DEFAULT_ASK_TIMEOUT_MS);
+}
+function askTimeoutText(ms) {
+  if (ms === 0) return "BossAI \u8BBE\u4E3A\u4E0D\u8D85\u65F6\uFF0C\u4F1A\u4E00\u76F4\u7B49\u5230\u6709\u4EBA\u5904\u7406";
+  const s = Math.ceil(ms / 1e3);
+  return `${s % 60 === 0 ? `${s / 60} \u5206\u949F` : `${s} \u79D2`}\u5185\u6CA1\u4EBA\u5904\u7406\u4F1A\u81EA\u52A8\u62D2`;
+}
+function approvalNotice(ask, chat, ctlSession, timeoutMs = DEFAULT_ASK_TIMEOUT_MS) {
   const how = ctlSession ? `\u6279\u51C6/\u62D2\u7EDD\uFF1A\u7ED9 mesh \u4F1A\u8BDD ${ctlSession} \u53D1\u300CAPPROVE ${ask.toolCallId}\u300D\u6216\u300CDENY ${ask.toolCallId} <\u7406\u7531>\u300D\uFF08\u4EC5\u767D\u540D\u5355\u6279\u51C6\u4EBA\u6709\u6548\uFF0C\u4E00\u6B21\u6027\u653E\u884C\uFF09\u3002` : "\u8BF7\u5230 BossAI \u684C\u9762\u7AEF\u5904\u7406\u3002";
-  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}\u9ED8\u8BA4 5 \u5206\u949F\u8D85\u65F6\u81EA\u52A8\u62D2\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
+  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}${askTimeoutText(timeoutMs)}\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
 }
 function parseApprovalCommand(body) {
   const m = /^\s*(APPROVE|DENY)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(body.trim());
@@ -21923,7 +21935,7 @@ function createWaker(o, d) {
         const ask = await d.pendingAsk();
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId;
-          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0)).catch((e) => d.log(`approval notify failed: ${e.message}`));
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0, o.askTimeoutMs)).catch((e) => d.log(`approval notify failed: ${e.message}`));
         }
         if (!ask) lastAskNotified = void 0;
       }
@@ -22061,7 +22073,8 @@ function parseBossaiWake(args, env = process.env) {
       if (m !== "cloud" && m !== "hybrid" && m !== "local") throw new Error("--run-mode must be cloud, hybrid or local");
       return m;
     })(),
-    model: flag5(args, "--model")
+    model: flag5(args, "--model"),
+    askTimeoutMs: askTimeoutMs(env)
   };
 }
 async function runBossaiWake(args, io = {}) {
@@ -22131,7 +22144,7 @@ async function runBossaiWake(args, io = {}) {
     log,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms))
   });
-  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}`);
+  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}${o.notify ? ` ask-timeout=${o.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS}ms (BOSSAI_PERMISSION_ASK_TIMEOUT_MS; must match the app's)` : ""}`);
   if (io.once || args.includes("--once")) {
     await waker.tick();
     await waker.shutdown();
@@ -22153,7 +22166,7 @@ async function runBossai(args) {
   console.error(BOSSAI_USAGE);
   return 2;
 }
-var BOSSAI_USAGE, CHANNEL_KEYS;
+var BOSSAI_USAGE, DEFAULT_ASK_TIMEOUT_MS, CHANNEL_KEYS;
 var init_bossai = __esm({
   "packages/peer-agent/src/cli/bossai.ts"() {
     "use strict";
@@ -22200,6 +22213,7 @@ wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secr
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
 --license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
+    DEFAULT_ASK_TIMEOUT_MS = 5 * 6e4;
     CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
 });
