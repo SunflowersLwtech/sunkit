@@ -47,7 +47,8 @@ export const BOSSAI_USAGE =
   + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)\n'
   + 'or --token-file (refused when group/other can read it). --server must be a loopback URL.\n'
   + 'Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n'
-  + '--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).'
+  + '--license-file (the licenseKey from the cloud /api/bossai/bootstrap response; refused when\n'
+  + 'group/other can read it, like --token-file).'
 
 export interface BossaiInstallOpts {
   /** BossAI embedded server origin, e.g. http://127.0.0.1:57291. Discovered from the port file when absent. */
@@ -639,6 +640,9 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined)
   if (!token) throw new Error('wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).')
   const licenseFile = flag(args, '--license-file')
+  if (!env.BOSSAI_CLOUD_LICENSE && licenseFile && process.platform !== 'win32' && (statSync(licenseFile).mode & 0o077) !== 0) {
+    throw new Error(`--license-file ${licenseFile} is readable by group or others; chmod 600 it, or better inject BOSSAI_CLOUD_LICENSE from the secret store.`)
+  }
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync(licenseFile, 'utf8').trim() : undefined)
   const pollMs = Number(flag(args, '--poll-ms') ?? 3_000)
   const graceMs = Number(flag(args, '--grace-ms') ?? 15_000)

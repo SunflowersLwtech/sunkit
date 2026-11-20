@@ -229,6 +229,18 @@ describe('what leaves the machine', () => {
     chmodSync(f, 0o600)
     expect(parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--token-file', f], {}).token).toBe('secret-token')
   })
+  it('refuses a license file readable by group or others, as the token file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bossai-lic-'))
+    const f = join(dir, 'lic')
+    writeFileSync(f, 'secret-license')
+    chmodSync(f, 0o644)
+    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--license-file', f], { BOSSAI_CLOUD_TOKEN: 't' })).toThrow(/license-file.*group or others/)
+    chmodSync(f, 0o600)
+    expect(parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--license-file', f], { BOSSAI_CLOUD_TOKEN: 't' }).license).toBe('secret-license')
+    // The env license wins, and the file's permissions then do not matter.
+    chmodSync(f, 0o644)
+    expect(parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--license-file', f], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'env-lic' }).license).toBe('env-lic')
+  })
 })
 
 describe('--allow: the senders --approvers would accept (live session, exact name, own account, pinned token)', () => {
