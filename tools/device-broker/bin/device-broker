@@ -400,12 +400,22 @@ cmd_release() {
   local existing st me=""
   existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
   lease_is_live "${d}"; st=$?
+  # A stale lease is cleared through the same locked re-judge as acquire and gc
+  # (reclaim_stale): between the verdict above and a bare removal, another
+  # acquirer may have reclaimed and written a LIVE lease, and removing it here
+  # would drop a live holder's claim (simctl-run shutdown releases two leases
+  # back to back, right into that window). No owner key is needed to clear a
+  # stale lease, as before.
+  if [ "${st}" -eq 1 ]; then
+    if reclaim_stale "${d}"; then say "released ${res}"
+    else say "the lease on ${res} was taken by another owner; left alone"; fi
+    exit 0
+  fi
   # Resolve the key into a variable and refuse if there is none: owner_key's
   # die inside $(...) would only exit the subshell, leaving "" != "" false and
-  # removing a lease we cannot read (fail open). A stale lease (st=1) needs no
-  # key to clear.
-  if [ "${st}" -ne 1 ]; then me="$(owner_key)" || exit 4; fi
-  if [ "${st}" -ne 1 ] && [ "${existing}" != "${me}" ]; then
+  # removing a lease we cannot read (fail open).
+  me="$(owner_key)" || exit 4
+  if [ "${existing}" != "${me}" ]; then
     [ "${st}" -eq 2 ] && [ -z "${existing}" ] && \
       die "the lease on ${res} cannot be read; refusing to release it (fail closed)" 4
     die "lease on ${res} is held by another owner; refusing to release" 3
