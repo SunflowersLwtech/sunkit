@@ -12,6 +12,9 @@ S1, S2, S3 = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-22
 
 
 class SeatOffClaude(unittest.TestCase):
+    def setUp(self):
+        self.var = os.path.join(tempfile.mkdtemp(), "var")  # the asked-<name> stamps, never the host's /var/lib/seat-offclaude
+
     def run_it(self, csv_text, opts=None, args=()):
         d = tempfile.mkdtemp()
         with open(os.path.join(d, "usage.csv"), "w") as f:
@@ -22,7 +25,7 @@ class SeatOffClaude(unittest.TestCase):
         with open(fake, "w") as f:
             f.write("#!%s\nimport sys\na=sys.argv[1:]\nd=%r\nprint(open(d+('/opts.json' if a[0]=='plugin' else '/usage.csv')).read(), end='')\n" % (sys.executable, d))
         os.chmod(fake, 0o755)
-        return subprocess.run([sys.executable, "-I", os.path.join(HERE, "seat-offclaude"), *args], env=dict(os.environ, SO_MAGPIE=fake),
+        return subprocess.run([sys.executable, "-I", os.path.join(HERE, "seat-offclaude"), *args], env=dict(os.environ, SO_MAGPIE=fake, SO_VAR=self.var),
                               capture_output=True, text=True, timeout=60)
 
     def test_off_claude_turns_of_watched_sessions_are_listed(self):
@@ -50,6 +53,35 @@ class SeatOffClaude(unittest.TestCase):
     def test_no_csv_at_all_exits_non_zero(self):
         r = self.run_it("")
         self.assertEqual(r.returncode, 2, r.stdout)
+
+    def stamp(self, name):
+        try:
+            with open(os.path.join(self.var, "asked-" + name)) as f:
+                return int(f.read())
+        except OSError:
+            return None
+
+    def test_a_run_notes_who_asked(self):
+        # seat-guard tells when the stuck-sweep stops coming; the sweep passes no --by, so its runs are "sweep"
+        r = self.run_it(HEAD + "\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIsNotNone(self.stamp("sweep"), "the stuck-sweep's run left no asked-sweep stamp")
+        with open(os.path.join(self.var, "asked-sweep"), "w") as f:
+            f.write("1")  # an old visit
+        r = self.run_it(HEAD + "\n", args=("--by", "seat-guard"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIsNotNone(self.stamp("seat-guard"))
+        self.assertEqual(self.stamp("sweep"), 1, "seat-guard's own run must not count as the stuck-sweep coming")
+
+    def test_a_failed_run_notes_nothing(self):
+        r = self.run_it("time,session\nx,y\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertIsNone(self.stamp("sweep"), "a run that answered nothing must not read as the sweep still coming")
+
+    def test_a_bad_name_is_refused(self):
+        r = self.run_it(HEAD + "\n", args=("--by", "../etc/x"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(os.path.exists(self.var) and os.listdir(self.var), "no stamp for a refused name")
 
     def test_a_quiet_window_says_zero_rows(self):
         r = self.run_it(HEAD + "\n")

@@ -14,9 +14,11 @@ group/flash-paid in the window (the middleware gives those two only to the
 secretary). The secretary is whitelisted by device, which usage does not
 show, so that is how its sessions are found.
 
-  seat-offclaude [--minutes 15] [--also <id>,<id>...]
+  seat-offclaude [--minutes 15] [--also <id>,<id>...] [--by <name>]
 
-Used by the secretary's stuck-sweep.mjs every 10 minutes over ssh. A usage CSV that lacks a column this reads exits 2
+Used by the secretary's stuck-sweep.mjs every 10 minutes over ssh, and by seat-guard.py (--by seat-guard). Each run
+that answers writes the time to VAR/asked-<name> (name "sweep" without --by): seat-guard reads asked-sweep to see
+that the stuck-sweep still comes (2026-11-21: its cron was off for four days and no one knew). A usage CSV that lacks a column this reads exits 2
 (2026-11-16: until then a renamed column read as "no session off Claude"); `rows` is how many requests the window
 held, and stuck-sweep takes 0 as a failure too.
 """
@@ -34,6 +36,8 @@ MAGPIE = os.environ.get("SO_MAGPIE", "docker exec %s magpie" % CONTAINER).split(
 NEEDS = ("time", "session", "status", "served_model", "requested_model", "provider")
 NAME = "/plugins/route-all-flash.middleware.js"
 SECRETARY_MODELS = ("group/secretary-seat", "group/flash-paid")
+VAR = os.environ.get("SO_VAR", "/var/lib/seat-offclaude")
+NAME_OK = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -45,15 +49,17 @@ def magpie(*args):
 
 
 def main(argv):
-    minutes, also = 15, set()
+    minutes, also, by = 15, set(), "sweep"
     i = 1
     while i < len(argv):
         if argv[i] == "--minutes" and i + 1 < len(argv):
             minutes = int(argv[i + 1]); i += 2
         elif argv[i] == "--also" and i + 1 < len(argv):
             also |= {x.strip() for x in argv[i + 1].split(",") if UUID.match(x.strip())}; i += 2
+        elif argv[i] == "--by" and i + 1 < len(argv) and NAME_OK.match(argv[i + 1]):
+            by = argv[i + 1]; i += 2
         else:
-            raise SystemExit("usage: seat-offclaude [--minutes N] [--also <id>,<id>...]")
+            raise SystemExit("usage: seat-offclaude [--minutes N] [--also <id>,<id>...] [--by <name>]")
     if not 1 <= minutes <= 24 * 60:
         raise SystemExit("seat-offclaude: --minutes must be 1..1440")
 
@@ -93,6 +99,13 @@ def main(argv):
         "lease": "on" if (opts.get("seatUntil") or 0) > now else "off",
         "sessions": sorted(out.values(), key=lambda e: e["last"]),
     }, ensure_ascii=False))
+    try:  # who asked, for seat-guard; failing to note it never fails the answer
+        os.makedirs(VAR, exist_ok=True)
+        with open(os.path.join(VAR, "asked-%s.tmp" % by), "w") as f:
+            f.write(str(now))
+        os.replace(os.path.join(VAR, "asked-%s.tmp" % by), os.path.join(VAR, "asked-%s" % by))
+    except OSError as e:
+        sys.stderr.write("seat-offclaude: asked stamp not written: %s\n" % e)
     return 0
 
 
