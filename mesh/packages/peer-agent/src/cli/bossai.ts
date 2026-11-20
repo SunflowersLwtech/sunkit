@@ -59,7 +59,7 @@ export interface BossaiInstallOpts {
   id: string
   /** Mesh session name the peer registers as (MESH_SESSION_NAME). */
   session?: string | undefined
-  /** Session names the peer takes mail from (MESH_ALLOW); undefined = every sender. */
+  /** `<name>@<token-id>` pins the peer takes mail from (MESH_ALLOW); undefined = every sender. */
   allow?: string[] | undefined
   node: string
   peer: string
