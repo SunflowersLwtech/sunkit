@@ -56,7 +56,9 @@ metadata (avd, port, udid, profile dir).
 device-broker acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]
                       -> 0 ok · 3 held by other · 5 physical refused ·
                          6 type at cap · 4 undeterminable
-device-broker release <resource>            only the live owner may release
+device-broker release <resource>            only the live owner may release;
+                                            a stale lease is cleared under the
+                                            reclaim lock (as acquire and gc do)
 device-broker check   <resource> [--require-mine]
                       -> 0 mine-or-free · 3 held by other · 4 undeterminable
 device-broker status                        JSON list, live vs stale

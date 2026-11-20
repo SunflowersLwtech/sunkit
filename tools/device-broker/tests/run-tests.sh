@@ -455,6 +455,15 @@ env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
 if [ "${rc}" -ne 0 ] && [ -f "${L26B}/lease.json" ]; then ok
 else bad "rc=${rc} (want nonzero refusal); lease $([ -f "${L26B}/lease.json" ] && echo kept || echo REMOVED)"; fi
 
+T="t26c: check with no owner key and no --require-mine refuses a live lease with no ownerKey field, lease kept"
+L26C="${H26}/leases/android-emulator:port-6094.lock"
+mkdir -p "${L26C}"
+printf '{"schemaVersion": 1, "resource": "android-emulator:port-6094", "owner": {"pid": %s, "pidStart": ""}, "acquiredAt": 1, "meta": {}}\n' "$$" > "${L26C}/lease.json"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
+  "${BIN}/device-broker" check android-emulator:port-6094 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 4 ] && [ -f "${L26C}/lease.json" ]; then ok
+else bad "rc=${rc} (want 4); lease $([ -f "${L26C}/lease.json" ] && echo kept || echo REMOVED)"; fi
+
 # --- T27: the reclaim race (PR #93 review #3). A slow xcrun stub on the loser's
 #          PATH makes its stale judgment end ~3 s late; meanwhile the winner
 #          reclaims and writes a LIVE lease. The loser must re-check under the
@@ -512,6 +521,31 @@ kill "${A27BPID}" 2>/dev/null
 # inside-lock re-check. The bug (head): A rc=0 yet gc removed A's live lease.
 if [ "${rca27b}" -ne 0 ] || [ "${own27b}" = sess-A ]; then ok
 else bad "A rc=${rca27b} but lease after gc: ${own27b:-GONE} (gc removed a live lease); gc said: $(tr '\n' '|' < "${R27}/gc.err")"; fi
+
+T="t27c: release that judged a stale lease does not remove the live lease another acquirer just wrote"
+H27C="$(newhome)"; mkdir -p "${H27C}/leases"
+D27C="${H27C}/leases/${RES27}.lock"
+mkdir "${D27C}"
+cat > "${D27C}/lease.json" <<EOF
+{"schemaVersion": 1, "resource": "${RES27}", "ownerKey": "sess-DEAD",
+ "owner": {"pid": 4194303, "pidStart": "", "host": "x", "worktree": "/", "session": "", "command": "x"},
+ "acquiredAt": 1, "whileBooted": "EEEE-5555", "meta": {}}
+EOF
+sleep 30 & A27CPID=$!
+( DB_HOME="${H27C}" PATH="${R27}/slow:${PATH}" "${BIN}/device-broker" release "${RES27}" > "${R27}/rel.out" 2> "${R27}/rel.err" ) &
+X27PID=$!
+sleep 1
+DB_HOME="${H27C}" PATH="${R27}/fast:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+  --owner-key sess-A --owner-pid "${A27CPID}" --while-booted EEEE-5555 > "${R27}/a3.out" 2>&1; rca27c=$?
+wait "${X27PID}"
+own27c="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${D27C}/lease.json" 2>/dev/null | head -1)"
+kill "${A27CPID}" 2>/dev/null
+# Same invariant as t27b, through the third path: release must never remove a
+# lease whose owner is alive. Either A was refused (release held the reclaim
+# lock while re-judging), or A wrote a live lease and it survives the re-judge.
+# The bug (before the locked release): A rc=0 yet release removed A's live lease.
+if [ "${rca27c}" -ne 0 ] || [ "${own27c}" = sess-A ]; then ok
+else bad "A rc=${rca27c} but lease after release: ${own27c:-GONE} (release removed a live lease); release said: $(tr '\n' '|' < "${R27}/rel.err")"; fi
 
 say ""
 say "== ${PASS} passed, ${FAIL} failed =="
