@@ -39,7 +39,7 @@ describe('readBossaiPort / resolveBossaiServer', () => {
 })
 
 describe('bossaiServerBody', () => {
-  it('registers the peer as stdio MCP in pull mode with the session name', () => {
+  it('registers the peer as send-only stdio MCP (wake bridge holds the pull session)', () => {
     const body = bossaiServerBody({ id: 'mesh', session: 'bossai-m2', node: '/n', peer: '/p.mjs' })
     expect(body.id).toBe('mesh')
     expect(body.enabled).toBe(true)
@@ -47,7 +47,7 @@ describe('bossaiServerBody', () => {
     expect(t.type).toBe('stdio')
     expect(t.command).toBe('/n')
     expect(t.args).toEqual(['/p.mjs'])
-    expect(t.env).toEqual({ MESH_JOIN: 'pull', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
+    expect(t.env).toEqual({ MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
     // create_worker stays off for BossAI: install never writes the opt-in.
     expect(t.env).not.toHaveProperty('MESH_CREATE_WORKER')
   })

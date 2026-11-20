@@ -21650,7 +21650,7 @@ function resolveBossaiServer(o, platform = process.platform, env = process.env) 
   return `http://127.0.0.1:${port}`;
 }
 function bossaiServerBody(o) {
-  const env = { MESH_JOIN: "pull", MESH_HOST: "bossai", MESH_WAKE: "" };
+  const env = { MESH_JOIN: "never", MESH_HOST: "bossai", MESH_WAKE: "" };
   if (o.session) env.MESH_SESSION_NAME = o.session;
   if (o.allow?.length) env.MESH_ALLOW = o.allow.join(",");
   return {
