@@ -37456,15 +37456,30 @@ function logJson(level, event, fields = {}) {
 }
 
 // packages/peer-agent/src/sender-allow.ts
+function splitPin(entry) {
+  const i = entry.lastIndexOf("@");
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
+}
 function parseAllow(value) {
-  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return names.length > 0 ? names : void 0;
+  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) return void 0;
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
 }
 function allowVerdict(e, allow, ownAccount) {
   if (!e.from_session || !e.from_name) return "send-only";
-  if (!allow.includes(e.from_name)) return "not-listed";
+  const entries = allow.map(splitPin).filter((a) => a.name === e.from_name);
+  if (entries.length === 0) return "not-listed";
   if (!ownAccount) return "no-own-account";
-  return e.from === ownAccount ? "ok" : "foreign-account";
+  if (e.from !== ownAccount) return "foreign-account";
+  const pins = entries.filter((a) => a.token);
+  if (pins.length === 0) return "unpinned";
+  if (!e.from_token) return "no-token";
+  return pins.some((a) => a.token === e.from_token) ? "ok" : "wrong-token";
 }
 
 // packages/peer-agent/src/inbound.ts

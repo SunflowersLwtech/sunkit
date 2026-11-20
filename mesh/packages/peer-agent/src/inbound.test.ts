@@ -9,6 +9,7 @@ const envelope = (overrides: Partial<Envelope> = {}): Envelope => ({
   kind: 'chat', content: 'hi', meta: {},
   sent_at: '2026-04-17T00:00:00.000Z', delivered_at: null,
   from_session: null, from_name: null, to_session: null,
+  from_token: null,
   ...overrides
 })
 
@@ -134,7 +135,7 @@ describe('InboundDispatcher', () => {
 
   describe('MESH_ALLOW (allow)', () => {
     const allowed = (o: Partial<Envelope> = {}) =>
-      envelope({ from: 'alice', from_session: 's_01abcdef', from_name: 'feishu-assistant', ...o })
+      envelope({ from: 'alice', from_session: 's_01abcdef', from_name: 'feishu-assistant', from_token: 'tk_N150', ...o })
     let out: string[]
     let cursors: string[]
     let ad: InboundDispatcher
@@ -144,7 +145,7 @@ describe('InboundDispatcher', () => {
       ad = new InboundDispatcher({
         gate: new SenderGate(['alice', 'bob']),
         chatOnly: true,
-        allow: { names: ['feishu-assistant'], ownAccount: 'alice' },
+        allow: { names: ['feishu-assistant@tk_N150'], ownAccount: 'alice' },
         emit: n => { out.push(String((n.params.meta as Record<string, string>).from)) },
         setCursor: id => { cursors.push(id) },
       })
@@ -164,10 +165,17 @@ describe('InboundDispatcher', () => {
       expect(cursors).toEqual(['msg_01HRK7Y0000000000000000011', 'msg_01HRK7Y0000000000000000012', 'msg_01HRK7Y0000000000000000013'])
     })
 
+    it('a same-name session on another token of the account, and one without a stamp, are dropped too', () => {
+      ad.handle(allowed({ id: 'msg_01HRK7Y0000000000000000014', from_token: 'tk_DEVDESK' }))
+      ad.handle(allowed({ id: 'msg_01HRK7Y0000000000000000015', from_token: null }))
+      expect(out).toEqual([])
+      expect(cursors.slice(-2)).toEqual(['msg_01HRK7Y0000000000000000014', 'msg_01HRK7Y0000000000000000015'])
+    })
+
     it('an unknown own account drops everything', () => {
       const closed = new InboundDispatcher({
         gate: new SenderGate(['alice']),
-        allow: { names: ['feishu-assistant'], ownAccount: undefined },
+        allow: { names: ['feishu-assistant@tk_N150'], ownAccount: undefined },
         emit: n => { out.push(String((n.params.meta as Record<string, string>).from)) },
         setCursor: () => { /* no-op */ },
       })

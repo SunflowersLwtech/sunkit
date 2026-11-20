@@ -21,9 +21,9 @@ export const BOSSAI_USAGE =
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
   + '         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not\n'
-  + '         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use\n'
-  + '         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI\n'
-  + '         reads its mail with read_messages, which wake never sees.\n'
+  + '         send-only) with a listed name, on its own mesh account, sent with the pinned token\n'
+  + '         (MESH_ALLOW, <session-name>@<token-id>). Use the same pins as wake --allow: mid-turn\n'
+  + '         BossAI reads its mail with read_messages, which wake never sees.\n'
   + 'wake:    resident injector — BossAI has no hooks surface, so this plays the hooks\' role:\n'
   + '         poll the peer\'s hook socket, inject a mail notice via the local HTTP chat API\n'
   + '         (steer into an active run, else start a turn), report busy/idle, and optionally\n'
@@ -113,7 +113,13 @@ export function parseBossaiInstall(args: string[], defaults: BossaiInstallOpts):
     portFile: flag(args, '--port-file') ?? defaults.portFile,
     id: flag(args, '--id') ?? defaults.id,
     session: flag(args, '--session') ?? defaults.session,
-    allow: parseAllow(flag(args, '--allow')) ?? defaults.allow,
+    allow: (() => {
+      const raw = flag(args, '--allow')
+      if (raw === undefined) return defaults.allow
+      const allow = parseAllow(raw)
+      if (allow === undefined) throw new Error('--allow is empty; give <session-name>@<token-id>,… or leave the flag out')
+      return allow
+    })(),
     node: flag(args, '--node') ?? defaults.node,
     peer: flag(args, '--peer') ?? defaults.peer,
   }

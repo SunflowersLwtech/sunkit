@@ -57,8 +57,8 @@ describe('bossaiServerBody', () => {
   })
   it('--allow reaches the peer as MESH_ALLOW; without it the peer gets no allow-list', () => {
     const env = (b: Record<string, unknown>) => (b.transport as { env: Record<string, string> }).env
-    expect(env(bossaiServerBody({ id: 'mesh', session: 'bossai-devdesk', allow: ['feishu-assistant', 'bossai-handoff'], node: '/n', peer: '/p' })).MESH_ALLOW)
-      .toBe('feishu-assistant,bossai-handoff')
+    expect(env(bossaiServerBody({ id: 'mesh', session: 'bossai-devdesk', allow: ['feishu-assistant@tk_N150', 'bossai-handoff@tk_M4'], node: '/n', peer: '/p' })).MESH_ALLOW)
+      .toBe('feishu-assistant@tk_N150,bossai-handoff@tk_M4')
     expect(env(bossaiServerBody({ id: 'mesh', node: '/n', peer: '/p' }))).not.toHaveProperty('MESH_ALLOW')
   })
 })
@@ -71,10 +71,14 @@ describe('parseBossaiInstall', () => {
     expect(o.server).toBe('http://127.0.0.1:1')
     expect(o.node).toBe('/n')
   })
-  it('reads --allow as a trimmed name list', () => {
-    expect(parseBossaiInstall(['--allow', 'feishu-assistant, bossai-handoff'], { id: 'mesh', node: '/n', peer: '/p' }).allow)
-      .toEqual(['feishu-assistant', 'bossai-handoff'])
+  it('reads --allow as a trimmed pin list', () => {
+    expect(parseBossaiInstall(['--allow', 'feishu-assistant@tk_N150, bossai-handoff@tk_M4'], { id: 'mesh', node: '/n', peer: '/p' }).allow)
+      .toEqual(['feishu-assistant@tk_N150', 'bossai-handoff@tk_M4'])
     expect(parseBossaiInstall([], { id: 'mesh', node: '/n', peer: '/p' }).allow).toBeUndefined()
+  })
+  it('a bare name or an empty --allow is a config error, not an allow-list', () => {
+    expect(() => parseBossaiInstall(['--allow', 'feishu-assistant'], { id: 'mesh', node: '/n', peer: '/p' })).toThrow('must be <session-name>@<token-id>')
+    expect(() => parseBossaiInstall(['--allow', ','], { id: 'mesh', node: '/n', peer: '/p' })).toThrow('--allow is empty')
   })
 })
 

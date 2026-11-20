@@ -6345,8 +6345,14 @@ var init_bossai_paths = __esm({
 
 // packages/peer-agent/src/sender-allow.ts
 function parseAllow(value) {
-  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return names.length > 0 ? names : void 0;
+  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) return void 0;
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
 }
 var init_sender_allow = __esm({
   "packages/peer-agent/src/sender-allow.ts"() {
@@ -21660,7 +21666,13 @@ function parseBossaiInstall(args, defaults2) {
     portFile: flag5(args, "--port-file") ?? defaults2.portFile,
     id: flag5(args, "--id") ?? defaults2.id,
     session: flag5(args, "--session") ?? defaults2.session,
-    allow: parseAllow(flag5(args, "--allow")) ?? defaults2.allow,
+    allow: (() => {
+      const raw = flag5(args, "--allow");
+      if (raw === void 0) return defaults2.allow;
+      const allow = parseAllow(raw);
+      if (allow === void 0) throw new Error("--allow is empty; give <session-name>@<token-id>,\u2026 or leave the flag out");
+      return allow;
+    })(),
     node: flag5(args, "--node") ?? defaults2.node,
     peer: flag5(args, "--peer") ?? defaults2.peer
   };
@@ -22186,9 +22198,9 @@ var init_bossai = __esm({
 install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
          (pure config; the BossAI session itself joins the mesh in pull mode).
          --allow: the peer itself only takes mail from a live session ("<name> [ref]", not
-         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use
-         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI
-         reads its mail with read_messages, which wake never sees.
+         send-only) with a listed name, on its own mesh account, sent with the pinned token
+         (MESH_ALLOW, <session-name>@<token-id>). Use the same pins as wake --allow: mid-turn
+         BossAI reads its mail with read_messages, which wake never sees.
 wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:
          poll the peer's hook socket, inject a mail notice via the local HTTP chat API
          (steer into an active run, else start a turn), report busy/idle, and optionally
