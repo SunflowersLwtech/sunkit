@@ -21581,8 +21581,12 @@ var bossai_exports = {};
 __export(bossai_exports, {
   BOSSAI_USAGE: () => BOSSAI_USAGE,
   CHANNEL_KEYS: () => CHANNEL_KEYS,
+  DEFAULT_ASK_TIMEOUT_MS: () => DEFAULT_ASK_TIMEOUT_MS,
+  allowLetterVerdict: () => allowLetterVerdict,
   approvalNotice: () => approvalNotice,
   approverVerdict: () => approverVerdict,
+  askTimeoutMs: () => askTimeoutMs,
+  askTimeoutText: () => askTimeoutText,
   assertLoopbackServer: () => assertLoopbackServer,
   bossaiControlToken: () => bossaiControlToken,
   bossaiPortFile: () => bossaiPortFile,
@@ -21601,6 +21605,7 @@ __export(bossai_exports, {
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
   parseChannels: () => parseChannels,
+  parsePins: () => parsePins,
   pickHookSocket: () => pickHookSocket,
   readBossaiPort: () => readBossaiPort,
   redactSubtitle: () => redactSubtitle,
@@ -21733,9 +21738,18 @@ function redactSubtitle(s, max = 160) {
   const r = s.replace(/(bearer\s+)\S+/gi, "$1[redacted]").replace(/((?:token|key|secret|password|passwd|pwd|auth)[\w-]*\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[redacted]").replace(/[A-Za-z0-9_+/=-]{32,}/g, "[redacted]");
   return r.length > max ? `${r.slice(0, max)}\u2026` : r;
 }
-function approvalNotice(ask, chat, ctlSession) {
+function askTimeoutMs(env = process.env) {
+  const v = Number(env.BOSSAI_PERMISSION_ASK_TIMEOUT_MS);
+  return Math.max(0, Number.isFinite(v) ? v : DEFAULT_ASK_TIMEOUT_MS);
+}
+function askTimeoutText(ms) {
+  if (ms === 0) return "BossAI \u8BBE\u4E3A\u4E0D\u8D85\u65F6\uFF0C\u4F1A\u4E00\u76F4\u7B49\u5230\u6709\u4EBA\u5904\u7406";
+  const s = Math.ceil(ms / 1e3);
+  return `${s % 60 === 0 ? `${s / 60} \u5206\u949F` : `${s} \u79D2`}\u5185\u6CA1\u4EBA\u5904\u7406\u4F1A\u81EA\u52A8\u62D2`;
+}
+function approvalNotice(ask, chat, ctlSession, timeoutMs = DEFAULT_ASK_TIMEOUT_MS) {
   const how = ctlSession ? `\u6279\u51C6/\u62D2\u7EDD\uFF1A\u7ED9 mesh \u4F1A\u8BDD ${ctlSession} \u53D1\u300CAPPROVE ${ask.toolCallId}\u300D\u6216\u300CDENY ${ask.toolCallId} <\u7406\u7531>\u300D\uFF08\u4EC5\u767D\u540D\u5355\u6279\u51C6\u4EBA\u6709\u6548\uFF0C\u4E00\u6B21\u6027\u653E\u884C\uFF09\u3002` : "\u8BF7\u5230 BossAI \u684C\u9762\u7AEF\u5904\u7406\u3002";
-  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}\u9ED8\u8BA4 5 \u5206\u949F\u8D85\u65F6\u81EA\u52A8\u62D2\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
+  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}${askTimeoutText(timeoutMs)}\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
 }
 function parseApprovalCommand(body) {
   const m = /^\s*(APPROVE|DENY)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(body.trim());
@@ -21798,25 +21812,39 @@ function splitPin(entry) {
   const i = entry.lastIndexOf("@");
   return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
 }
-function parseApprovers(raw) {
+function parsePins(flagName, raw) {
   const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) throw new Error(`${flagName} is empty; give <session-name>@<token-id>,\u2026 or leave the flag out`);
   for (const e of entries) {
     if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
-      throw new Error(`--approvers entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+      throw new Error(`${flagName} entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
     }
   }
   return entries;
+}
+function parseApprovers(raw) {
+  return parsePins("--approvers", raw);
+}
+function pinFlag(args, name) {
+  if (!args.includes(name)) return void 0;
+  const raw = flag5(args, name);
+  if (raw === void 0) throw new Error(`${name} needs <session-name>@<token-id>,\u2026`);
+  return parsePins(name, raw);
 }
 function senderAllowed(from, allow) {
   if (!allow || allow.length === 0) return true;
   const name = from.split(" [")[0].trim();
   return allow.some((p) => name.startsWith(p));
 }
-function filterLetters(text, allow) {
+function allowLetterVerdict(letter, allow, account) {
+  const v = approverVerdict(letter, allow, account);
+  return v === "not-an-approver" ? "not-listed" : v;
+}
+function filterLetters(text, allow, account) {
   const letters = parseChannels(text);
-  const keep = (l) => senderAllowed(l.from, allow) && (!allow?.length || letterShape(l) === "ok");
-  const kept = letters.filter(keep);
-  const dropped = letters.filter((l) => !keep(l)).map((l) => l.from || "(unreadable tag)");
+  const verdict = (l) => allow ? allowLetterVerdict(l, allow, account) : "ok";
+  const kept = letters.filter((l) => verdict(l) === "ok");
+  const dropped = letters.filter((l) => verdict(l) !== "ok").map((l) => `${l.from || "(unreadable tag)"} (${verdict(l)})`);
   const lines = kept.map((l) => `<channel${l.attrs}>
 ${l.body}
 </channel>`);
@@ -21899,7 +21927,7 @@ function createWaker(o, d) {
           const r = await bridge.ask({ op: "wake" });
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read();
-            const { kept, dropped } = filterLetters(text, o.allow);
+            const { kept, dropped } = filterLetters(text, o.allow, o.account);
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(", ")}`);
             await stopBridge();
             if (kept) {
@@ -21919,7 +21947,7 @@ function createWaker(o, d) {
         const ask = await d.pendingAsk();
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId;
-          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0)).catch((e) => d.log(`approval notify failed: ${e.message}`));
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0, o.askTimeoutMs)).catch((e) => d.log(`approval notify failed: ${e.message}`));
         }
         if (!ask) lastAskNotified = void 0;
       }
@@ -22032,7 +22060,6 @@ function parseBossaiWake(args, env = process.env) {
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync14(licenseFile, "utf8").trim() : void 0);
   const pollMs = Number(flag5(args, "--poll-ms") ?? 3e3);
   const graceMs = Number(flag5(args, "--grace-ms") ?? 15e3);
-  const allowRaw = flag5(args, "--allow");
   return {
     chat,
     session: flag5(args, "--session"),
@@ -22049,11 +22076,8 @@ function parseBossaiWake(args, env = process.env) {
     })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
-    allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
-    approvers: (() => {
-      const a = flag5(args, "--approvers");
-      return a ? parseApprovers(a) : void 0;
-    })(),
+    allow: pinFlag(args, "--allow"),
+    approvers: pinFlag(args, "--approvers"),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3,
     runMode: (() => {
       const m = flag5(args, "--run-mode");
@@ -22061,7 +22085,8 @@ function parseBossaiWake(args, env = process.env) {
       if (m !== "cloud" && m !== "hybrid" && m !== "local") throw new Error("--run-mode must be cloud, hybrid or local");
       return m;
     })(),
-    model: flag5(args, "--model")
+    model: flag5(args, "--model"),
+    askTimeoutMs: askTimeoutMs(env)
   };
 }
 async function runBossaiWake(args, io = {}) {
@@ -22131,7 +22156,7 @@ async function runBossaiWake(args, io = {}) {
     log,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms))
   });
-  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}`);
+  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}${o.notify ? ` ask-timeout=${o.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS}ms (BOSSAI_PERMISSION_ASK_TIMEOUT_MS; must match the app's)` : ""}`);
   if (io.once || args.includes("--once")) {
     await waker.tick();
     await waker.shutdown();
@@ -22153,7 +22178,7 @@ async function runBossai(args) {
   console.error(BOSSAI_USAGE);
   return 2;
 }
-var BOSSAI_USAGE, CHANNEL_KEYS;
+var BOSSAI_USAGE, DEFAULT_ASK_TIMEOUT_MS, CHANNEL_KEYS;
 var init_bossai = __esm({
   "packages/peer-agent/src/cli/bossai.ts"() {
     "use strict";
@@ -22168,7 +22193,7 @@ var init_bossai = __esm({
     init_sender_allow();
     BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,\u2026>] [--node <path>] [--peer <path>] [--write]
        mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]
-                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
+                        [--bridge] [--allow <name@token-id,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
 
 install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
          (pure config; the BossAI session itself joins the mesh in pull mode).
@@ -22200,6 +22225,7 @@ wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secr
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
 --license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
+    DEFAULT_ASK_TIMEOUT_MS = 5 * 6e4;
     CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
 });
