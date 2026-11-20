@@ -22057,6 +22057,9 @@ function parseBossaiWake(args, env = process.env) {
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync14(tokenFile, "utf8").trim() : void 0);
   if (!token) throw new Error("wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).");
   const licenseFile = flag5(args, "--license-file");
+  if (!env.BOSSAI_CLOUD_LICENSE && licenseFile && process.platform !== "win32" && (statSync3(licenseFile).mode & 63) !== 0) {
+    throw new Error(`--license-file ${licenseFile} is readable by group or others; chmod 600 it, or better inject BOSSAI_CLOUD_LICENSE from the secret store.`);
+  }
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync14(licenseFile, "utf8").trim() : void 0);
   const pollMs = Number(flag5(args, "--poll-ms") ?? 3e3);
   const graceMs = Number(flag5(args, "--grace-ms") ?? 15e3);
@@ -22224,7 +22227,8 @@ wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the
 wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)
 or --token-file (refused when group/other can read it). --server must be a loopback URL.
 Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
---license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
+--license-file (the licenseKey from the cloud /api/bossai/bootstrap response; refused when
+group/other can read it, like --token-file).`;
     DEFAULT_ASK_TIMEOUT_MS = 5 * 6e4;
     CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
