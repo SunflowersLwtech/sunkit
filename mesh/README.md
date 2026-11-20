@@ -541,7 +541,8 @@ worker's own account, stamped with that token id (not a send-only label, not a p
 same-name session on another token). Mail from anyone else is read, discarded and logged, never
 injected. A bare name, an empty list and a flag without a value are refused at startup. Without
 `--bridge`, idle mail queues on the relay until the next turn (the original v1 behavior).
-`install --allow` (the peer's own `MESH_ALLOW`) still takes names only.
+`install --allow` (the peer's own `MESH_ALLOW`) takes the same `<name@token-id,…>` pins: a bare
+name or an empty list is a config error, and a letter without the relay's token stamp is dropped.
 
 `--approvers <name@token-id,…>` lets named sessions settle those cards: wake holds a
 `<session>-ctl` mesh session, and a reply `APPROVE|DENY <toolCallId> [reason]` settles the ask only
@@ -688,6 +689,12 @@ not from your checkout. After changing the bundle, bump `version` in
 ```bash
 git pull && claude plugin marketplace update sunkit && claude plugin update mesh@sunkit
 ```
+
+Deploy the relay first. Since 0.13.0 the peer trusts the relay-stamped `from_token` for
+`--approvers` / `MESH_ALLOW` pins, and a relay older than that stamp neither adds the token id nor
+strips a sender's own `meta.from_token` — it renders it as a channel key, so a same-name session
+could forge a pin against it. Update the relay to a commit that stamps `from_token` before any
+peer runs 0.13.0; against such a relay an unstampable letter is refused (fails closed).
 
 Packages: `shared` (envelope schema, `<channel>` rendering), `relay` (Hono + SQLite + SSE),
 `peer-agent` (the MCP channel server and the `mesh` CLI), `e2e`.
