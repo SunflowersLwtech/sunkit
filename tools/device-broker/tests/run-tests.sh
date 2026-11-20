@@ -18,7 +18,12 @@ say() { printf '%s\n' "$*"; }
 ok()   { PASS=$((PASS+1)); say "ok   ${T}"; }
 bad()  { FAIL=$((FAIL+1)); say "FAIL ${T} — $*"; }
 
-newhome() { mktemp -d "${TMPDIR:-/tmp}/db-test.XXXXXX"; }
+# Every temp dir this run makes lives under one root, removed on exit: a run
+# used to leave its homes and stub dirs behind (21 under TMPDIR after one).
+TESTROOT="$(mktemp -d "${TMPDIR:-/tmp}/db-tests.XXXXXX")"
+trap 'rm -rf "${TESTROOT}"' EXIT
+
+newhome() { mktemp -d "${TESTROOT}/home.XXXXXX"; }
 
 # --- T1: second acquire of a live lease by a different owner is refused (3)
 T="t1: foreign acquire of live lease refused"
@@ -91,7 +96,7 @@ H7="$(newhome)"
 DB_HOME="${H7}" "${BIN}/device-broker" acquire android-emulator:port-6012 \
   --meta avd=my-avd --owner-key sess-A >/dev/null 2>&1
 # stub adb: reports a different avd name
-STUB="$(mktemp -d "${TMPDIR:-/tmp}/dbstub.XXXXXX")"
+STUB="$(mktemp -d "${TESTROOT}/stub.XXXXXX")"
 cat > "${STUB}/adb" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = "-s" ] && [ "$3" = "emu" ]; then echo "fold7"; exit 0; fi
@@ -212,7 +217,7 @@ GOT="$(DB_HOME="${H17}" "${BIN}/device-broker" limits get android-emulator 2>/de
 #          keeps a list of booted UDIDs and logs what it was asked. Nothing
 #          real boots. simctl-run exits once `simctl boot` returns, so its pid
 #          cannot keep the leases: they live while the simulator is booted.
-SIMSTUB="$(mktemp -d "${TMPDIR:-/tmp}/dbsim.XXXXXX")"
+SIMSTUB="$(mktemp -d "${TESTROOT}/sim.XXXXXX")"
 cat > "${SIMSTUB}/xcrun" <<'EOF'
 #!/usr/bin/env bash
 F="${XCRUN_STUB_BOOTED:?}"
@@ -221,8 +226,10 @@ echo "xcrun $*" >> "${XCRUN_STUB_LOG:?}"
 case "$2" in
   boot) grep -qx "$3" "$F" 2>/dev/null || echo "$3" >> "$F" ;;
   shutdown) grep -vx "$3" "$F" > "$F.n" 2>/dev/null; mv "$F.n" "$F" ;;
-  list) echo "== Devices =="; echo "-- iOS 26.5 --"
-        while read -r u; do [ -n "$u" ] && echo "    iPhone 17 ($u) (Booted) "; done < "$F" ;;
+  list) [ -n "${XCRUN_STUB_LIST_FAIL:-}" ] && exit 1
+        echo "== Devices =="; echo "-- iOS 26.5 --"
+        # As real xcrun: UDIDs print in uppercase, whatever case boot was given.
+        while read -r u; do [ -n "$u" ] && echo "    iPhone 17 ($(printf '%s' "$u" | tr '[:lower:]' '[:upper:]')) (${XCRUN_STUB_STATE:-Booted}) "; done < "$F" ;;
 esac
 exit 0
 EOF
@@ -325,7 +332,7 @@ own="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${L19E}/lease.json" 2>/dev/
 #          (called while lease.json's contents are made) holds the first
 #          acquire mid-write; a second session's acquire meanwhile must see the
 #          lease held by another (3) — not an empty lease.json (4, or taken).
-SLOW="$(mktemp -d "${TMPDIR:-/tmp}/dbslow.XXXXXX")"
+SLOW="$(mktemp -d "${TESTROOT}/slow.XXXXXX")"
 printf '#!/usr/bin/env bash\nsleep 3\necho slowhost\n' > "${SLOW}/hostname"
 chmod +x "${SLOW}/hostname"
 H20="$(newhome)"
@@ -342,6 +349,169 @@ own="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${L20}/lease.json" 2>/dev/n
 extra="$(ls -A "${L20}" 2>/dev/null | grep -v '^lease.json$' | tr '\n' ' ')"
 if [ "${rcb}" -eq 3 ] && [ "${rca}" -eq 0 ] && [ "${own}" = sess-A ] && grep -q '"acquiredAt"' "${L20}/lease.json" && [ -z "${extra}" ]; then ok
 else bad "second acquire rc=${rcb}, first rc=${rca}, owner ${own:-none}, other files: ${extra:-none}"; fi
+
+# --- T21: a lowercase UDID (issue #77 §1). The stub prints UDIDs uppercase,
+#          as real xcrun does; simctl-run must lease and boot one spelling.
+T="t21a: a lowercase UDID boots under uppercase leases that stay live"
+sim sess-A boot aaaa-1111 >/dev/null 2>&1; rc=$?
+s1="$(simstate ios-simulator:host)"; s2="$(simstate ios-simulator:udid-AAAA-1111)"
+if [ "${rc}" -eq 0 ] && [ "${s1}" = live ] && [ "${s2}" = live ] && \
+   ! ls "${H18}/leases" | grep -q "udid-aaaa-1111" && \
+   grep -q "boot AAAA-1111" "${XCRUN_STUB_LOG}"; then ok
+else bad "boot rc=${rc}, host ${s1:-none}, uppercase udid lease ${s2:-none}, lowercase dir: $(ls "${H18}/leases" | tr '\n' ' ')"; fi
+
+T="t21b: the one-simulator cap holds against a lowercase boot: a second session is refused (3)"
+sim sess-B boot bbbb-2222 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 3 ] && ! grep -q "boot BBBB-2222" "${XCRUN_STUB_LOG}"; then ok
+else bad "rc=${rc}; xcrun was asked: $(tr '\n' ';' < "${XCRUN_STUB_LOG}")"; fi
+
+T="t21c: shutdown by the lowercase spelling releases both leases"
+sim sess-A shutdown aaaa-1111 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 0 ] && [ ! -d "${H18}/leases/ios-simulator:host.lock" ] && \
+   [ ! -d "${H18}/leases/ios-simulator:udid-AAAA-1111.lock" ]; then ok
+else bad "rc=${rc}; leases left: $(ls "${H18}/leases" | tr '\n' ' ')"; fi
+
+# --- T22: a simulator whose state xcrun cannot report is HELD (issue #77 §2,
+#          K1 and K3): another session's boot exits 4, and gc keeps the leases.
+T="t22a: a sim whose state xcrun cannot report is held: another session's boot exits 4"
+sim sess-A boot AAAA-1111 >/dev/null 2>&1; rc=$?
+export XCRUN_STUB_LIST_FAIL=1
+sim sess-B boot BBBB-2222 >/dev/null 2>&1; rc2=$?
+if [ "${rc}" -eq 0 ] && [ "${rc2}" -eq 4 ] && ! grep -q "boot BBBB-2222" "${XCRUN_STUB_LOG}"; then ok
+else bad "first boot rc=${rc}, second rc=${rc2} (want 4); xcrun: $(tr '\n' ';' < "${XCRUN_STUB_LOG}")"; fi
+
+T="t22b: gc keeps leases it cannot read: both survive, reported unknown"
+DB_HOME="${H18}" PATH="${SIMSTUB}:${PATH}" "${BIN}/device-broker" gc >/dev/null 2>&1
+s1="$(simstate ios-simulator:host)"; s2="$(simstate ios-simulator:udid-AAAA-1111)"
+if [ -d "${H18}/leases/ios-simulator:host.lock" ] && [ -d "${H18}/leases/ios-simulator:udid-AAAA-1111.lock" ] && \
+   [ "${s1}" = unknown ] && [ "${s2}" = unknown ]; then ok
+else bad "after gc: host ${s1:-gone}, udid ${s2:-gone}; leases: $(ls "${H18}/leases" | tr '\n' ' ')"; fi
+unset XCRUN_STUB_LIST_FAIL
+sim sess-A shutdown AAAA-1111 >/dev/null 2>&1
+
+# --- T23: (Booting) counts as booted (issue #77 §2, K7).
+T="t23: a simulator still (Booting) counts as booted: its leases stay live"
+export XCRUN_STUB_STATE=Booting
+sim sess-A boot DDDD-4444 >/dev/null 2>&1; rc=$?
+s1="$(simstate ios-simulator:host)"; s2="$(simstate ios-simulator:udid-DDDD-4444)"
+unset XCRUN_STUB_STATE
+if [ "${rc}" -eq 0 ] && [ "${s1}" = live ] && [ "${s2}" = live ]; then ok
+else bad "boot rc=${rc}, host ${s1:-none}, udid lease ${s2:-none}"; fi
+sim sess-A shutdown DDDD-4444 >/dev/null 2>&1
+
+# --- T24: stale reclaim happens under a lock (issue #77, first review): two
+#          acquirers must not each remove what the other just claimed.
+T="t24a: a stale lease whose reclaim lock is held is left alone (4), not reclaimed"
+H24="$(newhome)"
+DB_HOME="${H24}" "${BIN}/device-broker" acquire android-emulator:port-6060 \
+  --owner-key sess-DEAD --owner-pid 4194303 >/dev/null 2>&1
+mkdir "${H24}/leases/android-emulator:port-6060.lock.reclaim"
+DB_HOME="${H24}" "${BIN}/device-broker" acquire android-emulator:port-6060 \
+  --owner-key sess-B >/dev/null 2>&1; rc=$?
+own="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${H24}/leases/android-emulator:port-6060.lock/lease.json" 2>/dev/null | head -1)"
+if [ "${rc}" -eq 4 ] && [ "${own}" = sess-DEAD ]; then ok
+else bad "rc=${rc} (want 4), owner now ${own:-none}"; fi
+
+T="t24b: a reclaim lock older than the grace window is a reclaim that died: broken, lease reclaimed"
+for f in "${H24}/leases/android-emulator:port-6060.lock.reclaim"; do
+  touch -d "2 minutes ago" "${f}" 2>/dev/null \
+    || touch -t "$(date -v-2M '+%Y%m%d%H%M.%S' 2>/dev/null)" "${f}" 2>/dev/null
+done
+DB_HOME="${H24}" "${BIN}/device-broker" acquire android-emulator:port-6060 \
+  --owner-key sess-B >/dev/null 2>&1; rc=$?
+own="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${H24}/leases/android-emulator:port-6060.lock/lease.json" 2>/dev/null | head -1)"
+if [ "${rc}" -eq 0 ] && [ "${own}" = sess-B ] && \
+   [ ! -d "${H24}/leases/android-emulator:port-6060.lock.reclaim" ]; then ok
+else bad "rc=${rc}, owner ${own:-none}, reclaim lock left: $(ls "${H24}/leases" | tr '\n' ' ')"; fi
+
+# --- T25: no owner key anywhere: the first acquire refuses (issue #77, first
+#          review), as simctl-run boot already does — not a key no later call
+#          can match.
+T="t25: acquire with no owner key anywhere refuses (4) and leases nothing"
+H25="$(newhome)"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H25}" \
+  "${BIN}/device-broker" acquire android-emulator:port-6070 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 4 ] && [ ! -d "${H25}/leases/android-emulator:port-6070.lock" ]; then ok
+else bad "rc=${rc} (want 4); leases: $(ls "${H25}/leases" 2>/dev/null | tr '\n' ' ')"; fi
+
+# --- T26: no owner key in the environment: release and check must refuse, not
+#          fail open (PR #93 review #2). owner_key dies inside $(...) only exits
+#          the subshell, so the old comparison became "" != "" / "" = "".
+T="t26a: release with no owner key refuses an unreadable lease (4), lease kept"
+H26="$(newhome)"
+L26A="${H26}/leases/android-emulator:port-6090.lock"
+mkdir -p "${L26A}"; : > "${L26A}/lease.json"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
+  "${BIN}/device-broker" release android-emulator:port-6090 >/dev/null 2>&1; rc=$?
+if [ "${rc}" -eq 4 ] && [ -d "${L26A}" ] && [ -f "${L26A}/lease.json" ]; then ok
+else bad "rc=${rc} (want 4); lease $([ -d "${L26A}" ] && echo kept || echo REMOVED)"; fi
+
+T="t26b: check --require-mine with no owner key refuses a live lease it cannot claim, lease kept"
+L26B="${H26}/leases/android-emulator:port-6092.lock"
+mkdir -p "${L26B}"
+printf '{"schemaVersion": 1, "resource": "android-emulator:port-6092", "owner": {"pid": %s, "pidStart": ""}, "acquiredAt": 1, "meta": {}}\n' "$$" > "${L26B}/lease.json"
+env -u DB_OWNER_KEY -u DB_SESSION -u OWNER_KEY DB_HOME="${H26}" \
+  "${BIN}/device-broker" check android-emulator:port-6092 --require-mine >/dev/null 2>&1; rc=$?
+if [ "${rc}" -ne 0 ] && [ -f "${L26B}/lease.json" ]; then ok
+else bad "rc=${rc} (want nonzero refusal); lease $([ -f "${L26B}/lease.json" ] && echo kept || echo REMOVED)"; fi
+
+# --- T27: the reclaim race (PR #93 review #3). A slow xcrun stub on the loser's
+#          PATH makes its stale judgment end ~3 s late; meanwhile the winner
+#          reclaims and writes a LIVE lease. The loser must re-check under the
+#          lock and leave the winner's lease alone (acquire exits 3; gc keeps it).
+R27="$(mktemp -d "${TESTROOT}/race.XXXXXX")"
+mkdir -p "${R27}/fast" "${R27}/slow"
+printf '#!/usr/bin/env bash\necho "== Devices =="\n' > "${R27}/fast/xcrun"
+printf '#!/usr/bin/env bash\nsleep 3\necho "== Devices =="\n' > "${R27}/slow/xcrun"
+chmod +x "${R27}/fast/xcrun" "${R27}/slow/xcrun"
+RES27="ios-simulator:udid-EEEE-5555"
+
+T="t27a: two acquirers of one stale lease: only one wins, the winner's lease survives"
+H27="$(newhome)"; mkdir -p "${H27}/leases"
+D27="${H27}/leases/${RES27}.lock"
+mkdir "${D27}"
+cat > "${D27}/lease.json" <<EOF
+{"schemaVersion": 1, "resource": "${RES27}", "ownerKey": "sess-DEAD",
+ "owner": {"pid": 4194303, "pidStart": "", "host": "x", "worktree": "/", "session": "", "command": "x"},
+ "acquiredAt": 1, "whileBooted": "EEEE-5555", "meta": {}}
+EOF
+sleep 30 & A27PID=$!
+( DB_HOME="${H27}" PATH="${R27}/slow:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+    --owner-key sess-B --while-booted EEEE-5555 > "${R27}/b.out" 2> "${R27}/b.err"; echo $? > "${R27}/b.rc" ) &
+B27PID=$!
+sleep 1
+DB_HOME="${H27}" PATH="${R27}/fast:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+  --owner-key sess-A --owner-pid "${A27PID}" --while-booted EEEE-5555 > "${R27}/a.out" 2> "${R27}/a.err"; rca27=$?
+wait "${B27PID}"; rcb27="$(cat "${R27}/b.rc")"
+own27="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${D27}/lease.json" 2>/dev/null | head -1)"
+kill "${A27PID}" 2>/dev/null
+if [ "${rca27}" -eq 0 ] && [ "${rcb27}" -ne 0 ] && [ "${own27}" = sess-A ]; then ok
+else bad "A rc=${rca27}, B rc=${rcb27} (want nonzero), final owner ${own27:-none}; B stderr: $(tr '\n' '|' < "${R27}/b.err")"; fi
+
+T="t27b: gc that judged a stale lease does not remove the live lease another acquirer just wrote"
+H27B="$(newhome)"; mkdir -p "${H27B}/leases"
+D27B="${H27B}/leases/${RES27}.lock"
+mkdir "${D27B}"
+cat > "${D27B}/lease.json" <<EOF
+{"schemaVersion": 1, "resource": "${RES27}", "ownerKey": "sess-DEAD",
+ "owner": {"pid": 4194303, "pidStart": "", "host": "x", "worktree": "/", "session": "", "command": "x"},
+ "acquiredAt": 1, "whileBooted": "EEEE-5555", "meta": {}}
+EOF
+sleep 30 & A27BPID=$!
+( DB_HOME="${H27B}" PATH="${R27}/slow:${PATH}" "${BIN}/device-broker" gc > "${R27}/gc.out" 2> "${R27}/gc.err" ) &
+G27PID=$!
+sleep 1
+DB_HOME="${H27B}" PATH="${R27}/fast:${PATH}" "${BIN}/device-broker" acquire "${RES27}" \
+  --owner-key sess-A --owner-pid "${A27BPID}" --while-booted EEEE-5555 > "${R27}/a2.out" 2>&1; rca27b=$?
+wait "${G27PID}"
+own27b="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${D27B}/lease.json" 2>/dev/null | head -1)"
+kill "${A27BPID}" 2>/dev/null
+# The guarantee: gc must never remove a lease whose owner is alive. Either A was
+# refused (gc held the reclaim lock while judging, so A could not write — gc then
+# cleared only the stale lease), or A wrote a live lease and it survives gc's
+# inside-lock re-check. The bug (head): A rc=0 yet gc removed A's live lease.
+if [ "${rca27b}" -ne 0 ] || [ "${own27b}" = sess-A ]; then ok
+else bad "A rc=${rca27b} but lease after gc: ${own27b:-GONE} (gc removed a live lease); gc said: $(tr '\n' '|' < "${R27}/gc.err")"; fi
 
 say ""
 say "== ${PASS} passed, ${FAIL} failed =="

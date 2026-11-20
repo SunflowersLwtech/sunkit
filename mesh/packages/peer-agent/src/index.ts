@@ -9,10 +9,11 @@ import { CardPatchSchema } from '@claude-mesh/shared'
 import { CardWriter, initialCard, type CardFields } from './card.ts'
 import { TaskDriver } from './task-driver.ts'
 import { RelayClient } from './outbound.ts'
-import { registerTools, TOOL_DESCRIPTORS, PULL_TOOL_DESCRIPTORS } from './tools.ts'
+import { createWorkerAllowed, registerTools, toolDescriptors } from './tools.ts'
 import { chooseJoinMode, Inbox } from './inbox.ts'
 import { SenderGate } from './gate.ts'
 import { InboundDispatcher } from './inbound.ts'
+import { parseAllow } from './sender-allow.ts'
 import { StreamClient } from './stream.ts'
 import { ReplyLimiter } from './reply-limiter.ts'
 import { mintSessionId, probeClaudeSession, probeHostSession, readClaudeLogin, type SessionSnapshot } from './session-identity.ts'
@@ -80,11 +81,12 @@ async function main(): Promise<void> {
 
   const inbox = pull ? new Inbox() : undefined
   const replyLimiter = new ReplyLimiter({ windowMs: 10_000, maxReplies: 2 })
-  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox })
+  const createWorker = createWorkerAllowed({ mode: decision.mode, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER })
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox, createWorker })
 
   // Static tool list: never changes for the life of the process, so it never
   // invalidates the session's prompt cache.
-  const tools = pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS
+  const tools = toolDescriptors({ pull, createWorker })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...tools] }))
   server.setRequestHandler(CallToolRequestSchema, async req => {
     try { return await callTool(req.params.name, req.params.arguments ?? {}) }
@@ -96,9 +98,14 @@ async function main(): Promise<void> {
 
   server.onerror = err => { logJson('error', 'peer.mcp.error', describeError(err)) }
 
+  // MESH_ALLOW: only these live sessions on this account are surfaced (a pull host reads its own
+  // mail with read_messages, past any filter its waker applies).
+  const allow = parseAllow(process.env.MESH_ALLOW)
   logJson('info', 'peer.startup', {
     relay_url: cfg.relay_url, session: sessionId, name: identity.name, join: joins, mode: decision.mode, reason: decision.reason,
+    ...(allow ? { allow } : {}),
   })
+  if (allow && !cfg.self_handle) logJson('warn', 'peer.allow.no_own_account', { note: 'MESH_ALLOW set but config has no self_handle: every letter is dropped' })
   await server.connect(new StdioServerTransport())
   // Send-only: tools work, but this session is not listed and receives nothing.
   if (!joins) return
@@ -170,7 +177,7 @@ async function main(): Promise<void> {
         void tasks?.on(e)
       },
       onCard: c => cards.set(cardFromHook(c)),
-      whoami: () => ({ session: sessionId, name: identity.name }),
+      whoami: () => ({ session: sessionId, name: identity.name, mode: decision.mode }),
       wakeAllowed: () => wakeBudget.take(),
     })
     serveHookSocket(hookPath, channel)
@@ -188,6 +195,7 @@ async function main(): Promise<void> {
     gate,
     sessionId,
     chatOnly: true,
+    allow: allow ? { names: allow, ownAccount: cfg.self_handle } : undefined,
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: n => {
       if (inbox) {

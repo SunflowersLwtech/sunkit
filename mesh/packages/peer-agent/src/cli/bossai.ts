@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { askHookSocket, hookSocketPath, type HookReply, type HookRequest } from '../hook-socket.ts'
@@ -9,16 +9,21 @@ import { RelayClient } from '../outbound.ts'
 import { sayWith } from './say.ts'
 import { stableNode } from './devin.ts'
 import { bossaiPortFile } from './bossai-paths.ts'
+import { parseAllow } from '../sender-allow.ts'
 
 export { bossaiPortFile }
 
 export const BOSSAI_USAGE =
-  'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n'
+  'usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,…>] [--node <path>] [--peer <path>] [--write]\n'
   + '       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n'
-  + '                        [--bridge] [--allow <name-prefix,…>] [--approvers <name-prefix,…>] [--grace-ms <n>]\n'
+  + '                        [--bridge] [--allow <name@token-id,…>] [--approvers <name@token-id,…>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]\n'
   + '\n'
   + 'install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n'
   + '         (pure config; the BossAI session itself joins the mesh in pull mode).\n'
+  + '         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not\n'
+  + '         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use\n'
+  + '         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI\n'
+  + '         reads its mail with read_messages, which wake never sees.\n'
   + 'wake:    resident injector — BossAI has no hooks surface, so this plays the hooks\' role:\n'
   + '         poll the peer\'s hook socket, inject a mail notice via the local HTTP chat API\n'
   + '         (steer into an active run, else start a turn), report busy/idle, and optionally\n'
@@ -26,10 +31,21 @@ export const BOSSAI_USAGE =
   + '         --bridge: while BossAI\'s own peer is offline (managed MCP connections close on\n'
   + '         session teardown), wake holds the mesh session with its own peer child, reads\n'
   + '         mail, stops the child, and injects the full letters so no mail waits for a turn.\n'
-  + '         --allow: only inject mail whose sender name starts with one of these prefixes.\n'
+  + '         --allow: only inject mail that --approvers would accept as a sender: a live session\n'
+  + '         with that name, on the worker\'s own account, sent with the pinned token. Entries are\n'
+  + '         <session-name>@<token-id>, like --approvers; a bare name or an empty list is refused.\n'
   + '         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n'
   + '         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\n'
-  + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\n'
+  + '         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,\n'
+  + '         on the worker\'s own account, sent with that approver\'s device token may settle: each\n'
+  + '         entry is <session-name>@<token-id> (the id, not the token: GET /v1/admin/tokens lists\n'
+  + '         them by device label). The relay stamps every letter with its sender token\'s id, so a\n'
+  + '         session of the same name on another token of the account is refused, and so is a\n'
+  + '         letter from a relay too old to stamp it.\n'
+  + '         --run-mode/--model: sent with every new turn wake starts (a turn without them falls to\n'
+  + '         the session default, and a local first turn locks the session to local for good).\n'
+  + 'wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)\n'
+  + 'or --token-file (refused when group/other can read it). --server must be a loopback URL.\n'
   + 'Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n'
   + '--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).'
 
@@ -42,6 +58,8 @@ export interface BossaiInstallOpts {
   id: string
   /** Mesh session name the peer registers as (MESH_SESSION_NAME). */
   session?: string | undefined
+  /** Session names the peer takes mail from (MESH_ALLOW); undefined = every sender. */
+  allow?: string[] | undefined
   node: string
   peer: string
 }
@@ -60,6 +78,15 @@ export function readBossaiPort(path: string, read: (p: string) => string = p => 
   } catch { return undefined }
 }
 
+export function assertLoopbackServer(url: string): string {
+  let host: string
+  try { host = new URL(url).hostname } catch { throw new Error(`--server is not a URL: ${url}`) }
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(host)) {
+    throw new Error(`--server must be a loopback URL (the BossAI server only listens on 127.0.0.1); got ${host}`)
+  }
+  return url
+}
+
 export function resolveBossaiServer(o: { server?: string | undefined; portFile?: string | undefined }, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   if (o.server) return o.server.replace(/\/+$/, '')
   const port = readBossaiPort(o.portFile ?? bossaiPortFile(platform, env))
@@ -73,6 +100,7 @@ export function resolveBossaiServer(o: { server?: string | undefined; portFile?:
 export function bossaiServerBody(o: BossaiInstallOpts): Record<string, unknown> {
   const env: Record<string, string> = { MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_WAKE: '' }
   if (o.session) env.MESH_SESSION_NAME = o.session
+  if (o.allow?.length) env.MESH_ALLOW = o.allow.join(',')
   return {
     id: o.id,
     label: `mesh (${o.session ?? o.id})`,
@@ -87,6 +115,7 @@ export function parseBossaiInstall(args: string[], defaults: BossaiInstallOpts):
     portFile: flag(args, '--port-file') ?? defaults.portFile,
     id: flag(args, '--id') ?? defaults.id,
     session: flag(args, '--session') ?? defaults.session,
+    allow: parseAllow(flag(args, '--allow')) ?? defaults.allow,
     node: flag(args, '--node') ?? defaults.node,
     peer: flag(args, '--peer') ?? defaults.peer,
   }
@@ -146,14 +175,19 @@ export interface WakeOpts {
   pollMs: number
   /** Hold the mesh session with a bridge peer while BossAI's own peer is offline. */
   bridge?: boolean | undefined
-  /** Sender name prefixes allowed to wake the worker; undefined = all. */
+  /** `<name>@<token-id>` pins whose mail is injected (same rule as approvers); undefined = all. */
   allow?: string[] | undefined
-  /** Sender prefixes allowed to settle approval asks via the control session; undefined = notify only. */
+  /** `<name>@<token-id>` pins allowed to settle approval asks via the control session; undefined = notify only. */
   approvers?: string[] | undefined
   /** The worker's own mesh account; approval replies must come from this account (names alone are spoofable). */
   account?: string | undefined
   /** After the bridge stops, wait this long before restarting it (let BossAI's turn bind). */
   graceMs?: number | undefined
+  /** Sent with every new turn wake starts; without it a turn falls to the session default. */
+  runMode?: 'cloud' | 'hybrid' | 'local' | undefined
+  model?: string | undefined
+  /** BossAI's approval-card timeout (askTimeoutMs), stated in the --notify card. */
+  askTimeoutMs?: number | undefined
 }
 
 /** Choose the peer socket whose whoami name matches; with no --session, a unique bossai-* peer. */
@@ -164,15 +198,45 @@ export function pickHookSocket(entries: { path: string; name?: string }[], sessi
 }
 
 /** steer into an active run; a plain chat body starts a new turn when idle. */
-export function injectionBody(notice: string, activeRun: boolean): Record<string, unknown> {
-  return activeRun ? { text: notice, deliverAs: 'steer' } : { text: notice }
+export function injectionBody(notice: string, activeRun: boolean, turn: { runMode?: string | undefined; model?: string | undefined } = {}): Record<string, unknown> {
+  if (activeRun) return { text: notice, deliverAs: 'steer' }
+  return { text: notice, ...(turn.runMode ? { runMode: turn.runMode } : {}), ...(turn.model ? { model: turn.model } : {}) }
 }
 
-export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string, ctlSession?: string): string {
+/** Shell asks carry the command line: send a short, redacted form to the --notify contact. */
+export function redactSubtitle(s: string, max = 160): string {
+  const r = s
+    .replace(/(bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/((?:token|key|secret|password|passwd|pwd|auth)[\w-]*\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, '$1[redacted]')
+    .replace(/[A-Za-z0-9_+/=-]{32,}/g, '[redacted]')
+  return r.length > max ? `${r.slice(0, max)}…` : r
+}
+
+/**
+ * BossAI bounds one approval card with BOSSAI_PERMISSION_ASK_TIMEOUT_MS (default 5 minutes, 0 waits
+ * forever) and settles an expired card as a deny, never an allow. The pending-ask API does not
+ * carry the value, so wake reads the same variable, parsed the way BossAI parses it (`Number()`:
+ * unset or not a number is the default, an empty value is 0); start wake with the app's value.
+ */
+export const DEFAULT_ASK_TIMEOUT_MS = 5 * 60_000
+
+export function askTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.BOSSAI_PERMISSION_ASK_TIMEOUT_MS)
+  return Math.max(0, Number.isFinite(v) ? v : DEFAULT_ASK_TIMEOUT_MS)
+}
+
+/** The timeout as the card states it: whole minutes when it divides, else seconds (rounded up). */
+export function askTimeoutText(ms: number): string {
+  if (ms === 0) return 'BossAI 设为不超时，会一直等到有人处理'
+  const s = Math.ceil(ms / 1000)
+  return `${s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`}内没人处理会自动拒`
+}
+
+export function approvalNotice(ask: { toolName?: string; subtitle?: string; toolCallId: string }, chat: string, ctlSession?: string, timeoutMs = DEFAULT_ASK_TIMEOUT_MS): string {
   const how = ctlSession
     ? `批准/拒绝：给 mesh 会话 ${ctlSession} 发「APPROVE ${ask.toolCallId}」或「DENY ${ask.toolCallId} <理由>」（仅白名单批准人有效，一次性放行）。`
     : '请到 BossAI 桌面端处理。'
-  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${ask.subtitle}` : ''} — 会话 ${chat}。${how}默认 5 分钟超时自动拒；mesh 不会代为批准。`
+  return `BossAI 审批请求 · ${ask.toolName ?? 'tool'}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ''} — 会话 ${chat}。${how}${askTimeoutText(timeoutMs)}；mesh 不会代为批准。`
 }
 
 export type ApprovalCommand = { action: 'allow' | 'deny'; toolCallId: string; reason?: string }
@@ -200,7 +264,7 @@ export interface WakeDeps {
   /** Ask a hook socket; undefined when nobody answers. */
   ask: (path: string, req: HookRequest) => Promise<HookReply | undefined>
   /** Candidate sockets with whoami names, refreshed by the caller. */
-  discover: () => Promise<{ path: string; name?: string }[]>
+  discover: () => Promise<{ path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[]>
   activeRun: () => Promise<boolean>
   inject: (body: Record<string, unknown>) => Promise<{ ok: boolean; status: number }>
   pendingAsk: () => Promise<{ toolCallId: string; toolName?: string; subtitle?: string } | undefined>
@@ -218,16 +282,113 @@ export interface WakeDeps {
 
 export interface ChannelLetter { attrs: string; from: string; body: string }
 
+/**
+ * The keys a <channel> tag carries when nothing but the relay wrote it. Sender meta is rendered
+ * first and can add any other key (`x_from`, `reply_from`, …), so a key is read by its exact name,
+ * never by a substring search, and a letter with a key outside this set is not trusted. It must
+ * equal the keys shared's envelopeToChannelNotification reserves, or a real approval is refused.
+ * `from_token` is the relay-stamped id of the sending token; shared drops a sender's own.
+ */
+export const CHANNEL_KEYS: ReadonlySet<string> = new Set(['from', 'sender', 'account', 'from_token', 'login', 'msg_id', 'in_reply_to', 'thread_root', 'source'])
+
+/**
+ * Parse ` key="value" …` exactly: every byte belongs to an attribute and no key appears twice.
+ * Undefined when the tag is malformed or repeats a key.
+ */
+export function parseAttrs(attrs: string): Map<string, string> | undefined {
+  const re = /\s+([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"/y
+  const out = new Map<string, string>()
+  let i = 0
+  for (;;) {
+    re.lastIndex = i
+    const m = re.exec(attrs)
+    if (!m) break
+    if (out.has(m[1]!)) return undefined
+    out.set(m[1]!, m[2]!)
+    i = re.lastIndex
+  }
+  return attrs.slice(i).trim() === '' ? out : undefined
+}
+
+/** Whether a letter's tag can be trusted at all: well-formed, no repeated key, only relay keys. */
+export function letterShape(letter: ChannelLetter): 'ok' | 'malformed' | 'unknown-key' {
+  const f = parseAttrs(letter.attrs)
+  if (!f) return 'malformed'
+  for (const k of f.keys()) if (!CHANNEL_KEYS.has(k)) return 'unknown-key'
+  return 'ok'
+}
+
 /** Parse formatInbox's <channel …> blocks so the whitelist can filter by sender. */
 export function parseChannels(text: string): ChannelLetter[] {
   const out: ChannelLetter[] = []
   const re = /<channel([^>]*)>\n([\s\S]*?)\n<\/channel>/g
   for (const m of text.matchAll(re)) {
     const attrs = m[1] ?? ''
-    const from = /from="([^"]*)"/.exec(attrs)?.[1] ?? ''
+    const from = parseAttrs(attrs)?.get('from') ?? ''
     out.push({ attrs, from, body: m[2] ?? '' })
   }
   return out
+}
+
+/**
+ * Who may settle an approval. A send-only sender's name is a label any script on the account
+ * picks, so only a live session counts (`from` carries `[ref]`, no `sender` attr), its name must
+ * equal an approver exactly (no prefixes: `feishu-assistant-x` is not `feishu-assistant`), the
+ * relay-verified account must be the worker's own, and the letter must carry the relay-stamped
+ * token id an entry `<name>@<token-id>` pins. A bare `<name>` entry is `unpinned` and never settles.
+ * Unknown own account fails closed.
+ */
+export function approverVerdict(letter: ChannelLetter, approvers: string[], account: string | undefined): 'ok' | 'malformed' | 'unknown-key' | 'send-only' | 'not-an-approver' | 'foreign-account' | 'no-own-account' | 'unpinned' | 'no-token' | 'wrong-token' {
+  const shape = letterShape(letter)
+  if (shape !== 'ok') return shape
+  const f = parseAttrs(letter.attrs)!
+  if (f.has('sender')) return 'send-only'
+  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get('from') ?? '')
+  if (!m) return 'send-only'
+  const entries = approvers.map(splitPin).filter(a => a.name === m[1])
+  if (entries.length === 0) return 'not-an-approver'
+  if (!account) return 'no-own-account'
+  if (f.get('account') !== account) return 'foreign-account'
+  // A name is any session's choice, even across one account's devices: only a pinned entry can
+  // settle, and only with the relay-stamped id of the token that sent the letter. A bare name never
+  // does, even next to a pin for the same name. No stamp (an older relay) fails closed.
+  const pins = entries.filter(a => a.token)
+  if (pins.length === 0) return 'unpinned'
+  const token = f.get('from_token')
+  if (!token) return 'no-token'
+  return pins.some(a => a.token === token) ? 'ok' : 'wrong-token'
+}
+
+function splitPin(entry: string): { name: string; token?: string } {
+  const i = entry.lastIndexOf('@')
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) }
+}
+
+/**
+ * --approvers and --allow: every entry must pin a token, `<session-name>@<token-id>`; a bare name is
+ * refused, and so is a list that is empty after trimming (`--allow ,` must not mean "no allow-list").
+ */
+export function parsePins(flagName: string, raw: string): string[] {
+  const entries = raw.split(',').map(s => s.trim()).filter(Boolean)
+  if (entries.length === 0) throw new Error(`${flagName} is empty; give <session-name>@<token-id>,… or leave the flag out`)
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`${flagName} entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`)
+    }
+  }
+  return entries
+}
+
+export function parseApprovers(raw: string): string[] {
+  return parsePins('--approvers', raw)
+}
+
+/** A pin flag that is present must carry a value: `--allow` at the end of the line is an error, not "no list". */
+function pinFlag(args: string[], name: string): string[] | undefined {
+  if (!args.includes(name)) return undefined
+  const raw = flag(args, name)
+  if (raw === undefined) throw new Error(`${name} needs <session-name>@<token-id>,…`)
+  return parsePins(name, raw)
 }
 
 /** A sender is allowed when its name (before any [ref]) starts with an allowed prefix. */
@@ -237,10 +398,24 @@ export function senderAllowed(from: string, allow?: string[]): boolean {
   return allow.some(p => name.startsWith(p))
 }
 
-export function filterLetters(text: string, allow?: string[]): { kept: string; dropped: string[] } {
+/**
+ * Who may put mail into the worker (--allow): exactly the senders approverVerdict accepts for the
+ * same pins (one copy of the check, so the two cannot drift): an exactly readable tag from a live
+ * session with a listed name, on the worker's own account, stamped with the pinned token id. A bare
+ * name never passes. Only the label for an unlisted name differs.
+ */
+export function allowLetterVerdict(letter: ChannelLetter, allow: string[], account: string | undefined): Exclude<ReturnType<typeof approverVerdict>, 'not-an-approver'> | 'not-listed' {
+  const v = approverVerdict(letter, allow, account)
+  return v === 'not-an-approver' ? 'not-listed' : v
+}
+
+/** --allow filter (allowLetterVerdict). No --allow keeps every letter (as before); an empty list keeps none. */
+export function filterLetters(text: string, allow?: string[], account?: string): { kept: string; dropped: string[] } {
   const letters = parseChannels(text)
-  const kept = letters.filter(l => senderAllowed(l.from, allow))
-  const dropped = letters.filter(l => !senderAllowed(l.from, allow)).map(l => l.from)
+  // With an allow-list, a letter whose tag cannot be read exactly is dropped, whatever it names.
+  const verdict = (l: ChannelLetter) => (allow ? allowLetterVerdict(l, allow, account) : 'ok')
+  const kept = letters.filter(l => verdict(l) === 'ok')
+  const dropped = letters.filter(l => verdict(l) !== 'ok').map(l => `${l.from || '(unreadable tag)'} (${verdict(l)})`)
   const lines = kept.map(l => `<channel${l.attrs}>\n${l.body}\n</channel>`)
   return { kept: lines.join('\n'), dropped }
 }
@@ -281,7 +456,9 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
   return {
     async tick(): Promise<void> {
       const entries = await d.discover()
-      const bossaiSocket = pickHookSocket(entries, o.session)
+      // Send-only peers (the app's managed MCP peer) serve a hook socket under the same
+      // name but hold no inbox; only a pull peer means BossAI itself is reading mail.
+      const bossaiSocket = pickHookSocket(entries.filter(e => e.mode !== 'send'), o.session)
       if (bossaiSocket) {
         await stopBridge()
         socket = bossaiSocket
@@ -299,7 +476,7 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
         }
         if (pending && !busy) {
           const active = await d.activeRun()
-          const res = await d.inject(injectionBody(wakeNotice(pending), active))
+          const res = await d.inject(injectionBody(wakeNotice(pending), active, o))
           if (res.ok) {
             d.log(`injected mail notice (${pending.unread} from ${pending.from.join(', ')})${active ? ' [steer]' : ''}`)
             pending = undefined
@@ -315,11 +492,13 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
       } else if (o.bridge && d.startBridge && !busy) {
         if (pendingLetters) {
           const active = await d.activeRun()
-          const res = await d.inject(injectionBody(bridgeNotice(pendingLetters), active))
+          const res = await d.inject(injectionBody(bridgeNotice(pendingLetters), active, o))
           if (res.ok) { d.log('injected bridged letters (retry)'); pendingLetters = undefined; busy = true }
           else d.log(`bridge injection still failing: HTTP ${res.status}`)
         }
-        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs && !(await d.activeRun())) {
+        // The bridge holds the session permanently: the app peer is send-only and never
+        // takes over the stream, and fleet sweeps reap processes whose mesh name is offline.
+        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs) {
           bridge = await d.startBridge().catch(e => { d.log(`bridge start failed: ${(e as Error).message}`); return undefined })
           if (bridge) d.log('bridge peer holding the session while BossAI is idle')
         }
@@ -327,14 +506,16 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
           const r = await bridge.ask({ op: 'wake' })
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read()
-            const { kept, dropped } = filterLetters(text, o.allow)
+            const { kept, dropped } = filterLetters(text, o.allow, o.account)
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(', ')}`)
             await stopBridge()
             if (kept) {
+              // Held before the request: a throw here must not lose letters already read off the peer.
+              pendingLetters = kept
               const active = await d.activeRun()
-              const res = await d.inject(injectionBody(bridgeNotice(kept), active))
-              if (res.ok) { d.log('injected bridged letters'); busy = true }
-              else { d.log(`bridge injection deferred (HTTP ${res.status}); letters held for retry`); pendingLetters = kept }
+              const res = await d.inject(injectionBody(bridgeNotice(kept), active, o))
+              if (res.ok) { d.log('injected bridged letters'); busy = true; pendingLetters = undefined }
+              else d.log(`bridge injection deferred (HTTP ${res.status}); letters held for retry`)
             }
           }
         }
@@ -343,7 +524,7 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
         const ask = await d.pendingAsk()
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId
-          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : undefined)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : undefined, o.askTimeoutMs)).catch(e => d.log(`approval notify failed: ${(e as Error).message}`))
         }
         if (!ask) lastAskNotified = undefined
       }
@@ -354,9 +535,8 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
           for (const letter of parseChannels(text)) {
             const cmd = parseApprovalCommand(letter.body)
             if (!cmd) { d.log(`ctl: non-command mail from ${letter.from} discarded`); continue }
-            if (!senderAllowed(letter.from, o.approvers)) { d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`); continue }
-            const acct = /account="([^"]*)"/.exec(letter.attrs)?.[1]
-            if (o.account && acct !== o.account) { d.log(`ctl: approval from foreign account ${acct ?? '?'} ignored (approvals stay within ${o.account})`); continue }
+            const verdict = approverVerdict(letter, o.approvers, o.account)
+            if (verdict !== 'ok') { d.log(`ctl: approval from ${letter.from} ignored (${verdict})`); continue }
             const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason)
             d.log(res.ok ? `ctl: ${cmd.action} ${cmd.toolCallId} settled via mesh (by ${letter.from})` : `ctl: settle ${cmd.toolCallId} failed HTTP ${res.status} (already settled or expired?)`)
           }
@@ -364,9 +544,13 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
       }
     },
     async run(): Promise<void> {
+      let failures = 0
       for (;;) {
-        try { await this.tick() } catch (e) { d.log(`tick error (kept alive): ${(e as Error).message}`) }
-        await d.sleep(o.pollMs)
+        try { await this.tick(); failures = 0 } catch (e) {
+          failures++
+          d.log(`tick failed (${failures} in a row): ${(e as Error).message}`)
+        }
+        await d.sleep(failures ? Math.min(o.pollMs * 2 ** failures, 60_000) : o.pollMs)
       }
     },
     async shutdown(): Promise<void> { await stopBridge() },
@@ -374,17 +558,17 @@ export function createWaker(o: WakeOpts, d: WakeDeps) {
 }
 
 /** Scan MESH_HOME/hooks/*.sock and whoami each live peer. Skips wake's own bridge socket. */
-export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ path: string; name?: string }[]> {
+export async function discoverBossaiSockets(dir: string = meshDir()): Promise<{ path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[]> {
   const hooks = join(dir, 'hooks')
   if (!existsSync(hooks)) return []
   const own = hookSocketPath(process.pid, dir)
-  const out: { path: string; name?: string }[] = []
+  const out: { path: string; name?: string; mode?: 'pull' | 'push' | 'send' }[] = []
   for (const f of readdirSync(hooks)) {
     if (!f.endsWith('.sock')) continue
     const path = join(hooks, f)
     if (path === own) continue
     const r = await askHookSocket(path, { op: 'whoami' }, 800)
-    if (r?.name) out.push({ path, name: r.name })
+    if (r?.name) out.push({ path, name: r.name, ...(r.mode ? { mode: r.mode } : {}) })
   }
   return out
 }
@@ -445,26 +629,36 @@ export function parseBossaiWake(args: string[], env: NodeJS.ProcessEnv = process
   const chat = flag(args, '--chat')
   if (!chat) throw new Error(BOSSAI_USAGE)
   const tokenFile = flag(args, '--token-file')
+  if (!env.BOSSAI_CLOUD_TOKEN && tokenFile && process.platform !== 'win32' && (statSync(tokenFile).mode & 0o077) !== 0) {
+    throw new Error(`--token-file ${tokenFile} is readable by group or others; chmod 600 it, or better inject BOSSAI_CLOUD_TOKEN from the secret store.`)
+  }
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined)
   if (!token) throw new Error('wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).')
   const licenseFile = flag(args, '--license-file')
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync(licenseFile, 'utf8').trim() : undefined)
   const pollMs = Number(flag(args, '--poll-ms') ?? 3_000)
   const graceMs = Number(flag(args, '--grace-ms') ?? 15_000)
-  const allowRaw = flag(args, '--allow')
   return {
     chat,
     session: flag(args, '--session'),
-    server: resolveBossaiServer({ server: flag(args, '--server'), portFile: flag(args, '--port-file') }),
+    server: assertLoopbackServer(resolveBossaiServer({ server: flag(args, '--server'), portFile: flag(args, '--port-file') })),
     token,
     license,
     notify: flag(args, '--notify'),
     account: (() => { try { return loadConfig().self_handle } catch { return undefined } })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3_000,
     bridge: args.includes('--bridge'),
-    allow: allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    approvers: (() => { const a = flag(args, '--approvers'); return a ? a.split(',').map(s => s.trim()).filter(Boolean) : undefined })(),
+    allow: pinFlag(args, '--allow'),
+    approvers: pinFlag(args, '--approvers'),
     graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15_000,
+    runMode: (() => {
+      const m = flag(args, '--run-mode')
+      if (m === undefined) return undefined
+      if (m !== 'cloud' && m !== 'hybrid' && m !== 'local') throw new Error('--run-mode must be cloud, hybrid or local')
+      return m
+    })(),
+    model: flag(args, '--model'),
+    askTimeoutMs: askTimeoutMs(env),
   }
 }
 
@@ -493,12 +687,15 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
       : undefined,
     startCtl: o.approvers?.length && o.session
       ? async () => {
+        const home = ensureCtlHome()
         const h = await startMcpBridge({
           node: stableNode(process.env.PATH, process.execPath),
           peer: fileURLToPath(new URL('./mesh-peer.mjs', import.meta.url)),
           session: `${o.session}-ctl`,
-          meshHome: ensureCtlHome(),
+          meshHome: home,
         })
+        // Report idle so the relay card shows a live status, not "unknown".
+        void askHookSocket(join(home, 'hooks', `${process.pid}.sock`), { op: 'idle' })
         return { read: h.read }
       }
       : undefined,
@@ -532,7 +729,7 @@ export async function runBossaiWake(args: string[], io: { log?: (s: string) => v
     log,
     sleep: ms => new Promise(r => setTimeout(r, ms)),
   })
-  log(`bossai wake: chat=${o.chat} session=${o.session ?? '(unique bossai-* peer)'} server=${o.server}${o.notify ? ` notify=${o.notify}` : ''}${o.bridge ? ' bridge=on' : ''}${o.allow ? ` allow=${o.allow.join(',')}` : ''}`)
+  log(`bossai wake: chat=${o.chat} session=${o.session ?? '(unique bossai-* peer)'} server=${o.server}${o.notify ? ` notify=${o.notify}` : ''}${o.bridge ? ' bridge=on' : ''}${o.allow ? ` allow=${o.allow.join(',')}` : ''}${o.notify ? ` ask-timeout=${o.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS}ms (BOSSAI_PERMISSION_ASK_TIMEOUT_MS; must match the app's)` : ''}`)
   if (io.once || args.includes('--once')) { await waker.tick(); await waker.shutdown(); return 0 }
   process.on('SIGINT', () => { void waker.shutdown().then(() => process.exit(0)) })
   process.on('SIGTERM', () => { void waker.shutdown().then(() => process.exit(0)) })

@@ -494,6 +494,7 @@ name, without a `[ref]` that ties it to a session. A peer started with `MESH_JOI
 | `MESH_HOST` | short host label (`devin`, `agy`, `grok`, `pi`) that prefixes a pull session's fallback name |
 | `MESH_WAKE` | `herdr`: wake an idle pull session in a Herdr pane when a message arrives (needs the Devin, agy or grok hooks); for pi, any value but `0` makes the extension start the turn itself |
 | `MESH_HOME` | where the pairing lives (default `~/.claude-mesh`) |
+| `MESH_CREATE_WORKER` | `1`: offer `create_worker` on any peer. Unset: only a push-mode Claude Code session (joined through the channel, no `MESH_HOST`) lists and runs it; pull, one-shot and send-only peers, and any peer with `MESH_HOST` set, neither list nor run it (it spawns an agent over ssh, and a host that approves MCP tools by wildcard would run it unasked). A send-only Claude Code session that needs it sets `1` |
 
 The `pull` marker in `list_agents` and the names of send-only senders need a relay and peers from
 this version. Against an older relay, pull sessions still work but show no marker, and send-only
@@ -510,13 +511,14 @@ in BossAI itself:
 ```bash
 node $M bossai install --session bossai-<machine>           # prints the MCP config it would write
 node $M bossai install --session bossai-<machine> --write   # writes it via BossAI's local MCP API
-node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow feishu-assistant
+node $M bossai wake --chat <chatId> --session bossai-<machine> --bridge --allow feishu-assistant@<token-id>
 ```
 
 `install` discovers the server port from the app's `desktop-server-port.json` (override with
 `--server`/`--port-file`), bootstraps the MCP control token, and registers `mesh-peer.mjs` as a
 stdio MCP server (`MESH_JOIN=pull`, `MESH_HOST=bossai`). The BossAI session itself joins the mesh;
-its agent gets `list_agents` / `send_message` / `read_messages` and reads mail with its own tools.
+its agent gets `list_agents` / `send_message` / `read_messages` and reads mail with its own tools;
+`create_worker` is not offered (see `MESH_CREATE_WORKER`), and `install` never turns it on.
 Verified live against BossAI 1.3.34 (macOS arm64): config write, tool discovery, mesh registration.
 
 `wake` plays the hooks' role from outside: it finds the peer's hook socket by `whoami`, asks
@@ -524,16 +526,35 @@ Verified live against BossAI 1.3.34 (macOS arm64): config write, tool discovery,
 into an active run, else a new turn — then reports busy/idle. A 409 from the global concurrency
 slot is retried without consuming another wake nudge. `--notify <mesh-name>` optionally forwards
 pending tool-approval cards to a mesh contact; it never approves anything (BossAI's own approval
-queue stays authoritative, 5-minute default timeout).
+queue stays authoritative). The card states BossAI's timeout, `BOSSAI_PERMISSION_ASK_TIMEOUT_MS`
+(default 5 minutes, `0` waits forever; an expired card is denied). The app's API does not report
+it, so start `wake` with the same value as the app; wake logs the value it assumes.
 
 `--bridge` covers the idle app: BossAI closes managed MCP connections on session teardown, so
 while no BossAI peer answers, wake holds the mesh session with its own peer child (same session
 name), reads the mail, stops the child so BossAI's turn can take the session over, and injects
 the full letters (`<channel>` blocks plus a reply hint). Letters are held and retried if the
 injection hits the concurrency slot; a grace window (`--grace-ms`, default 15s) prevents flapping
-against short turns. `--allow <prefix,…>` whitelists senders by name prefix — mail from anyone
-else is read, discarded and logged, never injected. Without `--bridge`, idle mail queues on the
-relay until the next turn (the original v1 behavior).
+against short turns. `--allow <name@token-id,…>` admits mail only from the senders
+`--approvers` (below) would accept for the same pins: a live session with that exact name, on the
+worker's own account, stamped with that token id (not a send-only label, not a prefix, not a
+same-name session on another token). Mail from anyone else is read, discarded and logged, never
+injected. A bare name, an empty list and a flag without a value are refused at startup. Without
+`--bridge`, idle mail queues on the relay until the next turn (the original v1 behavior).
+`install --allow` (the peer's own `MESH_ALLOW`) still takes names only.
+
+`--approvers <name@token-id,…>` lets named sessions settle those cards: wake holds a
+`<session>-ctl` mesh session, and a reply `APPROVE|DENY <toolCallId> [reason]` settles the ask only
+when it comes from a live session with that name, on the worker's own account, sent with that
+token. The relay stamps every letter with `from_token`, the id of the token that sent it (a sender
+cannot set it), so a session of the same name on another token of the account is refused, and so
+is every letter from a relay too old to stamp it. A bare name is refused. An admin lists ids by
+device label with `GET /v1/admin/tokens`; without the admin token, send any message from the
+approver's machine to a session you can read and copy `from_token` from the `<channel>` tag.
+Every recipient, on any account, sees the sender's token id: it is not a credential (granting or
+revoking needs the admin token), but its ULID shows when that device was paired. Re-pairing or
+rotating the approver's token changes the id, and the pin then refuses everything (fails closed)
+until wake is restarted with the new one.
 
 Caveats, honest ones:
 

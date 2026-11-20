@@ -1,0 +1,31 @@
+# CI for tools/device-broker: the lease registry's tests run offline against
+# stub adb/xcrun — nothing real boots. On macOS too: the scripts claim bash 3.2
+# (the system bash), and a GNU-only sed -i once slipped through a Linux-only run.
+name: device-broker CI
+on:
+  push:
+    branches: [main]
+    paths: ['tools/device-broker/**', '.github/workflows/device-broker-ci.yml']
+  pull_request:
+    paths: ['tools/device-broker/**', '.github/workflows/device-broker-ci.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show which bash runs the scripts (PATH decides, not the step wrapper)
+        run: |
+          command -v bash; bash --version | head -1
+          if [ "$RUNNER_OS" = macOS ]; then
+            bash -c '[ "${BASH_VERSINFO[0]}" = 3 ]' || { echo "::error::expected the macOS system bash 3.2 on PATH"; exit 1; }
+          fi
+      - run: bash tools/device-broker/tests/run-tests.sh

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  approvalNotice, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker,
+  approvalNotice, askTimeoutMs, bossaiControlToken, bossaiPortFile, bossaiServerBody, createWaker, DEFAULT_ASK_TIMEOUT_MS,
   filterLetters, injectionBody, parseBossaiInstall, parseBossaiWake, parseChannels, pickHookSocket,
   approvalNotice, bridgeEnv, discoverBossaiSockets, ensureCtlHome, parseApprovalCommand, readBossaiPort, resolveBossaiServer, runBossaiInstall, senderAllowed, type WakeDeps,
 } from './bossai.ts'
@@ -48,10 +48,18 @@ describe('bossaiServerBody', () => {
     expect(t.command).toBe('/n')
     expect(t.args).toEqual(['/p.mjs'])
     expect(t.env).toEqual({ MESH_JOIN: 'never', MESH_HOST: 'bossai', MESH_WAKE: '', MESH_SESSION_NAME: 'bossai-m2' })
+    // create_worker stays off for BossAI: install never writes the opt-in.
+    expect(t.env).not.toHaveProperty('MESH_CREATE_WORKER')
   })
   it('omits MESH_SESSION_NAME when unnamed', () => {
     const body = bossaiServerBody({ id: 'mesh', node: '/n', peer: '/p' })
     expect((body.transport as { env: Record<string, string> }).env.MESH_SESSION_NAME).toBeUndefined()
+  })
+  it('--allow reaches the peer as MESH_ALLOW; without it the peer gets no allow-list', () => {
+    const env = (b: Record<string, unknown>) => (b.transport as { env: Record<string, string> }).env
+    expect(env(bossaiServerBody({ id: 'mesh', session: 'bossai-devdesk', allow: ['feishu-assistant', 'bossai-handoff'], node: '/n', peer: '/p' })).MESH_ALLOW)
+      .toBe('feishu-assistant,bossai-handoff')
+    expect(env(bossaiServerBody({ id: 'mesh', node: '/n', peer: '/p' }))).not.toHaveProperty('MESH_ALLOW')
   })
 })
 
@@ -62,6 +70,11 @@ describe('parseBossaiInstall', () => {
     expect(o.session).toBe('bossai-m2')
     expect(o.server).toBe('http://127.0.0.1:1')
     expect(o.node).toBe('/n')
+  })
+  it('reads --allow as a trimmed name list', () => {
+    expect(parseBossaiInstall(['--allow', 'feishu-assistant, bossai-handoff'], { id: 'mesh', node: '/n', peer: '/p' }).allow)
+      .toEqual(['feishu-assistant', 'bossai-handoff'])
+    expect(parseBossaiInstall([], { id: 'mesh', node: '/n', peer: '/p' }).allow).toBeUndefined()
   })
 })
 
@@ -133,6 +146,31 @@ describe('injectionBody / approvalNotice', () => {
     expect(s).toContain('shell_command')
     expect(s).toContain('chat-1')
     expect(s).toContain('不会代为批准')
+  })
+  it('states the timeout BossAI is configured with, not a fixed one', () => {
+    const card = (ms?: number) => approvalNotice({ toolCallId: 't1', toolName: 'shell_command' }, 'chat-1', undefined, ms)
+    expect(card()).toContain('5 分钟内没人处理会自动拒')
+    expect(card(1_800_000)).toContain('30 分钟内没人处理会自动拒')
+    expect(card(1_800_000)).not.toContain('5 分钟')
+    expect(card(90_000)).toContain('90 秒内没人处理会自动拒')
+    expect(card(0)).toContain('不超时')
+    expect(card(0)).not.toContain('自动拒')
+  })
+  it('reads BOSSAI_PERMISSION_ASK_TIMEOUT_MS the way BossAI does', () => {
+    expect(askTimeoutMs({})).toBe(DEFAULT_ASK_TIMEOUT_MS)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '1800000' })).toBe(1_800_000)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: 'soon' })).toBe(DEFAULT_ASK_TIMEOUT_MS)
+    // BossAI: Number('') is 0, and 0 waits forever; negatives clamp to 0.
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '' })).toBe(0)
+    expect(askTimeoutMs({ BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '-5' })).toBe(0)
+  })
+  it('wake takes the timeout from its environment and puts it on the card it sends', async () => {
+    expect(parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_PERMISSION_ASK_TIMEOUT_MS: '1800000' }).askTimeoutMs).toBe(1_800_000)
+    const sent: string[] = []
+    const d = deps({ discover: async () => [], pendingAsk: async () => ({ toolCallId: 'call_9', toolName: 'shell_command' }), notify: async t => { sent.push(t) } })
+    await createWaker({ ...opts, notify: 'feishu-assistant', askTimeoutMs: 1_800_000 }, d).tick()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('30 分钟内没人处理会自动拒')
   })
 })
 
@@ -209,19 +247,19 @@ describe('createWaker', () => {
 describe('parseBossaiWake', () => {
   it('requires --chat and a token', () => {
     expect(() => parseBossaiWake([], {})).toThrow(/usage/)
-    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://x'], {})).toThrow(/token/)
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], {})).toThrow(/token/)
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.chat).toBe('c')
     expect(o.token).toBe('t')
     expect(o.pollMs).toBe(3000)
   })
   it('clamps a too-small poll interval', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--poll-ms', '10'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--poll-ms', '10'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.pollMs).toBe(3000)
   })
 })
 describe('parseChannels / senderAllowed / filterLetters', () => {
-  const text = '<channel from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m1">\n任务一\n</channel>\n<channel from="stranger [x]" account="other" msg_id="m2">\n坏信\n</channel>'
+  const text = '<channel from="feishu-assistant [8vetwb]" account="weiliu" from_token="tk_N150" msg_id="m1">\n任务一\n</channel>\n<channel from="stranger [x]" account="other" msg_id="m2">\n坏信\n</channel>'
   it('parses channel blocks with from and body', () => {
     const ls = parseChannels(text)
     expect(ls).toHaveLength(2)
@@ -234,10 +272,21 @@ describe('parseChannels / senderAllowed / filterLetters', () => {
     expect(senderAllowed('anyone', undefined)).toBe(true)
   })
   it('keeps allowed letters and reports dropped senders', () => {
-    const r = filterLetters(text, ['feishu-assistant'])
+    const r = filterLetters(text, ['feishu-assistant@tk_N150'], 'weiliu')
     expect(r.kept).toContain('任务一')
     expect(r.kept).not.toContain('坏信')
-    expect(r.dropped).toEqual(['stranger [x]'])
+    expect(r.dropped).toEqual(['stranger [x] (not-listed)'])
+  })
+  it('with an allow-list, a letter carrying sender meta is dropped even when its from is allowed; without one it is kept', () => {
+    const t = '<channel x_from="feishu-assistant [abc123]" from="weiliu" account="weiliu" msg_id="m3">\n冒名\n</channel>\n'
+      + '<channel x_note="hi" from="feishu-assistant [8vetwb]" account="weiliu" msg_id="m4">\n带附加键\n</channel>\n'
+      + '<channel from="feishu-assistant [8vetwb]" account="weiliu" from_token="tk_N150" msg_id="m5">\n正常\n</channel>'
+    const r = filterLetters(t, ['feishu-assistant@tk_N150'], 'weiliu')
+    expect(r.kept).toContain('正常')
+    expect(r.kept).not.toContain('冒名')
+    expect(r.kept).not.toContain('带附加键')
+    expect(r.dropped).toEqual(['weiliu (unknown-key)', 'feishu-assistant [8vetwb] (unknown-key)'])
+    expect(filterLetters(t).kept).toContain('冒名')
   })
 })
 
@@ -269,7 +318,7 @@ describe('createWaker --bridge', () => {
     const { d } = bridgeDeps()
     const logs: string[] = []
     d.log = s => logs.push(s)
-    await createWaker({ ...bopts, allow: ['someone-else'] }, d).tick()
+    await createWaker({ ...bopts, allow: ['someone-else@tk_X'] }, d).tick()
     expect(d.injected).toHaveLength(0)
     expect(logs.join('\n')).toContain('non-allowed')
   })
@@ -311,18 +360,30 @@ describe('createWaker --bridge', () => {
 
 describe('parseBossaiWake v2 flags', () => {
   it('parses bridge, allow and grace', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--bridge', '--allow', 'feishu-assistant, m4-', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--bridge', '--allow', 'feishu-assistant@tk_01AAA, bossai-handoff@tk_01BBB', '--grace-ms', '5000'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o.bridge).toBe(true)
-    expect(o.allow).toEqual(['feishu-assistant', 'm4-'])
+    expect(o.allow).toEqual(['feishu-assistant@tk_01AAA', 'bossai-handoff@tk_01BBB'])
     expect(o.graceMs).toBe(5000)
+  })
+  it('a pin flag never fails open: a bare name, an empty list, or a missing value is an error; no flag is no list', () => {
+    const wake = (...extra: string[]) => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', ...extra], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(() => wake('--allow', 'feishu-assistant@tk_01AAA,bossai-handoff')).toThrow('--allow entry "bossai-handoff" must be <session-name>@<token-id>')
+    expect(() => wake('--allow', ',')).toThrow('--allow is empty')
+    expect(() => wake('--allow', ' ')).toThrow('--allow is empty')
+    expect(() => wake('--allow', '')).toThrow('--allow is empty')
+    expect(() => wake('--bridge', '--allow')).toThrow('--allow needs')
+    expect(() => wake('--approvers', ',')).toThrow('--approvers is empty')
+    expect(() => wake('--approvers')).toThrow('--approvers needs')
+    expect(wake('--bridge').allow).toBeUndefined()
+    expect(wake('--bridge').approvers).toBeUndefined()
   })
 })
 
 describe('parseBossaiWake license', () => {
   it('reads the license from env or file and attaches nothing when absent', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'lic' })
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't', BOSSAI_CLOUD_LICENSE: 'lic' })
     expect(o.license).toBe('lic')
-    const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://x'], { BOSSAI_CLOUD_TOKEN: 't' })
+    const o2 = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1'], { BOSSAI_CLOUD_TOKEN: 't' })
     expect(o2.license).toBeUndefined()
   })
 })
@@ -336,8 +397,8 @@ describe('discoverBossaiSockets', () => {
     const { Inbox } = await import('../inbox.ts')
     const dir = mkdtempSync(join(tmpdir(), 'mesh-hooks-'))
     mkdirSync(join(dir, 'hooks'), { recursive: true })
-    const own = await serveHookSocket(hookSocketPath(process.pid, dir), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's', name: 'bossai-devdesk' }) }))
-    const other = await serveHookSocket(join(dir, 'hooks', '999999.sock'), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's2', name: 'bossai-devdesk' }) }))
+    const own = await serveHookSocket(hookSocketPath(process.pid, dir), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's', name: 'bossai-devdesk', mode: 'pull' }) }))
+    const other = await serveHookSocket(join(dir, 'hooks', '999999.sock'), new HookChannel(new Inbox(), () => {}, { whoami: () => ({ session: 's2', name: 'bossai-devdesk', mode: 'pull' }) }))
     try {
       const found = await discoverBossaiSockets(dir)
       expect(found.map(f => f.path)).toEqual([join(dir, 'hooks', '999999.sock')])
@@ -361,7 +422,7 @@ describe('parseApprovalCommand / approvalNotice v3', () => {
 })
 
 describe('createWaker --approvers (mesh-side approval settlement)', () => {
-  const ctlLetter = (from: string, body: string) => `<channel from="${from}" account="weiliu" msg_id="m">\n${body}\n</channel>`
+  const ctlLetter = (from: string, body: string) => `<channel from="${from}" account="weiliu" from_token="tk_N150" msg_id="m">\n${body}\n</channel>`
   function ctlDeps(reads: string[], over: Partial<WakeDeps> = {}) {
     const settled: { id: string; action: string; reason?: string }[] = []
     const logs: string[] = []
@@ -374,7 +435,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     })
     return { d, settled, logs }
   }
-  const aopts = { ...opts, approvers: ['feishu-assistant'] }
+  const aopts = { ...opts, approvers: ['feishu-assistant@tk_N150'], account: 'weiliu' }
   it('settles an APPROVE from an allowed approver, scope once', async () => {
     const { d, settled } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
@@ -384,7 +445,7 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('stranger [x]', 'APPROVE call_1')])
     await createWaker(aopts, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('non-approver')
+    expect(logs.join('\n')).toContain('not-an-approver')
   })
   it('discards non-command mail on the ctl session', async () => {
     const { d, settled, logs } = ctlDeps([ctlLetter('feishu-assistant [8vetwb]', '随便聊聊')])
@@ -402,9 +463,13 @@ describe('createWaker --approvers (mesh-side approval settlement)', () => {
 })
 
 describe('parseBossaiWake approvers', () => {
-  it('parses --approvers list', () => {
-    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://x', '--approvers', 'feishu-assistant, bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' })
-    expect(o.approvers).toEqual(['feishu-assistant', 'bossai-handoff'])
+  it('parses --approvers list of <name>@<token-id> pins', () => {
+    const o = parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant@tk_01AAA, bossai-handoff@tk_01BBB'], { BOSSAI_CLOUD_TOKEN: 't' })
+    expect(o.approvers).toEqual(['feishu-assistant@tk_01AAA', 'bossai-handoff@tk_01BBB'])
+  })
+  it('refuses an --approvers entry without a token pin', () => {
+    expect(() => parseBossaiWake(['--chat', 'c', '--server', 'http://127.0.0.1:1', '--approvers', 'feishu-assistant@tk_01AAA,bossai-handoff'], { BOSSAI_CLOUD_TOKEN: 't' }))
+      .toThrow('must be <session-name>@<token-id>')
   })
 })
 
@@ -414,13 +479,13 @@ describe('createWaker approval account fence', () => {
     const logs: string[] = []
     const d = deps({
       discover: async () => [],
-      startCtl: async () => ({ read: async () => '<channel from="feishu-assistant [x]" account="intruder" msg_id="m">\nAPPROVE call_1\n</channel>' }),
+      startCtl: async () => ({ read: async () => '<channel from="feishu-assistant [x]" account="intruder" from_token="tk_N150" msg_id="m">\nAPPROVE call_1\n</channel>' }),
       resolveAsk: async id => { settled.push(id); return { ok: true, status: 200 } },
       log: s => logs.push(s),
     })
-    await createWaker({ ...opts, approvers: ['feishu-assistant'], account: 'weiliu' }, d).tick()
+    await createWaker({ ...opts, approvers: ['feishu-assistant@tk_N150'], account: 'weiliu' }, d).tick()
     expect(settled).toHaveLength(0)
-    expect(logs.join('\n')).toContain('foreign account')
+    expect(logs.join('\n')).toContain('foreign-account')
   })
 })
 
@@ -452,7 +517,32 @@ describe('createWaker run-loop resilience', () => {
     const logs: string[] = []
     d.log = s => logs.push(s)
     await expect(w.run()).rejects.toThrow('stop-test')
-    expect(logs.join('\n')).toContain('tick error (kept alive)')
+    expect(logs.join('\n')).toContain('tick failed')
     expect(n).toBeGreaterThan(1)
+  })
+})
+
+describe('createWaker ignores send-only peers', () => {
+  it('starts the bridge even when a send-only peer answers whoami under the same name', async () => {
+    const events: string[] = []
+    const d = deps({
+      discover: async () => [{ path: '/app.sock', name: 'bossai-devdesk', mode: 'send' }],
+      startBridge: async () => { events.push('start'); return { ask: async () => ({ unread: 0, from: [] }), read: async () => '', stop: async () => {} } },
+    })
+    await createWaker({ ...opts, bridge: true, graceMs: 0 }, d).tick()
+    expect(events).toEqual(['start'])
+  })
+})
+
+describe('createWaker permanent bridge', () => {
+  it('starts the bridge even while a run is active (app peer is send-only; sweeps reap offline names)', async () => {
+    const events: string[] = []
+    const d = deps({
+      discover: async () => [],
+      activeRun: async () => true,
+      startBridge: async () => { events.push('start'); return { ask: async () => ({ unread: 0, from: [] }), read: async () => '', stop: async () => {} } },
+    })
+    await createWaker({ ...opts, bridge: true, graceMs: 0 }, d).tick()
+    expect(events).toEqual(['start'])
   })
 })

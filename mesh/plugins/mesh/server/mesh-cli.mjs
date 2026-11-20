@@ -4343,7 +4343,7 @@ var init_zod = __esm({
 });
 
 // packages/shared/dist/envelope.js
-var AddressSchema, KindSchema, MetaSchema, ContentSchema, MessageIdSchema, SESSION_ID_REGEX, SessionIdSchema, LoginSchema, SessionNameSchema, EnvelopeSchema, OutboundMessageSchema;
+var AddressSchema, KindSchema, MetaSchema, ContentSchema, MessageIdSchema, SESSION_ID_REGEX, SessionIdSchema, LoginSchema, SessionNameSchema, TokenIdSchema, EnvelopeSchema, OutboundMessageSchema;
 var init_envelope = __esm({
   "packages/shared/dist/envelope.js"() {
     "use strict";
@@ -4366,6 +4366,7 @@ var init_envelope = __esm({
     SessionIdSchema = external_exports.string().regex(SESSION_ID_REGEX);
     LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
     SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
+    TokenIdSchema = external_exports.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
     EnvelopeSchema = external_exports.object({
       id: MessageIdSchema,
       v: external_exports.literal(PROTOCOL_VERSION),
@@ -4383,7 +4384,10 @@ var init_envelope = __esm({
       from_session: SessionIdSchema.nullable().default(null),
       from_name: SessionNameSchema.nullable().default(null),
       to_session: SessionIdSchema.nullable().default(null),
-      from_login: LoginSchema.nullable().default(null)
+      from_login: LoginSchema.nullable().default(null),
+      // The id of the token that sent it, looked up by the relay from the bearer hash. Another token
+      // of the same account cannot carry it, whatever name its session uses.
+      from_token: TokenIdSchema.nullable().default(null)
     }).superRefine((e, ctx) => {
       if (e.kind === "permission_verdict" && e.in_reply_to === null) {
         ctx.addIssue({
@@ -5465,6 +5469,8 @@ function resolveTarget(to, rows, selfId) {
   const byName = others.filter((r) => r.name === trimmed);
   if (byName.length === 1) return { ok: true, target: byName[0] };
   if (byName.length > 1) {
+    const live = byName.filter((r) => r.status === "idle" || r.status === "busy" || r.status === "unknown");
+    if (live.length === 1) return { ok: true, target: live[0] };
     return {
       ok: false,
       error: `"${trimmed}" matches ${byName.length} sessions; resend with one of: ${byName.map(formatAddress).join(", ")}`
@@ -6333,6 +6339,17 @@ function bossaiPortFile(platform, env = process.env, home = homedir7()) {
 }
 var init_bossai_paths = __esm({
   "packages/peer-agent/src/cli/bossai-paths.ts"() {
+    "use strict";
+  }
+});
+
+// packages/peer-agent/src/sender-allow.ts
+function parseAllow(value) {
+  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return names.length > 0 ? names : void 0;
+}
+var init_sender_allow = __esm({
+  "packages/peer-agent/src/sender-allow.ts"() {
     "use strict";
   }
 });
@@ -21557,7 +21574,14 @@ var init_stdio2 = __esm({
 var bossai_exports = {};
 __export(bossai_exports, {
   BOSSAI_USAGE: () => BOSSAI_USAGE,
+  CHANNEL_KEYS: () => CHANNEL_KEYS,
+  DEFAULT_ASK_TIMEOUT_MS: () => DEFAULT_ASK_TIMEOUT_MS,
+  allowLetterVerdict: () => allowLetterVerdict,
   approvalNotice: () => approvalNotice,
+  approverVerdict: () => approverVerdict,
+  askTimeoutMs: () => askTimeoutMs,
+  askTimeoutText: () => askTimeoutText,
+  assertLoopbackServer: () => assertLoopbackServer,
   bossaiControlToken: () => bossaiControlToken,
   bossaiPortFile: () => bossaiPortFile,
   bossaiServerBody: () => bossaiServerBody,
@@ -21568,12 +21592,17 @@ __export(bossai_exports, {
   ensureCtlHome: () => ensureCtlHome,
   filterLetters: () => filterLetters,
   injectionBody: () => injectionBody,
+  letterShape: () => letterShape,
   parseApprovalCommand: () => parseApprovalCommand,
+  parseApprovers: () => parseApprovers,
+  parseAttrs: () => parseAttrs,
   parseBossaiInstall: () => parseBossaiInstall,
   parseBossaiWake: () => parseBossaiWake,
   parseChannels: () => parseChannels,
+  parsePins: () => parsePins,
   pickHookSocket: () => pickHookSocket,
   readBossaiPort: () => readBossaiPort,
+  redactSubtitle: () => redactSubtitle,
   resolveBossaiServer: () => resolveBossaiServer,
   runBossai: () => runBossai,
   runBossaiInstall: () => runBossaiInstall,
@@ -21581,7 +21610,7 @@ __export(bossai_exports, {
   senderAllowed: () => senderAllowed,
   startMcpBridge: () => startMcpBridge
 });
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync2, mkdirSync as mkdirSync9, copyFileSync as copyFileSync5, chmodSync as chmodSync3 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync2, mkdirSync as mkdirSync9, copyFileSync as copyFileSync5, chmodSync as chmodSync3, statSync as statSync3 } from "node:fs";
 import { join as join18 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 function flag5(args, name) {
@@ -21596,6 +21625,18 @@ function readBossaiPort(path, read = (p) => readFileSync14(p, "utf8")) {
     return void 0;
   }
 }
+function assertLoopbackServer(url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    throw new Error(`--server is not a URL: ${url}`);
+  }
+  if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
+    throw new Error(`--server must be a loopback URL (the BossAI server only listens on 127.0.0.1); got ${host}`);
+  }
+  return url;
+}
 function resolveBossaiServer(o, platform = process.platform, env = process.env) {
   if (o.server) return o.server.replace(/\/+$/, "");
   const port = readBossaiPort(o.portFile ?? bossaiPortFile(platform, env));
@@ -21605,6 +21646,7 @@ function resolveBossaiServer(o, platform = process.platform, env = process.env) 
 function bossaiServerBody(o) {
   const env = { MESH_JOIN: "never", MESH_HOST: "bossai", MESH_WAKE: "" };
   if (o.session) env.MESH_SESSION_NAME = o.session;
+  if (o.allow?.length) env.MESH_ALLOW = o.allow.join(",");
   return {
     id: o.id,
     label: `mesh (${o.session ?? o.id})`,
@@ -21618,6 +21660,7 @@ function parseBossaiInstall(args, defaults2) {
     portFile: flag5(args, "--port-file") ?? defaults2.portFile,
     id: flag5(args, "--id") ?? defaults2.id,
     session: flag5(args, "--session") ?? defaults2.session,
+    allow: parseAllow(flag5(args, "--allow")) ?? defaults2.allow,
     node: flag5(args, "--node") ?? defaults2.node,
     peer: flag5(args, "--peer") ?? defaults2.peer
   };
@@ -21675,12 +21718,26 @@ function pickHookSocket(entries, session) {
   const bossai = entries.filter((e) => e.name?.startsWith("bossai"));
   return bossai.length === 1 ? bossai[0].path : void 0;
 }
-function injectionBody(notice, activeRun) {
-  return activeRun ? { text: notice, deliverAs: "steer" } : { text: notice };
+function injectionBody(notice, activeRun, turn = {}) {
+  if (activeRun) return { text: notice, deliverAs: "steer" };
+  return { text: notice, ...turn.runMode ? { runMode: turn.runMode } : {}, ...turn.model ? { model: turn.model } : {} };
 }
-function approvalNotice(ask, chat, ctlSession) {
+function redactSubtitle(s, max = 160) {
+  const r = s.replace(/(bearer\s+)\S+/gi, "$1[redacted]").replace(/((?:token|key|secret|password|passwd|pwd|auth)[\w-]*\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[redacted]").replace(/[A-Za-z0-9_+/=-]{32,}/g, "[redacted]");
+  return r.length > max ? `${r.slice(0, max)}\u2026` : r;
+}
+function askTimeoutMs(env = process.env) {
+  const v = Number(env.BOSSAI_PERMISSION_ASK_TIMEOUT_MS);
+  return Math.max(0, Number.isFinite(v) ? v : DEFAULT_ASK_TIMEOUT_MS);
+}
+function askTimeoutText(ms) {
+  if (ms === 0) return "BossAI \u8BBE\u4E3A\u4E0D\u8D85\u65F6\uFF0C\u4F1A\u4E00\u76F4\u7B49\u5230\u6709\u4EBA\u5904\u7406";
+  const s = Math.ceil(ms / 1e3);
+  return `${s % 60 === 0 ? `${s / 60} \u5206\u949F` : `${s} \u79D2`}\u5185\u6CA1\u4EBA\u5904\u7406\u4F1A\u81EA\u52A8\u62D2`;
+}
+function approvalNotice(ask, chat, ctlSession, timeoutMs = DEFAULT_ASK_TIMEOUT_MS) {
   const how = ctlSession ? `\u6279\u51C6/\u62D2\u7EDD\uFF1A\u7ED9 mesh \u4F1A\u8BDD ${ctlSession} \u53D1\u300CAPPROVE ${ask.toolCallId}\u300D\u6216\u300CDENY ${ask.toolCallId} <\u7406\u7531>\u300D\uFF08\u4EC5\u767D\u540D\u5355\u6279\u51C6\u4EBA\u6709\u6548\uFF0C\u4E00\u6B21\u6027\u653E\u884C\uFF09\u3002` : "\u8BF7\u5230 BossAI \u684C\u9762\u7AEF\u5904\u7406\u3002";
-  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${ask.subtitle}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}\u9ED8\u8BA4 5 \u5206\u949F\u8D85\u65F6\u81EA\u52A8\u62D2\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
+  return `BossAI \u5BA1\u6279\u8BF7\u6C42 \xB7 ${ask.toolName ?? "tool"}${ask.subtitle ? `: ${redactSubtitle(ask.subtitle)}` : ""} \u2014 \u4F1A\u8BDD ${chat}\u3002${how}${askTimeoutText(timeoutMs)}\uFF1Bmesh \u4E0D\u4F1A\u4EE3\u4E3A\u6279\u51C6\u3002`;
 }
 function parseApprovalCommand(body) {
   const m = /^\s*(APPROVE|DENY)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(body.trim());
@@ -21692,25 +21749,90 @@ function parseApprovalCommand(body) {
     ...reason ? { reason: reason.slice(0, 500) } : {}
   };
 }
+function parseAttrs(attrs) {
+  const re = /\s+([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"/y;
+  const out = /* @__PURE__ */ new Map();
+  let i = 0;
+  for (; ; ) {
+    re.lastIndex = i;
+    const m = re.exec(attrs);
+    if (!m) break;
+    if (out.has(m[1])) return void 0;
+    out.set(m[1], m[2]);
+    i = re.lastIndex;
+  }
+  return attrs.slice(i).trim() === "" ? out : void 0;
+}
+function letterShape(letter) {
+  const f = parseAttrs(letter.attrs);
+  if (!f) return "malformed";
+  for (const k of f.keys()) if (!CHANNEL_KEYS.has(k)) return "unknown-key";
+  return "ok";
+}
 function parseChannels(text) {
   const out = [];
   const re = /<channel([^>]*)>\n([\s\S]*?)\n<\/channel>/g;
   for (const m of text.matchAll(re)) {
     const attrs = m[1] ?? "";
-    const from = /from="([^"]*)"/.exec(attrs)?.[1] ?? "";
+    const from = parseAttrs(attrs)?.get("from") ?? "";
     out.push({ attrs, from, body: m[2] ?? "" });
   }
   return out;
+}
+function approverVerdict(letter, approvers, account) {
+  const shape = letterShape(letter);
+  if (shape !== "ok") return shape;
+  const f = parseAttrs(letter.attrs);
+  if (f.has("sender")) return "send-only";
+  const m = /^(\S+) \[([a-z0-9]+)\]$/.exec(f.get("from") ?? "");
+  if (!m) return "send-only";
+  const entries = approvers.map(splitPin).filter((a) => a.name === m[1]);
+  if (entries.length === 0) return "not-an-approver";
+  if (!account) return "no-own-account";
+  if (f.get("account") !== account) return "foreign-account";
+  const pins = entries.filter((a) => a.token);
+  if (pins.length === 0) return "unpinned";
+  const token = f.get("from_token");
+  if (!token) return "no-token";
+  return pins.some((a) => a.token === token) ? "ok" : "wrong-token";
+}
+function splitPin(entry) {
+  const i = entry.lastIndexOf("@");
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
+}
+function parsePins(flagName, raw) {
+  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) throw new Error(`${flagName} is empty; give <session-name>@<token-id>,\u2026 or leave the flag out`);
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`${flagName} entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
+}
+function parseApprovers(raw) {
+  return parsePins("--approvers", raw);
+}
+function pinFlag(args, name) {
+  if (!args.includes(name)) return void 0;
+  const raw = flag5(args, name);
+  if (raw === void 0) throw new Error(`${name} needs <session-name>@<token-id>,\u2026`);
+  return parsePins(name, raw);
 }
 function senderAllowed(from, allow) {
   if (!allow || allow.length === 0) return true;
   const name = from.split(" [")[0].trim();
   return allow.some((p) => name.startsWith(p));
 }
-function filterLetters(text, allow) {
+function allowLetterVerdict(letter, allow, account) {
+  const v = approverVerdict(letter, allow, account);
+  return v === "not-an-approver" ? "not-listed" : v;
+}
+function filterLetters(text, allow, account) {
   const letters = parseChannels(text);
-  const kept = letters.filter((l) => senderAllowed(l.from, allow));
-  const dropped = letters.filter((l) => !senderAllowed(l.from, allow)).map((l) => l.from);
+  const verdict = (l) => allow ? allowLetterVerdict(l, allow, account) : "ok";
+  const kept = letters.filter((l) => verdict(l) === "ok");
+  const dropped = letters.filter((l) => verdict(l) !== "ok").map((l) => `${l.from || "(unreadable tag)"} (${verdict(l)})`);
   const lines = kept.map((l) => `<channel${l.attrs}>
 ${l.body}
 </channel>`);
@@ -21741,7 +21863,7 @@ function createWaker(o, d) {
   return {
     async tick() {
       const entries = await d.discover();
-      const bossaiSocket = pickHookSocket(entries, o.session);
+      const bossaiSocket = pickHookSocket(entries.filter((e) => e.mode !== "send"), o.session);
       if (bossaiSocket) {
         await stopBridge();
         socket = bossaiSocket;
@@ -21759,7 +21881,7 @@ function createWaker(o, d) {
         }
         if (pending && !busy) {
           const active = await d.activeRun();
-          const res = await d.inject(injectionBody(wakeNotice(pending), active));
+          const res = await d.inject(injectionBody(wakeNotice(pending), active, o));
           if (res.ok) {
             d.log(`injected mail notice (${pending.unread} from ${pending.from.join(", ")})${active ? " [steer]" : ""}`);
             pending = void 0;
@@ -21775,14 +21897,14 @@ function createWaker(o, d) {
       } else if (o.bridge && d.startBridge && !busy) {
         if (pendingLetters) {
           const active = await d.activeRun();
-          const res = await d.inject(injectionBody(bridgeNotice(pendingLetters), active));
+          const res = await d.inject(injectionBody(bridgeNotice(pendingLetters), active, o));
           if (res.ok) {
             d.log("injected bridged letters (retry)");
             pendingLetters = void 0;
             busy = true;
           } else d.log(`bridge injection still failing: HTTP ${res.status}`);
         }
-        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs && !await d.activeRun()) {
+        if (!bridge && !pendingLetters && !busy && now() - bridgeStoppedAt >= graceMs) {
           bridge = await d.startBridge().catch((e) => {
             d.log(`bridge start failed: ${e.message}`);
             return void 0;
@@ -21793,19 +21915,18 @@ function createWaker(o, d) {
           const r = await bridge.ask({ op: "wake" });
           if (r?.continue && r.unread > 0) {
             const text = await bridge.read();
-            const { kept, dropped } = filterLetters(text, o.allow);
+            const { kept, dropped } = filterLetters(text, o.allow, o.account);
             if (dropped.length > 0) d.log(`discarded mail from non-allowed senders: ${dropped.join(", ")}`);
             await stopBridge();
             if (kept) {
+              pendingLetters = kept;
               const active = await d.activeRun();
-              const res = await d.inject(injectionBody(bridgeNotice(kept), active));
+              const res = await d.inject(injectionBody(bridgeNotice(kept), active, o));
               if (res.ok) {
                 d.log("injected bridged letters");
                 busy = true;
-              } else {
-                d.log(`bridge injection deferred (HTTP ${res.status}); letters held for retry`);
-                pendingLetters = kept;
-              }
+                pendingLetters = void 0;
+              } else d.log(`bridge injection deferred (HTTP ${res.status}); letters held for retry`);
             }
           }
         }
@@ -21814,7 +21935,7 @@ function createWaker(o, d) {
         const ask = await d.pendingAsk();
         if (ask && ask.toolCallId !== lastAskNotified) {
           lastAskNotified = ask.toolCallId;
-          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0)).catch((e) => d.log(`approval notify failed: ${e.message}`));
+          await d.notify(approvalNotice(ask, o.chat, o.approvers?.length ? ctlSession : void 0, o.askTimeoutMs)).catch((e) => d.log(`approval notify failed: ${e.message}`));
         }
         if (!ask) lastAskNotified = void 0;
       }
@@ -21831,13 +21952,9 @@ function createWaker(o, d) {
               d.log(`ctl: non-command mail from ${letter.from} discarded`);
               continue;
             }
-            if (!senderAllowed(letter.from, o.approvers)) {
-              d.log(`ctl: approval attempt from non-approver ${letter.from} ignored`);
-              continue;
-            }
-            const acct = /account="([^"]*)"/.exec(letter.attrs)?.[1];
-            if (o.account && acct !== o.account) {
-              d.log(`ctl: approval from foreign account ${acct ?? "?"} ignored (approvals stay within ${o.account})`);
+            const verdict = approverVerdict(letter, o.approvers, o.account);
+            if (verdict !== "ok") {
+              d.log(`ctl: approval from ${letter.from} ignored (${verdict})`);
               continue;
             }
             const res = await d.resolveAsk(cmd.toolCallId, cmd.action, cmd.reason);
@@ -21847,13 +21964,16 @@ function createWaker(o, d) {
       }
     },
     async run() {
+      let failures = 0;
       for (; ; ) {
         try {
           await this.tick();
+          failures = 0;
         } catch (e) {
-          d.log(`tick error (kept alive): ${e.message}`);
+          failures++;
+          d.log(`tick failed (${failures} in a row): ${e.message}`);
         }
-        await d.sleep(o.pollMs);
+        await d.sleep(failures ? Math.min(o.pollMs * 2 ** failures, 6e4) : o.pollMs);
       }
     },
     async shutdown() {
@@ -21871,7 +21991,7 @@ async function discoverBossaiSockets(dir = meshDir()) {
     const path = join18(hooks, f);
     if (path === own) continue;
     const r = await askHookSocket(path, { op: "whoami" }, 800);
-    if (r?.name) out.push({ path, name: r.name });
+    if (r?.name) out.push({ path, name: r.name, ...r.mode ? { mode: r.mode } : {} });
   }
   return out;
 }
@@ -21919,17 +22039,19 @@ function parseBossaiWake(args, env = process.env) {
   const chat = flag5(args, "--chat");
   if (!chat) throw new Error(BOSSAI_USAGE);
   const tokenFile = flag5(args, "--token-file");
+  if (!env.BOSSAI_CLOUD_TOKEN && tokenFile && process.platform !== "win32" && (statSync3(tokenFile).mode & 63) !== 0) {
+    throw new Error(`--token-file ${tokenFile} is readable by group or others; chmod 600 it, or better inject BOSSAI_CLOUD_TOKEN from the secret store.`);
+  }
   const token = env.BOSSAI_CLOUD_TOKEN ?? (tokenFile ? readFileSync14(tokenFile, "utf8").trim() : void 0);
   if (!token) throw new Error("wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file <path> (the chat API requires cloud identity).");
   const licenseFile = flag5(args, "--license-file");
   const license = env.BOSSAI_CLOUD_LICENSE ?? (licenseFile ? readFileSync14(licenseFile, "utf8").trim() : void 0);
   const pollMs = Number(flag5(args, "--poll-ms") ?? 3e3);
   const graceMs = Number(flag5(args, "--grace-ms") ?? 15e3);
-  const allowRaw = flag5(args, "--allow");
   return {
     chat,
     session: flag5(args, "--session"),
-    server: resolveBossaiServer({ server: flag5(args, "--server"), portFile: flag5(args, "--port-file") }),
+    server: assertLoopbackServer(resolveBossaiServer({ server: flag5(args, "--server"), portFile: flag5(args, "--port-file") })),
     token,
     license,
     notify: flag5(args, "--notify"),
@@ -21942,12 +22064,17 @@ function parseBossaiWake(args, env = process.env) {
     })(),
     pollMs: Number.isFinite(pollMs) && pollMs >= 500 ? pollMs : 3e3,
     bridge: args.includes("--bridge"),
-    allow: allowRaw ? allowRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
-    approvers: (() => {
-      const a = flag5(args, "--approvers");
-      return a ? a.split(",").map((s) => s.trim()).filter(Boolean) : void 0;
+    allow: pinFlag(args, "--allow"),
+    approvers: pinFlag(args, "--approvers"),
+    graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3,
+    runMode: (() => {
+      const m = flag5(args, "--run-mode");
+      if (m === void 0) return void 0;
+      if (m !== "cloud" && m !== "hybrid" && m !== "local") throw new Error("--run-mode must be cloud, hybrid or local");
+      return m;
     })(),
-    graceMs: Number.isFinite(graceMs) && graceMs >= 0 ? graceMs : 15e3
+    model: flag5(args, "--model"),
+    askTimeoutMs: askTimeoutMs(env)
   };
 }
 async function runBossaiWake(args, io = {}) {
@@ -21977,12 +22104,14 @@ async function runBossaiWake(args, io = {}) {
       session: o.session ?? `bossai-${o.chat}`
     }) : void 0,
     startCtl: o.approvers?.length && o.session ? async () => {
+      const home = ensureCtlHome();
       const h = await startMcpBridge({
         node: stableNode(process.env.PATH, process.execPath),
         peer: fileURLToPath6(new URL("./mesh-peer.mjs", import.meta.url)),
         session: `${o.session}-ctl`,
-        meshHome: ensureCtlHome()
+        meshHome: home
       });
+      void askHookSocket(join18(home, "hooks", `${process.pid}.sock`), { op: "idle" });
       return { read: h.read };
     } : void 0,
     resolveAsk: async (toolCallId, action, reason) => {
@@ -22015,7 +22144,7 @@ async function runBossaiWake(args, io = {}) {
     log,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms))
   });
-  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}`);
+  log(`bossai wake: chat=${o.chat} session=${o.session ?? "(unique bossai-* peer)"} server=${o.server}${o.notify ? ` notify=${o.notify}` : ""}${o.bridge ? " bridge=on" : ""}${o.allow ? ` allow=${o.allow.join(",")}` : ""}${o.notify ? ` ask-timeout=${o.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS}ms (BOSSAI_PERMISSION_ASK_TIMEOUT_MS; must match the app's)` : ""}`);
   if (io.once || args.includes("--once")) {
     await waker.tick();
     await waker.shutdown();
@@ -22037,7 +22166,7 @@ async function runBossai(args) {
   console.error(BOSSAI_USAGE);
   return 2;
 }
-var BOSSAI_USAGE;
+var BOSSAI_USAGE, DEFAULT_ASK_TIMEOUT_MS, CHANNEL_KEYS;
 var init_bossai = __esm({
   "packages/peer-agent/src/cli/bossai.ts"() {
     "use strict";
@@ -22049,7 +22178,43 @@ var init_bossai = __esm({
     init_say();
     init_devin();
     init_bossai_paths();
-    BOSSAI_USAGE = "usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--node <path>] [--peer <path>] [--write]\n       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]\n                        [--bridge] [--allow <name-prefix,\u2026>] [--approvers <name-prefix,\u2026>] [--grace-ms <n>]\n\ninstall: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app\n         (pure config; the BossAI session itself joins the mesh in pull mode).\nwake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:\n         poll the peer's hook socket, inject a mail notice via the local HTTP chat API\n         (steer into an active run, else start a turn), report busy/idle, and optionally\n         notify a mesh contact about pending tool approvals (never auto-approves).\n         --bridge: while BossAI's own peer is offline (managed MCP connections close on\n         session teardown), wake holds the mesh session with its own peer child, reads\n         mail, stops the child, and injects the full letters so no mail waits for a turn.\n         --allow: only inject mail whose sender name starts with one of these prefixes.\n         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with\n         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).\nwake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env or --token-file (chat API requires it).\nCloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or\n--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).";
+    init_sender_allow();
+    BOSSAI_USAGE = `usage: mesh bossai install [--server <url>] [--port-file <path>] [--id <mcp-server-id>] [--session <mesh-name>] [--allow <name,\u2026>] [--node <path>] [--peer <path>] [--write]
+       mesh bossai wake --chat <chatId> [--session <mesh-name>] [--server <url>] [--port-file <path>] [--token-file <path>] [--license-file <path>] [--notify <mesh-name>] [--poll-ms <n>] [--once]
+                        [--bridge] [--allow <name@token-id,\u2026>] [--approvers <name@token-id,\u2026>] [--grace-ms <n>] [--run-mode cloud|hybrid|local] [--model <id>]
+
+install: register mesh-peer.mjs as a managed MCP server in the running BossAI desktop app
+         (pure config; the BossAI session itself joins the mesh in pull mode).
+         --allow: the peer itself only takes mail from a live session ("<name> [ref]", not
+         send-only) whose name equals one of these, on its own mesh account (MESH_ALLOW). Use
+         the names from wake --allow (names only here, no token pin yet): mid-turn BossAI
+         reads its mail with read_messages, which wake never sees.
+wake:    resident injector \u2014 BossAI has no hooks surface, so this plays the hooks' role:
+         poll the peer's hook socket, inject a mail notice via the local HTTP chat API
+         (steer into an active run, else start a turn), report busy/idle, and optionally
+         notify a mesh contact about pending tool approvals (never auto-approves).
+         --bridge: while BossAI's own peer is offline (managed MCP connections close on
+         session teardown), wake holds the mesh session with its own peer child, reads
+         mail, stops the child, and injects the full letters so no mail waits for a turn.
+         --allow: only inject mail that --approvers would accept as a sender: a live session
+         with that name, on the worker's own account, sent with the pinned token. Entries are
+         <session-name>@<token-id>, like --approvers; a bare name or an empty list is refused.
+         --approvers: hold a permanent <session>-ctl mesh session; approvers reply there with
+         APPROVE/DENY <toolCallId> [reason] and wake settles the ask (scope once, never auto).
+         Only a live session (from="<name> [ref]", not send-only) whose name equals an approver,
+         on the worker's own account, sent with that approver's device token may settle: each
+         entry is <session-name>@<token-id> (the id, not the token: GET /v1/admin/tokens lists
+         them by device label). The relay stamps every letter with its sender token's id, so a
+         session of the same name on another token of the account is refused, and so is a
+         letter from a relay too old to stamp it.
+         --run-mode/--model: sent with every new turn wake starts (a turn without them falls to
+         the session default, and a local first turn locks the session to local for good).
+wake needs a BossAI Cloud token: BOSSAI_CLOUD_TOKEN env (inject it from the secret store, e.g. vk run -r)
+or --token-file (refused when group/other can read it). --server must be a loopback URL.
+Cloud models also need the enterprise license per request: BOSSAI_CLOUD_LICENSE env or
+--license-file (the licenseKey from the cloud /api/bossai/bootstrap response).`;
+    DEFAULT_ASK_TIMEOUT_MS = 5 * 6e4;
+    CHANNEL_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
   }
 });
 

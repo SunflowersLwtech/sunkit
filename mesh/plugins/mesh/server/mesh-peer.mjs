@@ -36624,6 +36624,7 @@ function sessionRef(sessionId) {
 }
 var LoginSchema = external_exports.string().min(3).max(254).regex(/^[^\s<>"&]+@[^\s<>"&]+$/);
 var SessionNameSchema = external_exports.string().min(1).max(64).regex(/^[^\s\[\]<>"&]+$/);
+var TokenIdSchema = external_exports.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 var EnvelopeSchema = external_exports.object({
   id: MessageIdSchema,
   v: external_exports.literal(PROTOCOL_VERSION),
@@ -36641,7 +36642,10 @@ var EnvelopeSchema = external_exports.object({
   from_session: SessionIdSchema.nullable().default(null),
   from_name: SessionNameSchema.nullable().default(null),
   to_session: SessionIdSchema.nullable().default(null),
-  from_login: LoginSchema.nullable().default(null)
+  from_login: LoginSchema.nullable().default(null),
+  // The id of the token that sent it, looked up by the relay from the bearer hash. Another token
+  // of the same account cannot carry it, whatever name its session uses.
+  from_token: TokenIdSchema.nullable().default(null)
 }).superRefine((e, ctx) => {
   if (e.kind === "permission_verdict" && e.in_reply_to === null) {
     ctx.addIssue({
@@ -36699,6 +36703,7 @@ function envelopeToChannelNotification(e) {
         from: e.from_session && e.from_name ? `${e.from_name} [${sessionRef(e.from_session)}]` : e.from_name ?? e.from,
         ...!e.from_session && e.from_name ? { sender: "send-only" } : {},
         account: e.from,
+        ...e.from_token ? { from_token: e.from_token } : {},
         ...e.from_login ? { login: e.from_login } : {},
         msg_id: e.id,
         ...e.in_reply_to ? { in_reply_to: e.in_reply_to } : {},
@@ -36708,7 +36713,7 @@ function envelopeToChannelNotification(e) {
     }
   };
 }
-var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
+var RESERVED_META_KEYS = /* @__PURE__ */ new Set(["from", "sender", "account", "from_token", "login", "msg_id", "in_reply_to", "thread_root", "source"]);
 function withoutReserved(meta) {
   return Object.fromEntries(Object.entries(meta).filter(([k]) => !RESERVED_META_KEYS.has(k)));
 }
@@ -37196,6 +37201,8 @@ function resolveTarget(to, rows, selfId) {
   const byName = others.filter((r) => r.name === trimmed);
   if (byName.length === 1) return { ok: true, target: byName[0] };
   if (byName.length > 1) {
+    const live = byName.filter((r) => r.status === "idle" || r.status === "busy" || r.status === "unknown");
+    if (live.length === 1) return { ok: true, target: live[0] };
     return {
       ok: false,
       error: `"${trimmed}" matches ${byName.length} sessions; resend with one of: ${byName.map(formatAddress).join(", ")}`
@@ -37366,8 +37373,16 @@ var PULL_TOOL_DESCRIPTORS = [
     }
   }
 ];
+function createWorkerAllowed(o) {
+  if (o.optIn?.trim() === "1") return true;
+  return o.mode === "push" && !o.host?.trim();
+}
+function toolDescriptors(o) {
+  const all = o.pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS;
+  return all.filter((t) => o.createWorker || t.name !== "create_worker");
+}
 function registerTools(client, opts) {
-  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner } = opts;
+  const { selfSessionId, replyLimiter, inbox, spawnRunner = sshRunner, createWorker = false } = opts;
   async function callTool(name, args) {
     if (name === "list_agents") {
       ListInput.parse(args);
@@ -37400,6 +37415,7 @@ function registerTools(client, opts) {
       return { content: [{ type: "text", text: formatInbox(inbox.take(input.limit)) }] };
     }
     if (name === "create_worker") {
+      if (!createWorker) throw new Error("create_worker is not offered by this peer (only a push-mode Claude Code session has it; elsewhere it needs MESH_CREATE_WORKER=1)");
       const input = CreateWorkerInput.parse(args);
       const text = await spawnWorker({ ...input, agentArgs: input.agent_args }, spawnRunner);
       return { content: [{ type: "text", text }] };
@@ -37439,6 +37455,18 @@ function logJson(level, event, fields = {}) {
   process.stderr.write(JSON.stringify({ level, event, at: (/* @__PURE__ */ new Date()).toISOString(), ...safe }) + "\n");
 }
 
+// packages/peer-agent/src/sender-allow.ts
+function parseAllow(value) {
+  const names = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return names.length > 0 ? names : void 0;
+}
+function allowVerdict(e, allow, ownAccount) {
+  if (!e.from_session || !e.from_name) return "send-only";
+  if (!allow.includes(e.from_name)) return "not-listed";
+  if (!ownAccount) return "no-own-account";
+  return e.from === ownAccount ? "ok" : "foreign-account";
+}
+
 // packages/peer-agent/src/inbound.ts
 var InboundDispatcher = class {
   constructor(opts) {
@@ -37459,6 +37487,14 @@ var InboundDispatcher = class {
       logJson("warn", "peer.inbound.wrong_session_drop", { msg_id: e.id });
       this.opts.setCursor(e.id);
       return;
+    }
+    if (this.opts.allow) {
+      const verdict = allowVerdict(e, this.opts.allow.names, this.opts.allow.ownAccount);
+      if (verdict !== "ok") {
+        logJson("warn", "peer.inbound.allow_drop", { from: e.from_name ?? e.from, verdict, msg_id: e.id });
+        this.opts.setCursor(e.id);
+        return;
+      }
     }
     if (e.kind === "chat") this.opts.recordDm?.(e.from);
     if (e.kind === "permission_request" && this.opts.permissionTracker) {
@@ -38301,8 +38337,9 @@ async function main() {
   });
   const inbox = pull ? new Inbox() : void 0;
   const replyLimiter = new ReplyLimiter({ windowMs: 1e4, maxReplies: 2 });
-  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox });
-  const tools = pull ? PULL_TOOL_DESCRIPTORS : TOOL_DESCRIPTORS;
+  const createWorker = createWorkerAllowed({ mode: decision.mode, host: process.env.MESH_HOST, optIn: process.env.MESH_CREATE_WORKER });
+  const { callTool } = registerTools(client, { selfSessionId: sessionId, replyLimiter, inbox, createWorker });
+  const tools = toolDescriptors({ pull, createWorker });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...tools] }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
@@ -38315,14 +38352,17 @@ async function main() {
   server.onerror = (err) => {
     logJson("error", "peer.mcp.error", describeError(err));
   };
+  const allow = parseAllow(process.env.MESH_ALLOW);
   logJson("info", "peer.startup", {
     relay_url: cfg.relay_url,
     session: sessionId,
     name: identity.name,
     join: joins,
     mode: decision.mode,
-    reason: decision.reason
+    reason: decision.reason,
+    ...allow ? { allow } : {}
   });
+  if (allow && !cfg.self_handle) logJson("warn", "peer.allow.no_own_account", { note: "MESH_ALLOW set but config has no self_handle: every letter is dropped" });
   await server.connect(new StdioServerTransport());
   if (!joins) return;
   const gate = new SenderGate([]);
@@ -38383,7 +38423,7 @@ async function main() {
         void tasks?.on(e);
       },
       onCard: (c) => cards.set(cardFromHook(c)),
-      whoami: () => ({ session: sessionId, name: identity.name }),
+      whoami: () => ({ session: sessionId, name: identity.name, mode: decision.mode }),
       wakeAllowed: () => wakeBudget.take()
     });
     serveHookSocket(hookPath, channel).then((server2) => {
@@ -38403,6 +38443,7 @@ async function main() {
     gate,
     sessionId,
     chatOnly: true,
+    allow: allow ? { names: allow, ownAccount: cfg.self_handle } : void 0,
     // Pull mode keeps chat for read_messages; push mode hands it to Claude Code's channel.
     emit: (n) => {
       if (inbox) {

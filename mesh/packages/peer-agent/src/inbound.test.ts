@@ -131,4 +131,58 @@ describe('InboundDispatcher', () => {
       expect(out).toHaveLength(0)
     })
   })
+
+  describe('MESH_ALLOW (allow)', () => {
+    const allowed = (o: Partial<Envelope> = {}) =>
+      envelope({ from: 'alice', from_session: 's_01abcdef', from_name: 'feishu-assistant', ...o })
+    let out: string[]
+    let cursors: string[]
+    let ad: InboundDispatcher
+    beforeEach(() => {
+      out = []
+      cursors = []
+      ad = new InboundDispatcher({
+        gate: new SenderGate(['alice', 'bob']),
+        chatOnly: true,
+        allow: { names: ['feishu-assistant'], ownAccount: 'alice' },
+        emit: n => { out.push(String((n.params.meta as Record<string, string>).from)) },
+        setCursor: id => { cursors.push(id) },
+      })
+    })
+
+    it('surfaces a live allowed session on the own account', () => {
+      ad.handle(allowed())
+      expect(out).toEqual(['feishu-assistant [abcdef]'])
+    })
+
+    it('drops a send-only sender using an allowed name, a prefix match, and another account; the cursor still moves', () => {
+      ad.handle(allowed({ id: 'msg_01HRK7Y0000000000000000011', from_session: null }))
+      ad.handle(allowed({ id: 'msg_01HRK7Y0000000000000000012', from_name: 'feishu-assistant-x' }))
+      ad.handle(allowed({ id: 'msg_01HRK7Y0000000000000000013', from: 'bob' }))
+      expect(out).toEqual([])
+      // A dropped letter is consumed, not redelivered on the next stream open.
+      expect(cursors).toEqual(['msg_01HRK7Y0000000000000000011', 'msg_01HRK7Y0000000000000000012', 'msg_01HRK7Y0000000000000000013'])
+    })
+
+    it('an unknown own account drops everything', () => {
+      const closed = new InboundDispatcher({
+        gate: new SenderGate(['alice']),
+        allow: { names: ['feishu-assistant'], ownAccount: undefined },
+        emit: n => { out.push(String((n.params.meta as Record<string, string>).from)) },
+        setCursor: () => { /* no-op */ },
+      })
+      closed.handle(allowed())
+      expect(out).toEqual([])
+    })
+
+    it('without allow every gated sender is surfaced, as before', () => {
+      const open = new InboundDispatcher({
+        gate: new SenderGate(['alice']),
+        emit: n => { out.push(String((n.params.meta as Record<string, string>).from)) },
+        setCursor: () => { /* no-op */ },
+      })
+      open.handle(allowed({ from_session: null, from_name: 'anything' }))
+      expect(out).toEqual(['anything'])
+    })
+  })
 })

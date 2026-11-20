@@ -154,14 +154,16 @@ dir_mtime_s() {
   stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
-# owner key: stable per session/worktree; --owner-key overrides (tests use it)
+# owner key: stable per session/worktree; --owner-key overrides (tests use it).
+# No key anywhere is refused at the first call, as simctl-run boot refuses:
+# the old default (<toplevel>:<broker pid>) named a process that exits at once,
+# so no later call could ever match it — a lease acquired under it could not
+# be shown to be the caller's, and shutdown/release would refuse it.
 owner_key() {
   if [ -n "${OWNER_KEY:-}" ]; then printf '%s' "${OWNER_KEY}"; return; fi
   if [ -n "${DB_OWNER_KEY:-}" ]; then printf '%s' "${DB_OWNER_KEY}"; return; fi
   if [ -n "${DB_SESSION:-}" ]; then printf '%s' "${DB_SESSION}"; return; fi
-  local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top="${PWD}"
-  printf '%s:%s' "${top}" "$$"
+  die "set DB_OWNER_KEY (or DB_SESSION) to this session's own name: without it no later call can show a lease is this session's" 4
 }
 
 # cap_key_candidates RESOURCE -> candidate cap keys, longest first.
@@ -242,6 +244,31 @@ count_live() {
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
+# reclaim_stale DIR -> 0 removed it, 1 left it (lock busy, or no longer stale).
+# The stale verdict that leads a caller here is taken BEFORE the lock; another
+# acquirer may have reclaimed and written a LIVE lease in the meantime. So judge
+# again INSIDE the lock and remove only if the dir still exists and is still
+# stale — otherwise the loser would delete the winner's fresh claim and both
+# would exit 0. A reclaim lock older than the grace window is a reclaim that
+# died mid-step: break it, or the resource wedges forever.
+reclaim_stale() {
+  local d="$1" st=0 rmt
+  if mkdir "${d}.reclaim" 2>/dev/null; then
+    if [ -d "${d}" ]; then lease_is_live "${d}"; st=$?; fi
+    if [ "${st}" -eq 1 ]; then
+      rm -f "${d}/lease.json" 2>/dev/null
+      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+    fi
+    rmdir "${d}.reclaim" 2>/dev/null
+    [ "${st}" -eq 1 ]; return
+  fi
+  rmt="$(dir_mtime_s "${d}.reclaim")"
+  if [ -n "${rmt}" ] && [ $(( $(now_s) - rmt )) -gt "${DB_GRACE_S:-30}" ]; then
+    rmdir "${d}.reclaim" 2>/dev/null
+  fi
+  return 1
+}
+
 cmd_acquire() {
   local res="" ttl="" ownerpid="" metas="" OWNER_KEY="" wb=""
   while [ $# -gt 0 ]; do
@@ -258,6 +285,9 @@ cmd_acquire() {
   [ -n "${res}" ] || die "usage: acquire <resource> [--meta k=v …] [--ttl s] [--owner-pid p]" 4
   case "${res}" in *[!A-Za-z0-9:._-]*) die "bad resource name ${res}" 4 ;; esac
   case "${wb}" in *[!0-9A-Fa-f-]*) die "bad simulator UDID ${wb}" 4 ;; esac
+  # Settle the owner key before leasing anything: with no key anywhere this
+  # refuses now (owner_key), not after a claim dir no later call can match.
+  owner_key >/dev/null
 
   local capkey cap
   read -r capkey cap <<<"$(resolve_cap "${res}")"
@@ -269,9 +299,10 @@ cmd_acquire() {
       die "physical-device leases are not auto-acquirable (a human may be holding the device); see docs" 5 ;;
   esac
 
-  local d="${LEASES}/${res}.lock" attempt=0
+  local d="${LEASES}/${res}.lock" attempt=0 owned=0
   while [ "${attempt}" -lt 3 ]; do
     if mkdir "${d}" 2>/dev/null; then
+      owned=1
       break
     fi
     # Exists: live, stale, or cannot tell?
@@ -293,13 +324,16 @@ cmd_acquire() {
       sed 's/^/  /' "${jf}" >&2 || true
       exit 3
     else
-      # Stale or unreadable: reclaim by removing the dir, then retry mkdir.
-      rm -f "${d}/lease.json" 2>/dev/null
-      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+      # Stale: reclaim under a lock, re-judging inside it so a racer that has
+      # already written a live lease is not removed (reclaim_stale).
+      reclaim_stale "${d}"
     fi
     attempt=$((attempt+1))
   done
-  [ -d "${d}" ] || die "could not acquire ${res} after ${attempt} attempts" 4
+  # Only a mkdir this call won owns the dir: falling out of the loop with the
+  # dir still there (a reclaim lock held, a racer ahead) is a refusal, not a
+  # licence to write over whoever holds it now.
+  [ "${owned}" = 1 ] || die "could not acquire ${res} after ${attempt} attempts" 4
 
   # Enforce the cap resolved for this resource's key: count OTHER live leases
   # under the same prefix.
@@ -363,10 +397,15 @@ cmd_release() {
   [ -n "${res}" ] || die "usage: release <resource>" 4
   local d="${LEASES}/${res}.lock"
   [ -d "${d}" ] || { say "no lease on ${res}"; exit 0; }
-  local existing st
+  local existing st me=""
   existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
   lease_is_live "${d}"; st=$?
-  if [ "${st}" -ne 1 ] && [ "${existing}" != "$(owner_key)" ]; then
+  # Resolve the key into a variable and refuse if there is none: owner_key's
+  # die inside $(...) would only exit the subshell, leaving "" != "" false and
+  # removing a lease we cannot read (fail open). A stale lease (st=1) needs no
+  # key to clear.
+  if [ "${st}" -ne 1 ]; then me="$(owner_key)" || exit 4; fi
+  if [ "${st}" -ne 1 ] && [ "${existing}" != "${me}" ]; then
     [ "${st}" -eq 2 ] && [ -z "${existing}" ] && \
       die "the lease on ${res} cannot be read; refusing to release it (fail closed)" 4
     die "lease on ${res} is held by another owner; refusing to release" 3
@@ -403,9 +442,12 @@ cmd_check() {
     [ -n "${req}" ] && { say "only a stale lease on ${res}"; exit 4; }
     exit 0
   fi
-  local existing
+  local existing me=""
   existing="$(sed -n 's/.*"ownerKey": *"\([^"]*\)".*/\1/p' "${d}/lease.json" 2>/dev/null | head -1)"
-  if [ "${existing}" = "$(owner_key)" ]; then exit 0; fi
+  # As in release: resolve the key first and refuse if none, so a live lease
+  # with no ownerKey field is not claimed by "" = "".
+  me="$(owner_key)" || exit 4
+  if [ "${existing}" = "${me}" ]; then exit 0; fi
   say "${res} held by another owner:"
   sed 's/^/  /' "${d}/lease.json" >&2 || true
   exit 3
@@ -431,10 +473,10 @@ cmd_gc() {
   local d n=0
   for d in "${LEASES}"/*.lock; do
     [ -d "${d}" ] || continue
-    lease_is_live "${d}"
-    if [ $? -eq 1 ]; then
-      rm -f "${d}/lease.json" 2>/dev/null
-      rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+    # Same locked, re-judged reclaim as acquire: a gc that judged a lease stale
+    # must not remove a live lease another acquirer wrote in the meantime, and
+    # an unreadable (unknown) lease is kept, not freed.
+    if reclaim_stale "${d}"; then
       n=$((n+1))
     fi
   done

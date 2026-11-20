@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { openDatabase, getSchemaVersion, type Db } from './db.ts'
 
 describe('openDatabase', () => {
@@ -6,12 +9,29 @@ describe('openDatabase', () => {
   beforeEach(() => { db = openDatabase(':memory:') })
 
   it('applies schema and reports latest version', () => {
-    expect(getSchemaVersion(db)).toBe(5)
+    expect(getSchemaVersion(db)).toBe(6)
   })
 
   it('message table has session addressing columns (v3)', () => {
     const cols = (db.pragma('table_info(message)') as Array<{ name: string }>).map(c => c.name)
     expect(cols).toEqual(expect.arrayContaining(['from_session', 'from_name', 'to_session']))
+  })
+
+  it('message table has from_token (v6), added to a database opened before it existed', () => {
+    const cols = (db.pragma('table_info(message)') as Array<{ name: string }>).map(c => c.name)
+    expect(cols).toContain('from_token')
+    const dir = mkdtempSync(join(tmpdir(), 'relay-v5-'))
+    const path = join(dir, 'relay.db')
+    const old = openDatabase(path)
+    old.exec('ALTER TABLE message DROP COLUMN from_token')
+    old.exec('DELETE FROM schema_version WHERE version = 6')
+    old.close()
+    const reopened = openDatabase(path)
+    const after = (reopened.pragma('table_info(message)') as Array<{ name: string }>).map(c => c.name)
+    expect(after).toContain('from_token')
+    expect(getSchemaVersion(reopened)).toBe(6)
+    reopened.close()
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('human table has last_active_at column (v2)', () => {
