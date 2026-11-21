@@ -3,6 +3,10 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig, loadToken, loadPeerCredentials, isInsideGitRepoWithRemote } from './config.ts'
+import { InboundDispatcher } from './inbound.ts'
+import { SenderGate } from './gate.ts'
+import { parseAllow } from './sender-allow.ts'
+import type { Envelope } from '@claude-mesh/shared'
 
 let workdir = ''
 beforeEach(() => { workdir = mkdtempSync(join(tmpdir(), 'mesh-')) })
@@ -61,6 +65,36 @@ describe('loadPeerCredentials', () => {
     expect(() => loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' })).toThrow()
     try { loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' }) }
     catch (err) { expect(String(err)).not.toContain(env.MESH_TOKEN) }
+  })
+
+  it('requires an own account for env-only pinned mail before joining', () => {
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1' }))
+      .toThrow(/MESH_SELF_HANDLE/)
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1', MESH_SELF_HANDLE: '  ' }))
+      .toThrow(/MESH_SELF_HANDLE/)
+  })
+
+  it('delivers only correctly pinned env-only mail on the configured account', () => {
+    const credentials = loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1', MESH_SELF_HANDLE: ' alice ' })!
+    expect(credentials.cfg.self_handle).toBe('alice')
+    const received: unknown[] = []
+    const dispatcher = new InboundDispatcher({
+      gate: new SenderGate(['alice', 'mallory']),
+      allow: { names: parseAllow('assistant@tk_1')!, ownAccount: credentials.cfg.self_handle },
+      emit: notification => { received.push(notification) },
+      setCursor: () => {},
+    })
+    const message: Envelope = {
+      id: 'msg_01HRK7Y0000000000000000000', v: 1, team: 't1', from: 'alice', to: 'alice',
+      in_reply_to: null, thread_root: null, kind: 'chat', content: 'pinned', meta: {},
+      sent_at: '2026-04-17T00:00:00.000Z', delivered_at: null,
+      from_session: 's_01abcdef', from_name: 'assistant', to_session: null, from_token: 'tk_1',
+    }
+    dispatcher.handle(message)
+    dispatcher.handle({ ...message, from_token: 'tk_other' })
+    dispatcher.handle({ ...message, from: 'mallory' })
+    dispatcher.handle({ ...message, from_name: 'other' })
+    expect(received).toHaveLength(1)
   })
 
   it('prefers file config and token over environment credentials', () => {

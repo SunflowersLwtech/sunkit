@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { z } from 'zod'
 import { readTokenFile } from './cli/token-file.ts'
 import { meshDir } from './paths.ts'
+import { parseAllow } from './sender-allow.ts'
 
 export const ConfigSchema = z.object({
   relay_url: z.string().url(),
@@ -52,7 +53,11 @@ export function loadPeerCredentials(
     return { cfg, token: loadToken(cfg.token_path) }
   }
   if (!env.MESH_RELAY || !env.MESH_TOKEN) return undefined
-  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '' })
+  const selfHandle = env.MESH_SELF_HANDLE?.trim() || undefined
+  if (parseAllow(env.MESH_ALLOW) && !selfHandle) {
+    throw new Error('MESH_ALLOW requires MESH_SELF_HANDLE when using environment credentials')
+  }
+  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '', self_handle: selfHandle })
   return { cfg, token: env.MESH_TOKEN }
 }
 
