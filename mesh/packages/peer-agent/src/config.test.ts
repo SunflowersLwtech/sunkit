@@ -67,6 +67,18 @@ describe('loadPeerCredentials', () => {
     catch (err) { expect(String(err)).not.toContain(env.MESH_TOKEN) }
   })
 
+  it('trims environment tokens like token files', () => {
+    expect(loadPeerCredentials(path(), { ...env, MESH_TOKEN: ' \n env-secret \r\n' })!.token).toBe('env-secret')
+  })
+
+  it.each(['secret\nsecond-line', 'secret\tvalue', 'secret\u0000value', 'secret\u007fvalue', 'secret\u2028value', ' \r\n '])(
+    'rejects malformed environment tokens without including their value (case %#)', token => {
+      expect(() => loadPeerCredentials(path(), { ...env, MESH_TOKEN: token })).toThrow(/MESH_TOKEN/)
+      try { loadPeerCredentials(path(), { ...env, MESH_TOKEN: token }) }
+      catch (err) { expect(String(err)).not.toContain(token) }
+    },
+  )
+
   it('requires an own account for env-only pinned mail before joining', () => {
     expect(() => loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1' }))
       .toThrow(/MESH_SELF_HANDLE/)

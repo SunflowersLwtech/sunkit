@@ -2,7 +2,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { z } from 'zod'
-import { readTokenFile } from './cli/token-file.ts'
+import { readTokenFile, validateToken } from './cli/token-file.ts'
 import { meshDir } from './paths.ts'
 import { parseAllow } from './sender-allow.ts'
 
@@ -58,7 +58,8 @@ export function loadPeerCredentials(
     throw new Error('MESH_ALLOW requires MESH_SELF_HANDLE when using environment credentials')
   }
   const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '', self_handle: selfHandle })
-  return { cfg, token: env.MESH_TOKEN }
+  const token = validateToken(env.MESH_TOKEN, 'MESH_TOKEN must be a non-empty printable ASCII token without embedded newlines')
+  return { cfg, token }
 }
 
 /** Walk up from `start` looking for a .git dir. If found, inspect .git/config for any remote.url. */

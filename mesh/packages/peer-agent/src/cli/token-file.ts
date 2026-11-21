@@ -25,14 +25,15 @@ export function readTokenFile(path: string): string {
   } else {
     text = buf.toString('utf8')
   }
-  const trimmed = text.trim()
-  // Bearer tokens are ASCII. Reject anything that isn't, with a helpful hint.
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
-    throw new Error(
+  return validateToken(text,
       `token file ${path} contains non-ASCII characters. If you wrote it with ` +
       `PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: ` +
       `[System.IO.File]::WriteAllText("${path}", "<token>")`
-    )
-  }
+  )
+}
+
+export function validateToken(text: string, errorMessage: string): string {
+  const trimmed = text.trim()
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) throw new Error(errorMessage)
   return trimmed
 }
