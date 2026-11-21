@@ -36557,6 +36557,16 @@ function loadToken(path) {
   if (!existsSync(path)) throw new Error(`token file not found: ${path}`);
   return readTokenFile(path);
 }
+function loadPeerCredentials(path = defaultConfigPath(), env = process.env) {
+  if (existsSync(path)) {
+    const cfg2 = loadConfig(path);
+    assertTokenNotInRepo(cfg2.token_path);
+    return { cfg: cfg2, token: loadToken(cfg2.token_path) };
+  }
+  if (!env.MESH_RELAY || !env.MESH_TOKEN) return void 0;
+  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: "" });
+  return { cfg, token: env.MESH_TOKEN };
+}
 function isInsideGitRepoWithRemote(start) {
   let dir = resolve(start);
   while (true) {
@@ -36584,7 +36594,7 @@ function assertTokenNotInRepo(tokenPath) {
 }
 
 // packages/peer-agent/src/index.ts
-import { existsSync as existsSync4, realpathSync, rmSync as rmSync3 } from "node:fs";
+import { realpathSync, rmSync as rmSync3 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 
 // packages/shared/dist/constants.js
@@ -38319,16 +38329,15 @@ async function main() {
     logJson("info", "peer.host_closed", { reason });
     process.exit(0);
   });
-  if (!existsSync4(defaultConfigPath())) {
+  const credentials = loadPeerCredentials();
+  if (!credentials) {
     const { server: server2 } = createMcpServer({ permissionRelay: false });
     server2.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
     logJson("info", "peer.unpaired", { config: defaultConfigPath() });
     await server2.connect(new StdioServerTransport());
     return;
   }
-  const cfg = loadConfig();
-  assertTokenNotInRepo(cfg.token_path);
-  const token = loadToken(cfg.token_path);
+  const { cfg, token } = credentials;
   const cwd = process.cwd();
   const pullHost = process.env.MESH_JOIN === "pull";
   let identity = pullHost ? probeHostSession({ cwd }) : probeClaudeSession({ cwd });

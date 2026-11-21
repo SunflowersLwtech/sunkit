@@ -2,8 +2,8 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer } from './mcp-server.ts'
-import { loadConfig, loadToken, assertTokenNotInRepo, defaultConfigPath } from './config.ts'
-import { existsSync, realpathSync, rmSync } from 'node:fs'
+import { loadPeerCredentials, defaultConfigPath } from './config.ts'
+import { realpathSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { CardPatchSchema } from '@claude-mesh/shared'
 import { CardWriter, initialCard, type CardFields } from './card.ts'
@@ -38,16 +38,15 @@ async function main(): Promise<void> {
   })
   // Installed as a plugin on a machine that was never paired: stay a silent,
   // tool-less server instead of failing (a failed server is noise in /mcp).
-  if (!existsSync(defaultConfigPath())) {
+  const credentials = loadPeerCredentials()
+  if (!credentials) {
     const { server } = createMcpServer({ permissionRelay: false })
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }))
     logJson('info', 'peer.unpaired', { config: defaultConfigPath() })
     await server.connect(new StdioServerTransport())
     return
   }
-  const cfg = loadConfig()
-  assertTokenNotInRepo(cfg.token_path)
-  const token = loadToken(cfg.token_path)
+  const { cfg, token } = credentials
 
   const cwd = process.cwd()
   // A pull host is not Claude Code: its name never comes from Claude's session registry.

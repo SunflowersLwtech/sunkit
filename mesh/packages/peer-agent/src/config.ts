@@ -42,6 +42,20 @@ export function loadToken(path: string): string {
   return readTokenFile(path)
 }
 
+export function loadPeerCredentials(
+  path: string = defaultConfigPath(),
+  env: NodeJS.ProcessEnv = process.env,
+): { cfg: MeshConfig; token: string } | undefined {
+  if (existsSync(path)) {
+    const cfg = loadConfig(path)
+    assertTokenNotInRepo(cfg.token_path)
+    return { cfg, token: loadToken(cfg.token_path) }
+  }
+  if (!env.MESH_RELAY || !env.MESH_TOKEN) return undefined
+  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '' })
+  return { cfg, token: env.MESH_TOKEN }
+}
+
 /** Walk up from `start` looking for a .git dir. If found, inspect .git/config for any remote.url. */
 export function isInsideGitRepoWithRemote(start: string): boolean {
   let dir = resolve(start)

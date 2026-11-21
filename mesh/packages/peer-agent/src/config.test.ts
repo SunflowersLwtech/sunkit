@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig, loadToken, isInsideGitRepoWithRemote } from './config.ts'
+import { loadConfig, loadToken, loadPeerCredentials, isInsideGitRepoWithRemote } from './config.ts'
 
 let workdir = ''
 beforeEach(() => { workdir = mkdtempSync(join(tmpdir(), 'mesh-')) })
@@ -34,6 +34,59 @@ describe('loadConfig', () => {
       self_handle: 'alice'
     }))
     expect(loadConfig(p).self_handle).toBe('alice')
+  })
+})
+
+describe('loadPeerCredentials', () => {
+  const env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' }
+  const path = () => join(workdir, 'missing-home', 'config.json')
+
+  it('uses environment credentials without creating a home or checking a token file', () => {
+    mkdirSync(join(workdir, '.git'))
+    writeFileSync(join(workdir, '.git/config'), '[remote "origin"]\nurl = https://example.com/repo\n')
+    const credentials = loadPeerCredentials(path(), env)!
+    expect(credentials.token).toBe(env.MESH_TOKEN)
+    expect(credentials.cfg.relay_url).toBe(env.MESH_RELAY)
+    expect(credentials.cfg.permission_relay.enabled).toBe(false)
+    expect(credentials.cfg.presence.auto_publish_cwd).toBe(true)
+    expect(() => loadConfig(path())).toThrow(/config file not found/)
+  })
+
+  it.each([{}, { MESH_RELAY: env.MESH_RELAY }, { MESH_TOKEN: env.MESH_TOKEN },
+    { ...env, MESH_TOKEN: '' }, { ...env, MESH_RELAY: '' }])('stays unpaired for incomplete credentials %j', partial => {
+    expect(loadPeerCredentials(path(), partial)).toBeUndefined()
+  })
+
+  it('rejects an invalid environment relay without exposing the token', () => {
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' })).toThrow()
+    try { loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' }) }
+    catch (err) { expect(String(err)).not.toContain(env.MESH_TOKEN) }
+  })
+
+  it('prefers file config and token over environment credentials', () => {
+    const tokenPath = join(workdir, 'token')
+    writeFileSync(tokenPath, 'file-secret', { mode: 0o600 })
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ relay_url: 'https://file.example.com', token_path: tokenPath }))
+    const credentials = loadPeerCredentials(configPath, env)!
+    expect(credentials.cfg.relay_url).toBe('https://file.example.com')
+    expect(credentials.token).toBe('file-secret')
+  })
+
+  it('does not fall back when an existing config is invalid or its token is missing', () => {
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, '{')
+    expect(() => loadPeerCredentials(configPath, env)).toThrow()
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: join(workdir, 'missing') }))
+    expect(() => loadPeerCredentials(configPath, env)).toThrow(/token file not found/)
+  })
+
+  it('still rejects file tokens in a git worktree with a remote', () => {
+    mkdirSync(join(workdir, '.git'))
+    writeFileSync(join(workdir, '.git/config'), '[remote "origin"]\nurl = https://example.com/repo\n')
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: join(workdir, 'token') }))
+    expect(() => loadPeerCredentials(configPath, env)).toThrow(/git worktree/)
   })
 })
 
