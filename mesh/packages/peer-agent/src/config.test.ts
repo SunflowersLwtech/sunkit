@@ -1,12 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig, loadToken, isInsideGitRepoWithRemote } from './config.ts'
+import { loadConfig, loadToken, loadPeerCredentials, isInsideGitRepoWithRemote } from './config.ts'
+import { InboundDispatcher } from './inbound.ts'
+import { SenderGate } from './gate.ts'
+import { parseAllow } from './sender-allow.ts'
+import type { Envelope } from '@claude-mesh/shared'
 
 let workdir = ''
 beforeEach(() => { workdir = mkdtempSync(join(tmpdir(), 'mesh-')) })
-afterEach(() => { rmSync(workdir, { recursive: true, force: true }) })
+afterEach(() => { rmSync(workdir, { recursive: true, force: true }); vi.unstubAllEnvs() })
 
 describe('loadConfig', () => {
   it('loads a valid config file', () => {
@@ -34,6 +39,121 @@ describe('loadConfig', () => {
       self_handle: 'alice'
     }))
     expect(loadConfig(p).self_handle).toBe('alice')
+  })
+})
+
+describe('loadPeerCredentials', () => {
+  let env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' }
+  beforeEach(() => { env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' } })
+  const path = () => join(workdir, 'missing-home', 'config.json')
+
+  it('uses environment credentials without creating a home or checking a token file', () => {
+    mkdirSync(join(workdir, '.git'))
+    writeFileSync(join(workdir, '.git/config'), '[remote "origin"]\nurl = https://example.com/repo\n')
+    const credentials = loadPeerCredentials(path(), { ...env })!
+    expect(credentials.token).toBe(env.MESH_TOKEN)
+    expect(credentials.cfg.relay_url).toBe(env.MESH_RELAY)
+    expect(credentials.cfg.permission_relay.enabled).toBe(false)
+    expect(credentials.cfg.presence.auto_publish_cwd).toBe(true)
+    expect(() => loadConfig(path())).toThrow(/config file not found/)
+  })
+
+  it.each([{}, { MESH_RELAY: env.MESH_RELAY }, { MESH_TOKEN: env.MESH_TOKEN },
+    { ...env, MESH_TOKEN: '' }, { ...env, MESH_RELAY: '' }])('stays unpaired for incomplete credentials %j', partial => {
+    expect(loadPeerCredentials(path(), partial)).toBeUndefined()
+  })
+
+  it('rejects an invalid environment relay without exposing the token', () => {
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' })).toThrow()
+    try { loadPeerCredentials(path(), { ...env, MESH_RELAY: 'invalid' }) }
+    catch (err) { expect(String(err)).not.toContain(env.MESH_TOKEN) }
+  })
+
+  it('trims environment tokens like token files', () => {
+    expect(loadPeerCredentials(path(), { ...env, MESH_TOKEN: ' \n env-secret \r\n' })!.token).toBe('env-secret')
+  })
+
+  it('removes the consumed token from the process environment before children run', () => {
+    vi.stubEnv('MESH_RELAY', env.MESH_RELAY)
+    vi.stubEnv('MESH_TOKEN', env.MESH_TOKEN)
+    vi.stubEnv('MESH_ALLOW', '')
+    expect(loadPeerCredentials(path())!.token).toBe(env.MESH_TOKEN)
+    expect(process.env.MESH_TOKEN).toBeUndefined()
+    expect(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.env.MESH_TOKEN))'], { encoding: 'utf8' })).toBe('undefined')
+  })
+
+  it('removes the environment token even when file configuration wins', () => {
+    const configPath = join(workdir, 'config.json')
+    const tokenPath = join(workdir, 'token')
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: tokenPath }))
+    writeFileSync(tokenPath, 'file-token', { mode: 0o600 })
+    const injected = { ...env }
+    expect(loadPeerCredentials(configPath, injected)!.token).toBe('file-token')
+    expect(injected.MESH_TOKEN).toBeUndefined()
+  })
+
+  it.each(['secret\nsecond-line', 'secret\tvalue', 'secret\u0000value', 'secret\u007fvalue', 'secret\u2028value', ' \r\n '])(
+    'rejects malformed environment tokens without including their value (case %#)', token => {
+      expect(() => loadPeerCredentials(path(), { ...env, MESH_TOKEN: token })).toThrow(/MESH_TOKEN/)
+      try { loadPeerCredentials(path(), { ...env, MESH_TOKEN: token }) }
+      catch (err) { expect(String(err)).not.toContain(token) }
+    },
+  )
+
+  it('requires an own account for env-only pinned mail before joining', () => {
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1' }))
+      .toThrow(/MESH_SELF_HANDLE/)
+    expect(() => loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1', MESH_SELF_HANDLE: '  ' }))
+      .toThrow(/MESH_SELF_HANDLE/)
+  })
+
+  it('delivers only correctly pinned env-only mail on the configured account', () => {
+    const credentials = loadPeerCredentials(path(), { ...env, MESH_ALLOW: 'assistant@tk_1', MESH_SELF_HANDLE: ' alice ' })!
+    expect(credentials.cfg.self_handle).toBe('alice')
+    const received: unknown[] = []
+    const dispatcher = new InboundDispatcher({
+      gate: new SenderGate(['alice', 'mallory']),
+      allow: { names: parseAllow('assistant@tk_1')!, ownAccount: credentials.cfg.self_handle },
+      emit: notification => { received.push(notification) },
+      setCursor: () => {},
+    })
+    const message: Envelope = {
+      id: 'msg_01HRK7Y0000000000000000000', v: 1, team: 't1', from: 'alice', to: 'alice',
+      in_reply_to: null, thread_root: null, kind: 'chat', content: 'pinned', meta: {},
+      sent_at: '2026-04-17T00:00:00.000Z', delivered_at: null,
+      from_session: 's_01abcdef', from_name: 'assistant', to_session: null, from_token: 'tk_1',
+    }
+    dispatcher.handle(message)
+    dispatcher.handle({ ...message, from_token: 'tk_other' })
+    dispatcher.handle({ ...message, from: 'mallory' })
+    dispatcher.handle({ ...message, from_name: 'other' })
+    expect(received).toHaveLength(1)
+  })
+
+  it('prefers file config and token over environment credentials', () => {
+    const tokenPath = join(workdir, 'token')
+    writeFileSync(tokenPath, 'file-secret', { mode: 0o600 })
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ relay_url: 'https://file.example.com', token_path: tokenPath }))
+    const credentials = loadPeerCredentials(configPath, env)!
+    expect(credentials.cfg.relay_url).toBe('https://file.example.com')
+    expect(credentials.token).toBe('file-secret')
+  })
+
+  it('does not fall back when an existing config is invalid or its token is missing', () => {
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, '{')
+    expect(() => loadPeerCredentials(configPath, env)).toThrow()
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: join(workdir, 'missing') }))
+    expect(() => loadPeerCredentials(configPath, env)).toThrow(/token file not found/)
+  })
+
+  it('still rejects file tokens in a git worktree with a remote', () => {
+    mkdirSync(join(workdir, '.git'))
+    writeFileSync(join(workdir, '.git/config'), '[remote "origin"]\nurl = https://example.com/repo\n')
+    const configPath = join(workdir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: join(workdir, 'token') }))
+    expect(() => loadPeerCredentials(configPath, env)).toThrow(/git worktree/)
   })
 })
 

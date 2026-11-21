@@ -4684,12 +4684,14 @@ function readTokenFile(path) {
   } else {
     text = buf.toString("utf8");
   }
+  return validateToken(
+    text,
+    `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
+  );
+}
+function validateToken(text, errorMessage) {
   const trimmed = text.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
-    throw new Error(
-      `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
-    );
-  }
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) throw new Error(errorMessage);
   return trimmed;
 }
 var init_token_file = __esm({
@@ -5302,6 +5304,23 @@ var init_policy = __esm({
   }
 });
 
+// packages/peer-agent/src/sender-allow.ts
+function parseAllow(value) {
+  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) return void 0;
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
+}
+var init_sender_allow = __esm({
+  "packages/peer-agent/src/sender-allow.ts"() {
+    "use strict";
+  }
+});
+
 // packages/peer-agent/src/config.ts
 import { readFileSync as readFileSync7, existsSync as existsSync7, statSync as statSync2 } from "node:fs";
 import { dirname as dirname3, join as join10, resolve as resolve3 } from "node:path";
@@ -5324,6 +5343,7 @@ var init_config = __esm({
     init_zod();
     init_token_file();
     init_paths();
+    init_sender_allow();
     ConfigSchema = external_exports.object({
       relay_url: external_exports.string().url(),
       token_path: external_exports.string(),
@@ -6339,23 +6359,6 @@ function bossaiPortFile(platform, env = process.env, home = homedir7()) {
 }
 var init_bossai_paths = __esm({
   "packages/peer-agent/src/cli/bossai-paths.ts"() {
-    "use strict";
-  }
-});
-
-// packages/peer-agent/src/sender-allow.ts
-function parseAllow(value) {
-  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (entries.length === 0) return void 0;
-  for (const e of entries) {
-    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
-      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
-    }
-  }
-  return entries;
-}
-var init_sender_allow = __esm({
-  "packages/peer-agent/src/sender-allow.ts"() {
     "use strict";
   }
 });

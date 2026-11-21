@@ -2,8 +2,9 @@ import { readFileSync, existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { z } from 'zod'
-import { readTokenFile } from './cli/token-file.ts'
+import { readTokenFile, validateToken } from './cli/token-file.ts'
 import { meshDir } from './paths.ts'
+import { parseAllow } from './sender-allow.ts'
 
 export const ConfigSchema = z.object({
   relay_url: z.string().url(),
@@ -40,6 +41,27 @@ export function loadConfig(path: string = defaultConfigPath()): MeshConfig {
 export function loadToken(path: string): string {
   if (!existsSync(path)) throw new Error(`token file not found: ${path}`)
   return readTokenFile(path)
+}
+
+export function loadPeerCredentials(
+  path: string = defaultConfigPath(),
+  env: NodeJS.ProcessEnv = process.env,
+): { cfg: MeshConfig; token: string } | undefined {
+  const envToken = env.MESH_TOKEN
+  delete env.MESH_TOKEN
+  if (existsSync(path)) {
+    const cfg = loadConfig(path)
+    assertTokenNotInRepo(cfg.token_path)
+    return { cfg, token: loadToken(cfg.token_path) }
+  }
+  if (!env.MESH_RELAY || !envToken) return undefined
+  const selfHandle = env.MESH_SELF_HANDLE?.trim() || undefined
+  if (parseAllow(env.MESH_ALLOW) && !selfHandle) {
+    throw new Error('MESH_ALLOW requires MESH_SELF_HANDLE when using environment credentials')
+  }
+  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '', self_handle: selfHandle })
+  const token = validateToken(envToken, 'MESH_TOKEN must be a non-empty printable ASCII token without embedded newlines')
+  return { cfg, token }
 }
 
 /** Walk up from `start` looking for a .git dir. If found, inspect .git/config for any remote.url. */

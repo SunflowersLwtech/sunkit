@@ -36510,12 +36510,14 @@ function readTokenFile(path) {
   } else {
     text = buf.toString("utf8");
   }
+  return validateToken(
+    text,
+    `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
+  );
+}
+function validateToken(text, errorMessage) {
   const trimmed = text.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
-    throw new Error(
-      `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
-    );
-  }
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) throw new Error(errorMessage);
   return trimmed;
 }
 
@@ -36524,6 +36526,33 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 function meshDir() {
   return process.env.MESH_HOME ?? join(homedir(), ".claude-mesh");
+}
+
+// packages/peer-agent/src/sender-allow.ts
+function splitPin(entry) {
+  const i = entry.lastIndexOf("@");
+  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
+}
+function parseAllow(value) {
+  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) return void 0;
+  for (const e of entries) {
+    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
+      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
+    }
+  }
+  return entries;
+}
+function allowVerdict(e, allow, ownAccount) {
+  if (!e.from_session || !e.from_name) return "send-only";
+  const entries = allow.map(splitPin).filter((a) => a.name === e.from_name);
+  if (entries.length === 0) return "not-listed";
+  if (!ownAccount) return "no-own-account";
+  if (e.from !== ownAccount) return "foreign-account";
+  const pins = entries.filter((a) => a.token);
+  if (pins.length === 0) return "unpinned";
+  if (!e.from_token) return "no-token";
+  return pins.some((a) => a.token === e.from_token) ? "ok" : "wrong-token";
 }
 
 // packages/peer-agent/src/config.ts
@@ -36557,6 +36586,23 @@ function loadToken(path) {
   if (!existsSync(path)) throw new Error(`token file not found: ${path}`);
   return readTokenFile(path);
 }
+function loadPeerCredentials(path = defaultConfigPath(), env = process.env) {
+  const envToken = env.MESH_TOKEN;
+  delete env.MESH_TOKEN;
+  if (existsSync(path)) {
+    const cfg2 = loadConfig(path);
+    assertTokenNotInRepo(cfg2.token_path);
+    return { cfg: cfg2, token: loadToken(cfg2.token_path) };
+  }
+  if (!env.MESH_RELAY || !envToken) return void 0;
+  const selfHandle = env.MESH_SELF_HANDLE?.trim() || void 0;
+  if (parseAllow(env.MESH_ALLOW) && !selfHandle) {
+    throw new Error("MESH_ALLOW requires MESH_SELF_HANDLE when using environment credentials");
+  }
+  const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: "", self_handle: selfHandle });
+  const token = validateToken(envToken, "MESH_TOKEN must be a non-empty printable ASCII token without embedded newlines");
+  return { cfg, token };
+}
 function isInsideGitRepoWithRemote(start) {
   let dir = resolve(start);
   while (true) {
@@ -36584,7 +36630,7 @@ function assertTokenNotInRepo(tokenPath) {
 }
 
 // packages/peer-agent/src/index.ts
-import { existsSync as existsSync4, realpathSync, rmSync as rmSync3 } from "node:fs";
+import { realpathSync, rmSync as rmSync3 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 
 // packages/shared/dist/constants.js
@@ -37455,33 +37501,6 @@ function logJson(level, event, fields = {}) {
   process.stderr.write(JSON.stringify({ level, event, at: (/* @__PURE__ */ new Date()).toISOString(), ...safe }) + "\n");
 }
 
-// packages/peer-agent/src/sender-allow.ts
-function splitPin(entry) {
-  const i = entry.lastIndexOf("@");
-  return i < 0 ? { name: entry } : { name: entry.slice(0, i), token: entry.slice(i + 1) };
-}
-function parseAllow(value) {
-  const entries = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (entries.length === 0) return void 0;
-  for (const e of entries) {
-    if (!/^[^\s@\[\]<>"&]+@[A-Za-z0-9_-]{1,64}$/.test(e)) {
-      throw new Error(`MESH_ALLOW entry "${e}" must be <session-name>@<token-id> (token ids: GET /v1/admin/tokens)`);
-    }
-  }
-  return entries;
-}
-function allowVerdict(e, allow, ownAccount) {
-  if (!e.from_session || !e.from_name) return "send-only";
-  const entries = allow.map(splitPin).filter((a) => a.name === e.from_name);
-  if (entries.length === 0) return "not-listed";
-  if (!ownAccount) return "no-own-account";
-  if (e.from !== ownAccount) return "foreign-account";
-  const pins = entries.filter((a) => a.token);
-  if (pins.length === 0) return "unpinned";
-  if (!e.from_token) return "no-token";
-  return pins.some((a) => a.token === e.from_token) ? "ok" : "wrong-token";
-}
-
 // packages/peer-agent/src/inbound.ts
 var InboundDispatcher = class {
   constructor(opts) {
@@ -38319,16 +38338,15 @@ async function main() {
     logJson("info", "peer.host_closed", { reason });
     process.exit(0);
   });
-  if (!existsSync4(defaultConfigPath())) {
+  const credentials = loadPeerCredentials();
+  if (!credentials) {
     const { server: server2 } = createMcpServer({ permissionRelay: false });
     server2.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
     logJson("info", "peer.unpaired", { config: defaultConfigPath() });
     await server2.connect(new StdioServerTransport());
     return;
   }
-  const cfg = loadConfig();
-  assertTokenNotInRepo(cfg.token_path);
-  const token = loadToken(cfg.token_path);
+  const { cfg, token } = credentials;
   const cwd = process.cwd();
   const pullHost = process.env.MESH_JOIN === "pull";
   let identity = pullHost ? probeHostSession({ cwd }) : probeClaudeSession({ cwd });

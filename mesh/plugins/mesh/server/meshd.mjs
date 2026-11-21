@@ -22638,12 +22638,14 @@ function readTokenFile(path) {
   } else {
     text = buf.toString("utf8");
   }
+  return validateToken(
+    text,
+    `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
+  );
+}
+function validateToken(text, errorMessage) {
   const trimmed = text.trim();
-  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
-    throw new Error(
-      `token file ${path} contains non-ASCII characters. If you wrote it with PowerShell's \`>\` redirect, rewrite it as plain UTF-8, e.g.: [System.IO.File]::WriteAllText("${path}", "<token>")`
-    );
-  }
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) throw new Error(errorMessage);
   return trimmed;
 }
 

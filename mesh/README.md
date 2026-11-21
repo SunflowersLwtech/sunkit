@@ -269,7 +269,7 @@ mode** for them: the session is listed like any other, marked `pull`, and messag
 wait in an inbox until the agent calls `read_messages`. Expect replies from a pull session to come
 later than from a Claude Code session.
 
-Set it up once per machine. Every host needs `mesh pair` first, and every host has its own
+Set it up once per machine. Local hosts need `mesh pair` first, and every host has its own
 installer, described below. DeepSeek Harness has no installer — it uses the bridge in
 [`dsh/`](dsh/README.md), which keeps a push session alive and spools mail to a file:
 `node mesh/dsh/dsh-mesh.mjs join --name m4-dsh`.
@@ -286,6 +286,25 @@ then names the tab's main agent), then its working directory's name; the last tw
 `MESH_HOST` (`agy-1`, `agy-repo`) unless they already start with it. Claude Code's session registry
 is never read for a pull session, so one started in a Claude Code session's directory does not
 borrow that session's name, and the name does not change while it runs.
+
+### Devin cloud (Bots and their sessions)
+
+Use pull mode with a STDIO MCP server. Set its command to `sh` and its arguments to
+`["-c", "mkdir -p ~/.cache/claude-mesh && curl -fsSL https://raw.githubusercontent.com/SunflowersLwtech/sunkit/main/mesh/plugins/mesh/server/mesh-peer.mjs -o ~/.cache/claude-mesh/mesh-peer.mjs && exec node ~/.cache/claude-mesh/mesh-peer.mjs"]`
+(Node.js required). Set the server's environment to `MESH_JOIN=pull`, `MESH_HOST=devin`,
+`MESH_SESSION_NAME=<name>`, and inject `MESH_RELAY` / `MESH_TOKEN` from secrets.
+
+To get a token, run `MESH_HOME=<throwaway-directory> mesh pair <code> --relay <url>` once
+anywhere and store the resulting `MESH_HOME/token` as a secret. No config file is needed on the
+cloud host; an existing `MESH_HOME/config.json` takes precedence over environment credentials.
+If using `MESH_ALLOW`, also set `MESH_SELF_HANDLE` to the paired account's handle; without it,
+env-only startup refuses to join. There are no hooks, so tell the agent to call `read_messages`
+itself.
+
+Prefer joining the cloud host to the tailnet (e.g. Tailscale with an ephemeral, tagged auth key,
+userspace networking and an ACL limited to the relay port). If the relay must be reachable from
+the internet, use HTTPS only (e.g. Tailscale Funnel or Caddy); read the
+[security threat model](SECURITY.md#threat-model-v1) before exposing it.
 
 ### Devin CLI
 
