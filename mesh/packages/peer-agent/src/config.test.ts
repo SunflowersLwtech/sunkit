@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +11,7 @@ import type { Envelope } from '@claude-mesh/shared'
 
 let workdir = ''
 beforeEach(() => { workdir = mkdtempSync(join(tmpdir(), 'mesh-')) })
-afterEach(() => { rmSync(workdir, { recursive: true, force: true }) })
+afterEach(() => { rmSync(workdir, { recursive: true, force: true }); vi.unstubAllEnvs() })
 
 describe('loadConfig', () => {
   it('loads a valid config file', () => {
@@ -42,13 +43,14 @@ describe('loadConfig', () => {
 })
 
 describe('loadPeerCredentials', () => {
-  const env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' }
+  let env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' }
+  beforeEach(() => { env = { MESH_RELAY: 'https://env.example.com', MESH_TOKEN: 'env-secret' } })
   const path = () => join(workdir, 'missing-home', 'config.json')
 
   it('uses environment credentials without creating a home or checking a token file', () => {
     mkdirSync(join(workdir, '.git'))
     writeFileSync(join(workdir, '.git/config'), '[remote "origin"]\nurl = https://example.com/repo\n')
-    const credentials = loadPeerCredentials(path(), env)!
+    const credentials = loadPeerCredentials(path(), { ...env })!
     expect(credentials.token).toBe(env.MESH_TOKEN)
     expect(credentials.cfg.relay_url).toBe(env.MESH_RELAY)
     expect(credentials.cfg.permission_relay.enabled).toBe(false)
@@ -69,6 +71,25 @@ describe('loadPeerCredentials', () => {
 
   it('trims environment tokens like token files', () => {
     expect(loadPeerCredentials(path(), { ...env, MESH_TOKEN: ' \n env-secret \r\n' })!.token).toBe('env-secret')
+  })
+
+  it('removes the consumed token from the process environment before children run', () => {
+    vi.stubEnv('MESH_RELAY', env.MESH_RELAY)
+    vi.stubEnv('MESH_TOKEN', env.MESH_TOKEN)
+    vi.stubEnv('MESH_ALLOW', '')
+    expect(loadPeerCredentials(path())!.token).toBe(env.MESH_TOKEN)
+    expect(process.env.MESH_TOKEN).toBeUndefined()
+    expect(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.env.MESH_TOKEN))'], { encoding: 'utf8' })).toBe('undefined')
+  })
+
+  it('removes the environment token even when file configuration wins', () => {
+    const configPath = join(workdir, 'config.json')
+    const tokenPath = join(workdir, 'token')
+    writeFileSync(configPath, JSON.stringify({ relay_url: env.MESH_RELAY, token_path: tokenPath }))
+    writeFileSync(tokenPath, 'file-token', { mode: 0o600 })
+    const injected = { ...env }
+    expect(loadPeerCredentials(configPath, injected)!.token).toBe('file-token')
+    expect(injected.MESH_TOKEN).toBeUndefined()
   })
 
   it.each(['secret\nsecond-line', 'secret\tvalue', 'secret\u0000value', 'secret\u007fvalue', 'secret\u2028value', ' \r\n '])(

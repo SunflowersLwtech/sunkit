@@ -47,18 +47,20 @@ export function loadPeerCredentials(
   path: string = defaultConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
 ): { cfg: MeshConfig; token: string } | undefined {
+  const envToken = env.MESH_TOKEN
+  delete env.MESH_TOKEN
   if (existsSync(path)) {
     const cfg = loadConfig(path)
     assertTokenNotInRepo(cfg.token_path)
     return { cfg, token: loadToken(cfg.token_path) }
   }
-  if (!env.MESH_RELAY || !env.MESH_TOKEN) return undefined
+  if (!env.MESH_RELAY || !envToken) return undefined
   const selfHandle = env.MESH_SELF_HANDLE?.trim() || undefined
   if (parseAllow(env.MESH_ALLOW) && !selfHandle) {
     throw new Error('MESH_ALLOW requires MESH_SELF_HANDLE when using environment credentials')
   }
   const cfg = ConfigSchema.parse({ relay_url: env.MESH_RELAY, token_path: '', self_handle: selfHandle })
-  const token = validateToken(env.MESH_TOKEN, 'MESH_TOKEN must be a non-empty printable ASCII token without embedded newlines')
+  const token = validateToken(envToken, 'MESH_TOKEN must be a non-empty printable ASCII token without embedded newlines')
   return { cfg, token }
 }
 
