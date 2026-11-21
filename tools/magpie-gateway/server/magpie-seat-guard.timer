@@ -1,0 +1,11 @@
+[Unit]
+Description=Run seat-guard every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=magpie-seat-guard.service
+
+[Install]
+WantedBy=timers.target

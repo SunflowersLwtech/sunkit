@@ -1,0 +1,9 @@
+[Unit]
+Description=magpie: whitelisted sessions get Claude only, and the stuck-sweep still checks (seat-guard)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=240
+ExecStart=/usr/bin/python3 -I /opt/magpie/monitor/seat-guard.py
