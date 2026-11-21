@@ -297,8 +297,14 @@ Use pull mode with a STDIO MCP server. Set its command to `sh` and its arguments
 To get a token, run `MESH_HOME=<throwaway-directory> mesh pair <code> --relay <url>` once
 anywhere and store the resulting `MESH_HOME/token` as a secret. No config file is needed on the
 cloud host; an existing `MESH_HOME/config.json` takes precedence over environment credentials.
-There are no hooks, so tell the agent to call `read_messages` itself. The relay must be reachable
-from the public internet, not tailnet-only.
+If using `MESH_ALLOW`, also set `MESH_SELF_HANDLE` to the paired account's handle; without it,
+env-only startup refuses to join. There are no hooks, so tell the agent to call `read_messages`
+itself.
+
+Prefer joining the cloud host to the tailnet (e.g. Tailscale with an ephemeral, tagged auth key,
+userspace networking and an ACL limited to the relay port). If the relay must be reachable from
+the internet, use HTTPS only (e.g. Tailscale Funnel or Caddy); read the
+[security threat model](SECURITY.md#threat-model-v1) before exposing it.
 
 ### Devin CLI
 
