@@ -337,7 +337,10 @@ events and live video; model choice and Test connection need the in-process conn
 HipiMind's protocol v2 lets a device send everything sealed, so HipiMind relays and stores it without
 being able to read it. Turn it on with `"e2ee": {"enabled": true}` in the `hipimind` section. It needs
 hm-seal's Python binding (`tools/hm-seal/python`, not on PyPI; without it the connector does not connect).
-Then pair with the code an admin page shows: `python -m room_companion e2ee-pair --code 'hmroom1.…'`.
+Then pair with the code an admin page shows: `python -m room_companion e2ee-pair --scan` and hold the code
+up to the camera (it needs the `scan` extra, `pip install 'room-companion[scan]'`, and video switched on:
+the camera is not read while video is off), or give the code's text with
+`python -m room_companion e2ee-pair --code 'hmroom1.…'`.
 
 With it on, only the three switches leave the machine in plaintext. Commands are taken only sealed, from
 an admin device (`live` is the exception), the welcome's settings and HipiMind's cloud models are not

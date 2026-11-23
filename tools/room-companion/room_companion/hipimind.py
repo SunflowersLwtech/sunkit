@@ -42,7 +42,7 @@ import urllib.request
 import uuid
 from datetime import datetime
 
-from . import e2ee
+from . import e2ee, pairscan
 from .models import clean_base_url
 
 log = logging.getLogger("room_companion.hipimind")
@@ -158,6 +158,12 @@ HELD_SEALED_MAX = 16
 #: Group log reads this device asks for (HipiMind allows 30 a minute).
 GROUP_READS_PER_MINUTE = 20
 PAIRING_CODE_FILE = "pairing-code"
+#: `e2ee-pair --scan` opens a window in which the camera looks for the code: the time it ends, in this file.
+PAIRING_SCAN_FILE = "pairing-scan"
+#: How long the window stays open by default, and the shortest and longest it may.
+PAIRING_SCAN_SECONDS = 120
+PAIRING_SCAN_MIN_SECONDS = 10
+PAIRING_SCAN_MAX_SECONDS = 600
 
 
 class SealedCommand(dict):
@@ -176,6 +182,21 @@ def save_pairing_code(cfg: dict, code: str) -> str:
     path = os.path.join(e2ee_dir(cfg), PAIRING_CODE_FILE)
     write_secret(path, code.strip())
     return path
+
+
+def open_pairing_scan(cfg: dict, seconds: int, clock=time.time) -> float:
+    """Have the running connector look for an owner's pairing code with the camera for `seconds`
+    (`e2ee-pair --scan`). The window is only a time; what the camera sees stays in memory."""
+    until = clock() + seconds
+    write_secret(os.path.join(e2ee_dir(cfg), PAIRING_SCAN_FILE), json.dumps({"until": until}))
+    return until
+
+
+def close_pairing_scan(cfg: dict):
+    try:
+        os.remove(os.path.join(e2ee_dir(cfg), PAIRING_SCAN_FILE))
+    except FileNotFoundError:
+        pass
 
 
 # ---------------------------------------------------------------- config / files
@@ -906,6 +927,9 @@ class Bridge:
         self._since_times: list[float] = []
         self._held: list[tuple[float, str]] = []
         self._sealed_state_sent: dict | None = None
+        # `e2ee-pair --scan`: the window being scanned (its end time), and what was already said about it.
+        self._scan_until: float | None = None
+        self._scan_said: set[str] = set()
 
     def lang(self) -> str:
         if self.language in LANGUAGES:
@@ -974,6 +998,7 @@ class Bridge:
         while not self.stopped.is_set():
             await self.poll_once()
             await self._close_if_token_replaced()
+            await self._scan_for_pairing_code()
             await self._take_pairing_code()
             try:
                 await asyncio.wait_for(self.stopped.wait(), self.cfg.get("poll_seconds", 1.0))
@@ -1398,6 +1423,79 @@ class Bridge:
             log.warning("pairing code not used: %s", e)
             return
         await self._send_join(body)
+
+    async def _scan_for_pairing_code(self):
+        """While `e2ee-pair --scan` has a window open: look at one camera frame for the owner's pairing code
+        (docs/e2ee.md); on finding one, leave it for `_take_pairing_code`, exactly as `--code` does.
+
+        The camera is read only while the video switch is on, through the same call live video uses. The frame
+        is decoded in memory and dropped; QR codes that are not a pairing code are ignored, and what any code
+        says is never logged (a pairing code holds a one-time secret)."""
+        if not self.e2ee_on:
+            return
+        path = os.path.join(e2ee_dir(self.cfg), PAIRING_SCAN_FILE)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                until = json.load(f).get("until")
+        except FileNotFoundError:
+            self._scan_until = None
+            return
+        except (OSError, ValueError, AttributeError):
+            until = None
+        if not isinstance(until, (int, float)) or isinstance(until, bool):
+            self._end_scan(path, "the camera's pairing window could not be read; start it again")
+            return
+        now = self.clock()
+        if until != self._scan_until:
+            self._scan_until, self._scan_said = until, set()
+            log.info("looking for a pairing code with the camera for %d s", max(0, round(until - now)))
+        if now >= until:
+            self._end_scan(path, "no pairing code was seen before the window ended; scan again, or use e2ee-pair --code")
+            return
+        if self.group is not None and self.group.status == "joined":
+            self._end_scan(path, "this device is already in a group; an admin removes it first")
+            return
+        if not pairscan.available():
+            self._end_scan(path, "this device cannot read codes with its camera (zxing-cpp and Pillow are not "
+                                 "installed); use e2ee-pair --code")
+            return
+        if ((self.state or {}).get("switches") or {}).get("video") is not True:
+            self._scan_say("video", "video is off, so the camera is not read: turn video on and hold the code up to "
+                                    "the camera, or use e2ee-pair --code")
+            return
+        try:
+            jpeg = await asyncio.to_thread(self.device.snapshot)
+        except Exception:
+            jpeg = None
+        if not jpeg:
+            return
+        code, ignored = await asyncio.to_thread(pairscan.pairing_code_in, jpeg)
+        if ignored:
+            self._scan_say("other", "a QR code that is not a HipiMind pairing code was ignored")
+        if code is None:
+            return
+        try:
+            save_pairing_code(self.cfg, code)
+        except e2ee.PairingRefused:  # pragma: no cover - pairing_code_in returns only codes that parse
+            return
+        self._end_scan(path, None)
+        log.info("the camera read a pairing code: the device asks to join the owner's group")
+
+    def _scan_say(self, key: str, text: str):
+        if key not in self._scan_said:
+            self._scan_said.add(key)
+            log.warning(text)
+
+    def _end_scan(self, path: str, why: str | None):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning("the camera's pairing window could not be closed (%s)", type(e).__name__)
+        self._scan_until, self._scan_said = None, set()
+        if why:
+            log.warning(why)
 
     async def _send_join(self, body: str):
         self._join_req = "join-" + uuid.uuid4().hex[:12]
@@ -1884,25 +1982,57 @@ def pair_from_app_config(argv, app_cfg: dict) -> int:
     return 0
 
 
-def _e2ee_pair(cfg: dict, code: str) -> int:
+def _e2ee_pair(cfg: dict, code: str | None, scan_seconds: int | None = None) -> int:
+    """`e2ee-pair`: leave the code's text for the running connector, or (`code` None) open a window in which
+    its camera looks for the code."""
     if not (cfg.get("e2ee") or {}).get("enabled"):
         print('end-to-end encryption is off: set "e2ee": {"enabled": true} in the config first', file=sys.stderr)
         return 2
+    if code is not None and scan_seconds is not None:
+        print("--seconds goes with --scan, not with --code", file=sys.stderr)
+        return 2
+    if code is None:
+        seconds = PAIRING_SCAN_SECONDS if scan_seconds is None else scan_seconds
+        if not PAIRING_SCAN_MIN_SECONDS <= seconds <= PAIRING_SCAN_MAX_SECONDS:
+            print(f"--seconds must be between {PAIRING_SCAN_MIN_SECONDS} and {PAIRING_SCAN_MAX_SECONDS}",
+                  file=sys.stderr)
+            return 2
+        if not pairscan.available():
+            print("this device cannot read codes with its camera: install the scan extra "
+                  "(pip install 'room-companion[scan]', which brings zxing-cpp and Pillow), "
+                  "or pair with the code's text: e2ee-pair --code 'hmroom1.…'", file=sys.stderr)
+            return 2
+        open_pairing_scan(cfg, seconds)
+        print(f"for the next {seconds} s the running device looks for a pairing code with its camera: hold the code "
+              "the HipiMind page shows up to the camera. Video has to be on (the camera is not read while it is "
+              "off); otherwise use --code. Then confirm the device on the page.")
+        return 0
     try:
         save_pairing_code(cfg, code)
     except e2ee.PairingRefused as e:
         print(f"pairing code refused: {e}", file=sys.stderr)
         return 2
+    close_pairing_scan(cfg)  # the owner gave the code itself: the camera stops looking for one
     print("the device asks to join the owner's encrypted group when it is next connected; confirm it on the page")
     return 0
 
 
+def _e2ee_pair_arguments(ap: argparse.ArgumentParser):
+    how = ap.add_mutually_exclusive_group(required=True)
+    how.add_argument("--code", help="the text of the pairing code the HipiMind page shows")
+    how.add_argument("--scan", action="store_true", help="read the code with the camera (video has to be on)")
+    ap.add_argument("--seconds", type=int, default=None,
+                    help=f"with --scan: how long to look ({PAIRING_SCAN_SECONDS} by default, "
+                         f"{PAIRING_SCAN_MIN_SECONDS} to {PAIRING_SCAN_MAX_SECONDS})")
+
+
 def e2ee_pair_from_app_config(argv, app_cfg: dict) -> int:
-    """`python -m room_companion e2ee-pair --code hmroom1…`: the e2ee directory comes from the app config."""
+    """`python -m room_companion e2ee-pair --code hmroom1…` or `--scan`: the e2ee directory comes from the app
+    config."""
     ap = argparse.ArgumentParser(prog="room-companion e2ee-pair")
-    ap.add_argument("--code", required=True, help="the text of the pairing code the HipiMind page shows")
+    _e2ee_pair_arguments(ap)
     args = ap.parse_args(argv)
-    return _e2ee_pair(load_config_dict(dict(app_cfg.get("hipimind") or {})), args.code)
+    return _e2ee_pair(load_config_dict(dict(app_cfg.get("hipimind") or {})), args.code, args.seconds)
 
 
 def main(argv=None) -> int:
@@ -1916,7 +2046,7 @@ def main(argv=None) -> int:
     p.add_argument("--config", help="read server and token_file from this config file")
     e = sub.add_parser("e2ee-pair", help="join the owner's encrypted group with the code the HipiMind page shows")
     e.add_argument("--config", required=True)
-    e.add_argument("--code", required=True)
+    _e2ee_pair_arguments(e)
     r = sub.add_parser("run", help="keep the device connected (sidecar, through the local HTTP API)")
     r.add_argument("--config", required=True)
     r.add_argument("-v", "--verbose", action="store_true")
@@ -1938,7 +2068,7 @@ def main(argv=None) -> int:
         print(paired_message(res))
         return 0
     if args.cmd == "e2ee-pair":
-        return _e2ee_pair(load_config(args.config), args.code)
+        return _e2ee_pair(load_config(args.config), args.code, args.seconds)
     cfg = load_config(args.config)
     bridge = Bridge(cfg)
     reason = asyncio.run(bridge.run_forever())
