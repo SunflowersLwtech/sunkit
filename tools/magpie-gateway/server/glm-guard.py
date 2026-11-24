@@ -9,7 +9,10 @@
 #   - 每个 Claude 订阅的 5 小时用量、重置时间、读数时间：容器里 GET 127.0.0.1:3425/v1/magpie/quotas/cards（magpie 内存里的
 #     卡片，seat-refresh 让它保持新鲜）。7 天窗口满了的账号（个人 Max）算没有余量。
 #   - 每个座位的上限：providers.json 里 claude 的 accountWindowCaps「5 hours」，没有就 accountCaps，再没有就 100。
-#   - 最近 30 分钟用掉多少：quota-history.json 里每个座位的读数点，相邻两点的涨幅相加（中间重置过就从 0 算）。
+#   - 最近 30 分钟用掉多少：quota-history.json 里每个座位当前 5 小时窗口的读数点（窗口开头 = 卡片的重置时间减 5 小时），
+#     首尾差：30 分钟前的用量（之前 10 分钟里的最高读数）到现在的最高读数；往下掉的读数不算（magpie 的历史里会夹着十几分钟前
+#     的旧读数，11-21/22 一个座位 47→40→48→40 地来回跳，旧算法把每次往下掉当成重置、把整个用量再加一遍，速度虚高 10 倍，
+#     四五次提前打开），重置那一下也不算，一两秒里涨得比一个座位可能的速度还快的读数也不算。速度 = 各座位首尾差之和 / 30 分钟。
 # 什么时候打开（关着，且距上次切换 ≥15 分钟）：
 #   - 每个座位都只剩不到 15%；或
 #   - 按最近 30 分钟的消耗速度，所有座位到上限前的余量会在 30 分钟内、且在最早一个座位重置之前用完。
@@ -82,6 +85,12 @@ BACK = 50.0             # 有座位余量回到这么多 % 以上 → 可以关�
 OPEN_WITHIN = 30        # 推算这么多分钟内用完（且早于最早重置）→ 打开
 DWELL = int(os.environ.get("GG_DWELL", 15 * 60))   # 打开和关闭之间至少隔这么久（演练时可调小）
 RATE_WINDOW = 30 * 60   # 消耗速度看最近多久
+FIVE_H = 5 * 3600       # Claude 座位的 5 小时窗口：卡片的重置时间减去它就是这个窗口的开头
+RESET_SLACK = 2 * 60    # 重置时间只到分钟（02:00 会写成 01:59）：窗口开头往后让一点，免得把上一个窗口最后的读数（常是 100%）算进来
+SEED = 10 * 60          # 30 分钟前的用量：取那之前这么久里的最高读数（中间夹着的旧读数比真读数低）
+MAX_PPM = 20.0          # 一个座位每分钟最多涨这么多个百分点；比这还快的跳变是别的窗口的旧读数，不收。重置后积压的请求能让一个
+                        # 座位 2 分钟涨 30 多（10-26 14:30Z），按 10 卡会把这种真读数拖住几分钟，20 时全月最多拖 5 分钟
+JUMP_TOL = 5.0          # 两个读数挨得很近时允许的涨幅
 FRESH = 20 * 60         # 关上要看的读数不能比这旧
 TARGETS = os.environ.get("GG_TARGETS", "feishu-assistant,feishu-assistant-backup").split(",")  # 演练时发给自己
 SENDER = "magpie-glm-guard"
@@ -192,38 +201,62 @@ def seats(cards, prov, t):
     return out
 
 
-def same_window(a, b):
-    """a 在前、b 在后的两个读数（时间, 用量, 重置时间）是不是同一个 5 小时窗口：b 读在 a 的重置时间之后，或用量掉了，
-    就是新窗口。不拿两个重置时间直接比：同一个窗口的重置时间在读数里会差一两分钟，卡片和历史也可能不一致。"""
-    if a[2] is not None and b[0] >= a[2]:
-        return False
-    return b[1] >= a[1] - 1
-
-
 def consumed(points, cur, t):
-    """一个座位最近 RATE_WINDOW 里用掉了多少个百分点"""
+    """一个座位最近 RATE_WINDOW 里用掉了多少个百分点，和这个数从什么时候算起：(百分点, 起算时间)，没有读数时起算时间是 None。
+    cur 是卡片上此刻的读数 (读数时间, 用量, 重置时间)。只看当前这个 5 小时窗口（卡片的重置时间减 5 小时之后的点；卡片没给
+    重置时间就看最新一个点带的）：同一个窗口里用量只涨不跌，所以往下掉的读数（magpie 历史里夹着的旧读数）一律不算，只跟着
+    最高读数走；窗口在这段时间里才开始的，从 0 算起，重置那一下不算消耗。涨得比 MAX_PPM 还快的读数不收。"""
     start = t - RATE_WINDOW
     pts = []
     for p in points or []:
-        at = parse_time(p.get("at"))
-        if at is not None and at <= t and p.get("left") is not None:
-            pts.append((at, 100.0 - float(p["left"]), parse_time(p.get("resetsAt"))))
+        at, left = parse_time(p.get("at")), num(p.get("left"))
+        if at is not None and at <= t and left is not None:
+            pts.append((at, 100.0 - left, parse_time(p.get("resetsAt"))))
+    pts.sort(key=lambda x: x[0])
+    reset = cur[2] if cur and cur[2] is not None else (pts[-1][2] if pts else None)
     if cur and cur[0] is not None and cur[0] <= t:
         pts.append(cur)
-    pts.sort(key=lambda x: x[0])
-    base, total = None, 0.0
+        pts.sort(key=lambda x: x[0])
+    if reset is not None and reset <= t:
+        return 0.0, None            # 窗口已经过了重置时间、magpie 还没再读：新窗口里还没有读数
+    opened = reset - FIVE_H if reset is not None else None
+    if opened is not None:
+        pts = [q for q in pts if q[0] >= opened + RESET_SLACK]
+    before = [q for q in pts if q[0] <= start]
+    seed = [q for q in before if q[0] >= start - SEED] or before[-1:]
+    if seed:
+        top = max(seed, key=lambda q: q[1])
+        base, since, level_at = top[1], start, top[0]
+    elif opened is not None and opened >= start - SEED:
+        # 窗口是最近这 40 分钟里才开始的：开头是 0；从开头算起（可能比 30 分钟略长）
+        base, since, level_at = 0.0, opened, opened
+    else:
+        # 窗口早就开始了、30 分钟前却没有读数（magpie 那阵子没读它）：从 30 分钟里第一个读数算起，之前用掉多少不知道，不算
+        after = [q for q in pts if q[0] > start]
+        if not after:
+            return 0.0, None
+        base, since, level_at = after[0][1], after[0][0], after[0][0]
+    level = base
     for q in pts:
-        if q[0] > start and base is not None:
-            total += max(0.0, q[1] - base[1]) if same_window(base, q) else q[1]
-        base = q
-    return total
+        if q[0] <= since or q[1] <= level:
+            continue
+        if q[1] - level <= max(JUMP_TOL, MAX_PPM * (q[0] - level_at) / 60):
+            level, level_at = q[1], q[0]
+    return level - base, since
 
 
 def assess(ss, history, t):
+    spans = []
     for s in ss:
         pts = ((history.get("claude|" + s["user"].lower()) or {}).get("5 hours")) or []
-        s["burn"] = consumed(pts, s["raw"], t)
-    rate = sum(s["burn"] for s in ss) / (RATE_WINDOW / 60)          # 百分点 / 分钟
+        s["burn"], since = consumed(pts, s["raw"], t)
+        if s["burn"] > 0:
+            spans.append(t - since)
+    # 有消耗的座位（magpie 一次用一个座位，一般就是正在用的那个；30 分钟里换过座位就是前后两个）首尾差之和，除以时长：
+    # 30 分钟，窗口在 30 分钟前一点开始、从 0 算起的就按开头到现在。刚重置的座位不按「重置以来几分钟」除：重置后头几分钟
+    # 常有一阵积压的请求（11-22 07:00 重置后 5 分钟用掉 19%），按几分钟除会把这一阵放大成高速度
+    span = max([RATE_WINDOW] + spans)
+    rate = sum(s["burn"] for s in ss) / (span / 60)                  # 百分点 / 分钟
     headroom = sum(s["headroom"] for s in ss)
     resets = [s["reset"] for s in ss if s["ok"] and s["reset"] and s["reset"] > t]
     first_reset = min(resets) if resets else None

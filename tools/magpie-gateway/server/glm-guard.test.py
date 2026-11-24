@@ -461,12 +461,134 @@ class GlmGuard(unittest.TestCase):
             self.assertIn("inputs unreadable", f.read())
 
     def test_consumed_counts_a_new_window_from_zero(self):
+        # 10 分钟前重置：只算新窗口，从 0 算起（+8），重置那一下不算；上一个窗口里的 +20 也不算进这个座位
         t = self.t
         r1, r2 = iso(t - 10 * 60), iso(t + 290 * 60)
-        pts = [{"at": iso(t - 40 * 60), "left": 30, "resetsAt": r1},   # 基线 70%
-               {"at": iso(t - 20 * 60), "left": 10, "resetsAt": r1},   # +20
-               {"at": iso(t - 5 * 60), "left": 92, "resetsAt": r2}]    # 重置后 8%：+8
-        self.assertAlmostEqual(gg.consumed(pts, None, t), 28.0)
+        pts = [{"at": iso(t - 40 * 60), "left": 30, "resetsAt": r1},   # 上一个窗口 70%
+               {"at": iso(t - 20 * 60), "left": 10, "resetsAt": r1},   # 90%
+               {"at": iso(t - 5 * 60), "left": 92, "resetsAt": r2}]    # 重置后 8%
+        self.assertEqual(gg.consumed(pts, None, t), (8.0, t - 10 * 60))
+
+    # ---- 速度（11-21/22 四五次按虚高的速度提前打开）----
+    # 网关 quota-history.json 里 weiliu@ 座位的真读数（秒数 = 那一轮之前多少秒，left = 剩余 %）：真读数中间夹着十几分钟前的
+    # 旧读数（60、62、55），旧算法把每次往下掉当成重置、把整个用量再加一遍，报出 7–16 个百分点/分钟。
+    # (那一轮, 卡片上的用量, 重置在几分钟后, 历史, 实际速度：卡片在这前后半小时的读数算的)
+    REAL = [
+        ("11-21 21:49:59", 51, 250.02, [(2995, 100), (2772, 83), (2504, 79), (2212, 75), (1960, 71), (1700, 69), (1425, 65),
+                                       (1139, 62), (815, 60), (554, 54), (540, 60), (435, 53), (405, 60), (303, 52), (199, 51),
+                                       (195, 60), (138, 50), (125, 60), (67, 49), (54, 60)], 0.7),
+        ("11-22 02:53:53", 45, 246.12, [(2996, 84), (2739, 82), (2469, 79), (2199, 76), (1908, 72), (1646, 71), (1367, 65),
+                                       (1059, 62), (781, 62), (180, 62), (134, 56), (129, 62), (99, 55), (59, 62), (25, 54)], 0.6),
+        ("11-22 07:48:12", 53, 251.80, [(2578, 81), (2236, 77), (1952, 74), (1668, 68), (1352, 63), (1039, 59), (778, 56),
+                                       (489, 55), (175, 48), (168, 55), (104, 47), (38, 46), (14, 46)], 0.8),
+    ]
+
+    def two_spent(self):
+        """b、c 的 7 天额度都用完了（照 11-21/22：只剩 weiliu@ 一个座位在用）"""
+        return [self.seat("b@x.com", 0, None, week=(100, 50)), self.seat("c@x.com", 0, None, week=(100, 50))]
+
+    def rate_of(self, cards, history):
+        return gg.assess(gg.seats(cards, self.load("conf/providers.json"), self.t), history, self.t)
+
+    def test_stale_readings_between_real_ones_are_not_resets(self):
+        for i, (when, used, reset_min, pts, actual) in enumerate(self.REAL):
+            if i:
+                self.tearDown()
+                self.setUp()
+            with self.subTest(when):
+                self.zroom()
+                hist = {"claude|a@x.com · duocode": {"5 hours": [{"at": iso(self.t - s), "left": l} for s, l in pts]}}
+                self.history(dict(hist, **self.load("conf/quota-history.json")))
+                Fake.cards[:] = [self.seat("a@x.com", used, reset_min)] + self.two_spent()
+                a = self.rate_of(Fake.cards, self.load("conf/quota-history.json"))
+                self.assertLess(abs(a["rate"] - actual), 0.35, a["rate"])
+                self.run_guard()
+                self.assertFalse(self.read_state()["open"], "opened on a rate of %.2f" % a["rate"])
+                self.assertEqual(self.calls(), [])
+
+    def burn_with_stale(self, per_min, now_used, minutes=40, every=3, stale_ago=12):
+        """a 座位最近 minutes 分钟匀速每分钟涨 per_min，每 every 分钟一个真读数，每个真读数后面跟一个 stale_ago 分钟前的旧读数"""
+        pts = []
+        for k in range(minutes // every + 1):
+            ago = (minutes - k * every) * 60
+            pts.append({"at": iso(self.t - ago), "left": 100 - (now_used - per_min * ago / 60)})
+            if ago > 30:
+                pts.append({"at": iso(self.t - ago + 20),
+                            "left": 100 - max(0.0, now_used - per_min * (ago / 60 + stale_ago))})
+        return {"claude|a@x.com · duocode": {"5 hours": pts}}
+
+    def test_real_burn_with_stale_readings_still_opens(self):
+        # a 40 分钟里每分钟真涨 2（0 → 80），到上限 95 还有 15 → 约 7 分钟用完，早于 200 分钟后的重置 → 要打开（a 还剩 20%，
+        # 不是「都不到 15%」那条）；中间夹的旧读数不改变速度
+        self.zroom()
+        self.history(dict(self.burn_with_stale(2.0, 80), **self.load("conf/quota-history.json")))
+        Fake.cards[:] = [self.seat("a@x.com", 80, 200)] + self.two_spent()
+        a = self.rate_of(Fake.cards, self.load("conf/quota-history.json"))
+        self.assertLess(abs(a["rate"] - 2.0), 0.15, a["rate"])
+        self.assertFalse(a["low"])
+        self.run_guard()
+        self.assertTrue(self.read_state()["open"])
+        self.assertIn("按最近 30 分钟的速度", Fake.messages[0][0]["content"].splitlines()[0])
+
+    def test_opens_on_the_first_round_the_seat_would_run_out_within_30_minutes(self):
+        # a 从窗口开头（重置后）每分钟涨 1.5、带旧读数；上限 95。真用完时间 < 30 分钟是在用到 50% 之后（窗口开了 33.3 分钟）：
+        # 每 5 分钟一轮，30 分钟那轮不开，35 分钟那轮开
+        opened = self.t
+        pts = []
+        for k in range(0, 61, 3):
+            pts.append({"at": iso(opened + k * 60), "left": 100 - 1.5 * k})
+            if k >= 12:
+                pts.append({"at": iso(opened + k * 60 + 20), "left": 100 - 1.5 * (k - 12)})
+        soon = []
+        for minute in (25, 30, 35, 40):
+            self.t = opened + minute * 60
+            hist = {"claude|a@x.com · duocode": {"5 hours": [p for p in pts if gg.parse_time(p["at"]) <= self.t]}}
+            cards = [self.seat("a@x.com", 1.5 * minute, 300 - minute, read_ago_min=0)] + self.two_spent()
+            soon.append(self.rate_of(cards, hist)["soon"])
+        self.assertEqual(soon, [False, False, True, True])
+
+    def test_seat_change_in_the_window_counts_both_seats(self):
+        # a 前 20 分钟涨了 20（到上限后不再涨），b 后 10 分钟涨了 10：30 分钟一共 30 → 每分钟 1
+        t = self.t
+        hist = {"claude|a@x.com · duocode": {"5 hours": [{"at": iso(t - m * 60), "left": 100 - u} for m, u in
+                                                          ((40, 70), (30, 75), (20, 85), (10, 95), (2, 95))]},
+                "claude|b@x.com · duocode": {"5 hours": [{"at": iso(t - m * 60), "left": 100 - u} for m, u in
+                                                          ((40, 10), (30, 10), (10, 10), (5, 15), (1, 20))]}}
+        cards = [self.seat("a@x.com", 95, 100), self.seat("b@x.com", 20, 200), self.seat("c@x.com", 0, None, week=(100, 50))]
+        self.assertAlmostEqual(self.rate_of(cards, hist)["rate"], 1.0, places=2)
+
+    def test_jump_faster_than_a_seat_can_burn_is_not_consumption(self):
+        # 重置 3 分钟后 14%，2 秒后冒出一个 98%（上一个窗口的旧读数），之后真读数接着从 15% 涨：只算 0 → 20
+        t = self.t
+        opened = t - 20 * 60
+        pts = [{"at": iso(opened + s), "left": 100 - u} for s, u in
+               ((180, 13), (182, 14), (184, 98), (600, 15), (900, 18), (1150, 20))]
+        self.assertEqual(gg.consumed(pts, (t - 30, 20.0, opened + gg.FIVE_H), t), (20.0, opened))
+
+    def test_last_reading_of_the_previous_window_is_not_counted(self):
+        # 重置时间只到分钟：卡片写 08:59，真重置是 09:00。上一个窗口没怎么用，最后一个读数 08:59:50 是 8%；新窗口 09:05 读到
+        # 2%、现在 4%：这个座位只用了 4，不是 8
+        t = self.t
+        reset = t + 4 * 3600 + 49 * 60          # 卡片说 4 小时 49 分钟后重置 → 窗口 11 分钟前开始（其实是 10 分钟前）
+        opened = reset - gg.FIVE_H
+        pts = [{"at": iso(opened - 600), "left": 93}, {"at": iso(opened + 50), "left": 92},
+               {"at": iso(opened + 360), "left": 98}, {"at": iso(t - 60), "left": 96}]
+        self.assertEqual(gg.consumed(pts, (t - 60, 4.0, reset), t), (4.0, opened))
+
+    def test_burst_right_after_a_reset_is_not_blown_up(self):
+        # 11-22 07:00 重置后 5 分钟就用掉 19%（积压的请求）：8 分钟那轮按 30 分钟算速度（约 0.63），不按 8 分钟（2.4）
+        t = self.t
+        opened = t - 8 * 60
+        hist = {"claude|a@x.com · duocode": {"5 hours": [{"at": iso(opened - 200), "left": 0},
+                                                          {"at": iso(opened + 314), "left": 81}]}}
+        cards = [self.seat("a@x.com", 19, 300 - 8)] + self.two_spent()
+        self.assertAlmostEqual(self.rate_of(cards, hist)["rate"], 19 / 30, places=2)
+
+    def test_window_past_its_reset_has_no_consumption_yet(self):
+        # 卡片的重置时间已经过了、magpie 还没再读：新窗口还没有读数，这个座位不算消耗
+        t = self.t
+        pts = [{"at": iso(t - m * 60), "left": 100 - u} for m, u in ((30, 60), (20, 80), (10, 95))]
+        self.assertEqual(gg.consumed(pts, (t - 600, 95.0, t - 120), t), (0.0, None))
 
     def all_low(self):
         Fake.cards[:] = [self.seat(x, 99, 100) for x in ("a@x.com", "b@x.com", "c@x.com")]
