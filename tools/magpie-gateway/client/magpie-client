@@ -31,6 +31,7 @@ PICKER='{"options": [
  {"model": "auto/gpt-6.1-sol", "label": "GPT-6.1 Sol", "description": "Zed or Trae Global"},
  {"model": "grok/grok-4.7", "label": "Grok 4.7", "description": "SuperGrok"},
  {"model": "auto/kimi-k3.1-pro", "label": "Kimi K3.1 Pro", "description": "WorkBuddy, Trae CN or OpenCode Go"},
+ {"model": "auto/glm-5.4", "label": "GLM-5.4", "description": "ZCode Coding Max or WorkBuddy (free plan)"},
  {"model": "auto/glm-5.3", "label": "GLM-5.3", "description": "Trae CN, WorkBuddy or OpenCode Go"},
  {"model": "auto/deepseek-v4-pro", "label": "DeepSeek V4 Pro", "description": "WorkBuddy or OpenCode Go"},
  {"model": "auto/qwen3.8-max", "label": "Qwen3.8 Max", "description": "Trae CN or OpenCode Go"},

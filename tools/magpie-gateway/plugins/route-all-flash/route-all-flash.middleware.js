@@ -15,6 +15,13 @@
 //   deepseek/*, always-up,  -> untouched (real routes of their own)
 //   group/flash-paid        -> itself
 //   zcode/*                 -> untouched (the CLI's own plan)
+//   devin/*, workbuddy/*,   -> untouched (real routes of their own; litellm-claude-api
+//   litellm-claude-api/*       is cc-compactor's own Haiku lane)
+//   auto/glm-*              -> untouched (2026-11-27: GLM's found groups, ZCode,
+//                             WorkBuddy, Trae CN; none holds a Claude seat, and
+//                             group/auto-glm-5 ends in always-up; magpie hands the
+//                             middleware auto/<model> as group/auto-<slug>, so
+//                             auto/glm-5.4 arrives as group/auto-glm-5-4)
 //   fleet-watch's health probes (ctx.agent "fleet-watch", and a body that
 //   is the probe itself: see isProbe)
 //                           -> options.probe, else claude/claude-opus-5-5:
@@ -63,7 +70,7 @@ const PAID = "group/flash-paid"
 const SEAT = "claude/claude-opus-5-5"
 const PROBE = "fleet-watch"
 const SECRETARY_SEAT = "group/secretary-seat"
-const PASSTHROUGH = /^(deepseek\/|always-up|devin\/|group\/flash-paid|zcode\/|workbuddy\/|litellm-claude-api\/)/  // 11-09: cc-compactor 的压缩请求发 litellm-claude-api/*，不放行就被改写到 flash-ds（现为 WorkBuddy），专用 Haiku 通道一个都走不到
+const PASSTHROUGH = /^(deepseek\/|always-up|devin\/|group\/flash-paid|zcode\/|workbuddy\/|litellm-claude-api\/|auto\/glm-|group\/auto-glm-)/  // 11-09: cc-compactor 的压缩请求发 litellm-claude-api/*，不放行就被改写到 flash-ds（现为 WorkBuddy），专用 Haiku 通道一个都走不到
 
 // systemText: the request's system prompt, in each API's shape: Anthropic's
 // system (a string or text blocks), the system and developer messages of

@@ -203,6 +203,18 @@ test("real routes of their own are left as asked", () => {
   }
 })
 
+// 2026-11-27: GLM's found groups are left as asked, in both spellings (magpie hands the middleware auto/glm-5.4
+// as group/auto-glm-5-4); another model's found group still goes to group/flash-ds
+test("GLM's found groups are left as asked, other found groups are not", () => {
+  for (const m of ["auto/glm-5.4", "group/auto-glm-5-4", "group/auto-glm-5-3-flash", "group/auto-glm-5"]) {
+    assert.equal(run(cc(m), ctx("claude")), m)
+    assert.equal(run(cc(m, "x"), ctx("claude")), m)
+  }
+  for (const m of ["auto/kimi-k3.1-pro", "group/auto-kimi-k3-1-pro", "group/auto-deepseek-v4-1-flash", "auto/glm5", "group/auto-glmx", "claude/claude-opus-5-5"]) {
+    assert.equal(run(cc(m), ctx("claude")), "group/flash-ds", m)
+  }
+})
+
 // 2026-11-16: magpie's Claude Code pool full (18 runs): the leased secretary skips the seats' member, which would
 // wait 2 minutes for room, and goes to group/flash-paid (Devin Opus, then the Team API lane, then the seats)
 test("while the pool is full the leased secretary goes to group/flash-paid, and only while it is", () => {
