@@ -186,17 +186,40 @@ group log, readable only by this user. With it on:
   sealed with `keep` whenever it changes.
 - Live frames go out sealed. While the device is not in a group, none go out.
 
-**Pairing.** On the device:
+**Pairing.** On the device, either read the code with the camera, or give its
+text:
 
 ```
+python -m room_companion e2ee-pair --scan                       # the camera looks for the code for 2 minutes
 python -m room_companion e2ee-pair --code 'hmroom1.…'
-room-companion-hipimind e2ee-pair --config ~/.config/room-companion/hipimind.json --code 'hmroom1.…'   # sidecar
+room-companion-hipimind e2ee-pair --config ~/.config/room-companion/hipimind.json --scan   # sidecar
+room-companion-hipimind e2ee-pair --config ~/.config/room-companion/hipimind.json --code 'hmroom1.…'
 ```
 
-This checks the code and leaves it in `<dir>/pairing-code` (mode 600). The
+`--code` checks the code and leaves it in `<dir>/pairing-code` (mode 600). The
 running connector takes it the next time it is connected, deletes it at once,
 and appends the `join` request. If the connection drops before HipiMind has
 numbered the request, the same request is sent again on the next connection.
+
+`--scan` (with `--seconds`, 10 to 600, 120 by default) opens a window: it
+writes only the time the window ends, to `<dir>/pairing-scan` (mode 600). Until
+then, about once a second, the running connector reads one camera frame through
+the same call live video uses and looks for QR codes in it. The first one that is
+a pairing code (the form above, checked exactly as `--code` checks it) is left in
+`<dir>/pairing-code`, and from there everything goes as with `--code`; the window
+closes. Other QR codes in the room and damaged codes are ignored, and nothing
+is joined if the window ends without one. It needs the `scan` extra
+(`pip install 'room-companion[scan]'`: zxing-cpp and Pillow); without it,
+`--scan` says so and points at `--code`.
+
+- **The camera is read only while video is on.** The video switch is a hard
+  switch: while it is off, the window waits without reading the camera and the
+  connector says once that video is off (turn video on, or use `--code`).
+- The frames it reads are decoded in memory and dropped: none is written to
+  disk or sent anywhere, and nothing about the window reaches HipiMind. What a
+  QR code says is never logged (a pairing code holds the one-time secret).
+- A device already in a group does not look (an admin removes it first), and
+  giving `--code` closes an open window.
 
 **When the device leaves the group.** Its keys are deleted, and it sends nothing
 sealed until it is paired again, when:

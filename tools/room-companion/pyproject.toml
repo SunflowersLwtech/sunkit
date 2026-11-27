@@ -15,6 +15,8 @@ motion = ["pillow"]
 all = ["sherpa-onnx>=1.13", "numpy", "pillow"]
 # the HipiMind connector (websockets) and scaling live frames (pillow)
 hipimind = ["websockets>=13", "pillow"]
+# reading the owner's end-to-end encryption pairing code with the camera (e2ee-pair --scan)
+scan = ["zxing-cpp>=3.1", "pillow"]
 # Bluetooth camera drivers, wherever the Bluetooth adapter is (on Windows: in a Windows venv, not in WSL)
 ble = ["bleak>=1.1"]
 
